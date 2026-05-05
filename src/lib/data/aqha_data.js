@@ -1,0 +1,50 @@
+export const aqhaData = {
+  id: "AQHA",
+  name: "AQHA - American Quarter Horse Association",
+  divisions: [
+    { group: "Open", levels: ["Open", "Junior Horse", "Senior Horse", "L3 Open", "L2 Open", "L1 Open", "Rookie Open", "L3 Junior", "L2 Junior", "L1 Junior", "L3 Senior", "L2 Senior", "L1 Senior"] },
+    { group: "Amateur", levels: ["Amateur", "Select Amateur (50+)", "L3 Amateur", "L2 Amateur", "L1 Amateur", "Rookie Amateur", "Walk-Trot Amateur"] },
+    { group: "Youth", levels: ["Youth", "14-18", "13 & Under", "L3 Youth", "L2 Youth", "L1 Youth", "Rookie Youth", "Walk-Trot Youth"] },
+  ],
+  classes: {
+    custom: [
+      "Showmanship at Halter",
+      "Western Horsemanship",
+      "Hunt Seat Equitation",
+      "Trail",
+      "In-Hand Trail",
+      "Ranch Trail",
+      "Hunter Hack",
+      "Working Hunter",
+      "Equitation Over Fences",
+      "Jumping",
+    ],
+    rulebook: [
+      "Ranch Riding",
+      "Western Riding",
+      "Reining",
+      "Ranch Reining",
+      "Working Cow Horse",
+      "Boxing",
+    ],
+    scoresheet_only: [
+      "Cutting",
+      "Ranch Cutting",
+      "Ranch Cow Work",
+      "Limited Ranch Cow Work",
+      "Heading and Heeling",
+      "Tie-Down Roping",
+      "Breakaway Roping",
+      "Longe Line",
+      "Halter",
+      "Ranch Rail Pleasure",
+      "Ranch Conformation",
+      "Hunter Under Saddle",
+      "Western Pleasure",
+      "Pleasure Driving",
+      "Stake Race",
+      "Barrel Racing",
+      "Pole Bending",
+    ]
+  }
+};
