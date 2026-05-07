@@ -51,6 +51,7 @@ export const SendPatternEmailDialog = ({ open, onOpenChange, projectData, patter
 
             toast({ title: 'Email sent!', description: `Pattern sent to ${recipientEmail.trim()}.` });
             setRecipientEmail('');
+            console.log("test");
             setSenderName('');
             setPersonalMessage('');
             onOpenChange(false);
