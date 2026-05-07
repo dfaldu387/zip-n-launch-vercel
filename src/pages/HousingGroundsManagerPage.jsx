@@ -16,6 +16,7 @@ import {
     Loader2, Home, Hash, Calendar, FolderOpen,
     MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, Edit2, AlertCircle, Wand2, Moon,
+    Droplets, Wrench, Package, Beef, PawPrint,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -23,15 +24,18 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
+import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
 import { useToast } from '@/components/ui/use-toast';
 
 // ── Constants ──
 
 const STALL_TYPES = [
-    { id: 'standard', name: 'Standard Stall', icon: Home, defaultPrice: 75, defaultSize: '10x10' },
-    { id: 'premium', name: 'Premium Stall', icon: Home, defaultPrice: 125, defaultSize: '12x12' },
+    { id: 'standard', name: 'Standard Horse Stall', icon: Home, defaultPrice: 75, defaultSize: '10x10' },
+    { id: 'premium', name: 'Premium Horse Stall', icon: Home, defaultPrice: 125, defaultSize: '12x12' },
     { id: 'grooming', name: 'Grooming Stall', icon: Home, defaultPrice: 50, defaultSize: '10x10' },
     { id: 'tack', name: 'Tack Stall', icon: Warehouse, defaultPrice: 60, defaultSize: '10x10' },
+    { id: 'cattle_pen', name: 'Cattle Pen', icon: Beef, defaultPrice: 65, defaultSize: '12x16' },
+    { id: 'sheep_goat_pen', name: 'Sheep / Goat Pen', icon: PawPrint, defaultPrice: 45, defaultSize: '8x10' },
 ];
 
 const RV_HOOKUP_TYPES = [
@@ -44,6 +48,13 @@ const RV_POWER_TYPES = [
     { id: '50amp', name: '50 Amp' },
     { id: '35amp', name: '35 Amp' },
     { id: '25amp', name: '25 Amp' },
+];
+
+const SUPPORT_SPACE_TYPES = [
+    { id: 'tack_stall', name: 'Tack Stall', icon: Home, defaultPrice: 60, color: 'text-indigo-600' },
+    { id: 'wash_rack', name: 'Wash Rack', icon: Droplets, defaultPrice: 40, color: 'text-sky-600' },
+    { id: 'feed_storage', name: 'Feed Storage', icon: Package, defaultPrice: 30, color: 'text-amber-600' },
+    { id: 'equipment_zone', name: 'Equipment Zone', icon: Wrench, defaultPrice: 50, color: 'text-slate-600' },
 ];
 
 const SUPPLY_PRESETS = [
@@ -79,13 +90,15 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
     const [expanded, setExpanded] = useState(true);
     const totalStalls = barn.stalls?.length || 0;
     const booked = (barn.stalls || []).filter(s => s.bookingId).length;
+    const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
+    const TypeIcon = typeInfo.icon;
 
     return (
         <Card className="border-l-4 border-l-primary">
             <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-1">
-                        <Building2 className="h-4 w-4 text-primary" />
+                        <TypeIcon className="h-4 w-4 text-primary" />
                         <Input
                             value={barn.name}
                             onChange={(e) => onUpdate('name', e.target.value)}
@@ -93,7 +106,7 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
                             placeholder="Barn/Area name..."
                         />
                         <Badge variant="outline" className="text-xs">
-                            {totalStalls} stalls ({booked} booked)
+                            {totalStalls} unit{totalStalls !== 1 ? 's' : ''} ({booked} booked)
                         </Badge>
                     </div>
                     <div className="flex items-center gap-1">
@@ -110,7 +123,7 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
                 <CardContent className="space-y-3 pt-2">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div className="space-y-1">
-                            <Label className="text-xs">Stall Type</Label>
+                            <Label className="text-xs">Housing Type</Label>
                             <Select value={barn.stallType || 'standard'} onValueChange={(val) => onUpdate('stallType', val)}>
                                 <SelectTrigger className="h-8 text-xs">
                                     <SelectValue />
@@ -123,7 +136,7 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
                             </Select>
                         </div>
                         <div className="space-y-1">
-                            <Label className="text-xs">Stall Count</Label>
+                            <Label className="text-xs">Unit Count</Label>
                             <Input
                                 type="number"
                                 min={0}
@@ -162,7 +175,7 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
                             />
                         </div>
                         <div className="space-y-1">
-                            <Label className="text-xs">Stall Size</Label>
+                            <Label className="text-xs">Size</Label>
                             <Input
                                 value={barn.stallSize || ''}
                                 onChange={(e) => onUpdate('stallSize', e.target.value)}
@@ -329,6 +342,124 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
     );
 };
 
+// ── Support Space Card ──
+
+const SupportSpaceCard = ({ space, onUpdate, onRemove }) => {
+    const [expanded, setExpanded] = useState(true);
+    const typeInfo = SUPPORT_SPACE_TYPES.find(t => t.id === space.spaceType) || SUPPORT_SPACE_TYPES[0];
+    const TypeIcon = typeInfo.icon;
+
+    return (
+        <Card className="border-l-4 border-l-indigo-500">
+            <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 flex-1">
+                        <TypeIcon className={cn('h-4 w-4', typeInfo.color)} />
+                        <Input
+                            value={space.name}
+                            onChange={(e) => onUpdate('name', e.target.value)}
+                            className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs"
+                            placeholder="Space name..."
+                        />
+                        <Badge variant="outline" className="text-xs">
+                            {space.unitCount || 0} unit{(space.unitCount || 0) !== 1 ? 's' : ''}
+                        </Badge>
+                    </div>
+                    <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
+                            {expanded ? <X className="h-3.5 w-3.5" /> : <Edit2 className="h-3.5 w-3.5" />}
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                    </div>
+                </div>
+            </CardHeader>
+            {expanded && (
+                <CardContent className="space-y-3 pt-2">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="space-y-1">
+                            <Label className="text-xs">Space Type</Label>
+                            <Select value={space.spaceType || 'tack_stall'} onValueChange={(val) => onUpdate('spaceType', val)}>
+                                <SelectTrigger className="h-8 text-xs">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {SUPPORT_SPACE_TYPES.map(t => (
+                                        <SelectItem key={t.id} value={t.id} className="text-xs">{t.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Unit Count</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={space.unitCount || 0}
+                                onChange={(e) => onUpdate('unitCount', parseInt(e.target.value) || 0)}
+                                className="h-8 text-xs"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Price / Night ($)</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={space.pricePerNight || ''}
+                                onChange={(e) => onUpdate('pricePerNight', parseFloat(e.target.value) || 0)}
+                                className="h-8 text-xs"
+                                placeholder="$0"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Size (optional)</Label>
+                            <Input
+                                value={space.size || ''}
+                                onChange={(e) => onUpdate('size', e.target.value)}
+                                className="h-8 text-xs"
+                                placeholder="e.g., 10x10"
+                            />
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <Label className="text-xs">Notes</Label>
+                        <Textarea
+                            value={space.notes || ''}
+                            onChange={(e) => onUpdate('notes', e.target.value)}
+                            className="text-xs min-h-[50px]"
+                            placeholder="Location, hours, restrictions, etc."
+                        />
+                    </div>
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex items-center gap-2">
+                            <Checkbox
+                                checked={space.hasElectricity || false}
+                                onCheckedChange={(checked) => onUpdate('hasElectricity', checked)}
+                            />
+                            <Label className="text-xs">Electricity</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Checkbox
+                                checked={space.hasWater || false}
+                                onCheckedChange={(checked) => onUpdate('hasWater', checked)}
+                            />
+                            <Label className="text-xs">Water</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Checkbox
+                                checked={space.hasDrainage || false}
+                                onCheckedChange={(checked) => onUpdate('hasDrainage', checked)}
+                            />
+                            <Label className="text-xs">Drainage</Label>
+                        </div>
+                    </div>
+                </CardContent>
+            )}
+        </Card>
+    );
+};
+
 // ── Supply Item Card ──
 
 const SupplyItemCard = ({ item, onUpdate, onRemove }) => {
@@ -457,6 +588,7 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
 
     const [barns, setBarns] = useState(() => pd.stallingService?.barns || []);
     const [rvAreas, setRvAreas] = useState(() => pd.stallingService?.rvAreas || []);
+    const [supportSpaces, setSupportSpaces] = useState(() => pd.stallingService?.supportSpaces || []);
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
     const [searchTerm, setSearchTerm] = useState('');
@@ -493,7 +625,7 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
     };
 
     const autoGenerateBarns = () => {
-        if (barns.length > 0 || rvAreas.length > 0 || supplies.length > 0) {
+        if (barns.length > 0 || rvAreas.length > 0 || supportSpaces.length > 0 || supplies.length > 0) {
             toast({ title: 'Already configured', description: 'Clear existing items first or add individually.' });
             return;
         }
@@ -570,6 +702,33 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
 
     const removeRvArea = (rvId) => {
         setRvAreas(prev => prev.filter(r => r.id !== rvId));
+    };
+
+    // ── Support Space CRUD ──
+    const addSupportSpace = (preset = null) => {
+        const typeInfo = preset
+            ? SUPPORT_SPACE_TYPES.find(t => t.id === preset) || SUPPORT_SPACE_TYPES[0]
+            : SUPPORT_SPACE_TYPES[0];
+        setSupportSpaces(prev => [...prev, {
+            id: uuidv4(),
+            name: typeInfo.name,
+            spaceType: typeInfo.id,
+            unitCount: 1,
+            pricePerNight: typeInfo.defaultPrice,
+            size: '',
+            hasElectricity: false,
+            hasWater: typeInfo.id === 'wash_rack',
+            hasDrainage: typeInfo.id === 'wash_rack',
+            notes: '',
+        }]);
+    };
+
+    const updateSupportSpace = (spaceId, field, value) => {
+        setSupportSpaces(prev => prev.map(s => s.id === spaceId ? { ...s, [field]: value } : s));
+    };
+
+    const removeSupportSpace = (spaceId) => {
+        setSupportSpaces(prev => prev.filter(s => s.id !== spaceId));
     };
 
     // ── Supply CRUD ──
@@ -651,7 +810,7 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
     }, [bookings, barns]);
 
     const handleSave = () => {
-        onSave({ barns, rvAreas, supplies, bookings });
+        onSave({ barns, rvAreas, supportSpaces, supplies, bookings });
     };
 
     return (
@@ -685,7 +844,7 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
             </div>
 
             {/* Stall Fee Summary */}
-            {(barns.length > 0 || rvAreas.length > 0) && showNights > 0 && (
+            {(barns.length > 0 || rvAreas.length > 0 || supportSpaces.length > 0) && showNights > 0 && (
                 <div className="rounded-xl border p-4 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/30 dark:to-blue-950/30 border-indigo-200 dark:border-indigo-800">
                     <div className="flex items-center gap-2 mb-3">
                         <Moon className="h-4 w-4 text-indigo-600" />
@@ -735,13 +894,32 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                                         </tr>
                                     );
                                 })}
+                                {supportSpaces.map(space => {
+                                    const typeInfo = SUPPORT_SPACE_TYPES.find(t => t.id === space.spaceType) || SUPPORT_SPACE_TYPES[0];
+                                    const perUnit = (space.pricePerNight || 0) * showNights;
+                                    const maxRev = perUnit * (space.unitCount || 0);
+                                    return (
+                                        <tr key={space.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
+                                            <td className="px-2 py-1.5 font-medium">{space.name} <span className={cn('text-xs', typeInfo.color)}>({typeInfo.name})</span></td>
+                                            <td className="px-2 py-1.5 text-right">${(space.pricePerNight || 0).toFixed(0)}</td>
+                                            <td className="px-2 py-1.5 text-center">{showNights}</td>
+                                            <td className="px-2 py-1.5 text-right font-semibold">${perUnit.toFixed(0)}</td>
+                                            <td className="px-2 py-1.5 text-center">{space.unitCount || 0}</td>
+                                            <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                             <tfoot>
                                 <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
                                     <td className="px-2 py-1.5" colSpan={4}>Total</td>
-                                    <td className="px-2 py-1.5 text-center">{totalUnits}</td>
+                                    <td className="px-2 py-1.5 text-center">{totalUnits + supportSpaces.reduce((sum, s) => sum + (s.unitCount || 0), 0)}</td>
                                     <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
-                                        ${(barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0) + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * showNights), 0)).toLocaleString()}
+                                        ${(
+                                            barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0)
+                                            + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * showNights), 0)
+                                            + supportSpaces.reduce((sum, s) => sum + ((s.unitCount || 0) * (s.pricePerNight || 0) * showNights), 0)
+                                        ).toLocaleString()}
                                     </td>
                                 </tr>
                             </tfoot>
@@ -753,7 +931,7 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
             <Tabs defaultValue="inventory">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                     <TabsList>
-                        <TabsTrigger value="inventory">Stall Inventory</TabsTrigger>
+                        <TabsTrigger value="inventory">Inventory</TabsTrigger>
                         <TabsTrigger value="bookings">Bookings ({totalBookings})</TabsTrigger>
                         <TabsTrigger value="pricing">Pricing Summary</TabsTrigger>
                     </TabsList>
@@ -763,139 +941,210 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                     </Button>
                 </div>
 
-                {/* ── Stall Inventory Tab ── */}
-                <TabsContent value="inventory" className="space-y-8 mt-4">
+                {/* ── Inventory Tab — Categorized Sub-Tabs ── */}
+                <TabsContent value="inventory" className="mt-4">
+                    <Tabs defaultValue="livestock" className="w-full">
+                        <TabsList className="flex-wrap h-auto">
+                            <TabsTrigger value="livestock">
+                                <Building2 className="h-4 w-4 mr-1.5" /> Livestock Housing
+                            </TabsTrigger>
+                            <TabsTrigger value="support">
+                                <Warehouse className="h-4 w-4 mr-1.5" /> Support Spaces
+                            </TabsTrigger>
+                            <TabsTrigger value="rv">
+                                <Car className="h-4 w-4 mr-1.5" /> RV & Camping
+                            </TabsTrigger>
+                            <TabsTrigger value="supplies">
+                                <ShoppingCart className="h-4 w-4 mr-1.5" /> Supplies
+                            </TabsTrigger>
+                        </TabsList>
 
-                    {/* — Barn / Stall Areas — */}
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <Building2 className="h-5 w-5 text-primary" />
-                                <h3 className="text-base font-semibold">Barn / Stall Areas</h3>
-                                <Badge variant="outline" className="text-xs">{barns.length} area{barns.length !== 1 ? 's' : ''}</Badge>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Button onClick={addBarn} variant="outline" size="sm">
-                                    <Plus className="h-4 w-4 mr-1.5" /> Add Barn Area
-                                </Button>
-                                <Button onClick={autoGenerateBarns} variant="outline" size="sm">
-                                    <Wand2 className="h-4 w-4 mr-1.5" /> Auto-Generate
-                                </Button>
-                            </div>
-                        </div>
-
-                        {barns.length === 0 ? (
-                            <Card>
-                                <CardContent className="py-10 text-center">
-                                    <Warehouse className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                    <p className="text-sm text-muted-foreground">No barns configured. Click "Add Barn Area" or "Auto-Generate" to get started.</p>
-                                </CardContent>
-                            </Card>
-                        ) : (
-                            <div className="space-y-4">
-                                {barns.map(barn => (
-                                    <BarnCard
-                                        key={barn.id}
-                                        barn={barn}
-                                        onUpdate={(field, value) => updateBarn(barn.id, field, value)}
-                                        onRemove={() => removeBarn(barn.id)}
-                                    />
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* — RV Areas — */}
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <Car className="h-5 w-5 text-cyan-600" />
-                                <h3 className="text-base font-semibold">RV / Camping Areas</h3>
-                                <Badge variant="outline" className="text-xs">{rvAreas.length} area{rvAreas.length !== 1 ? 's' : ''}</Badge>
-                            </div>
-                            <Button onClick={addRvArea} variant="outline" size="sm">
-                                <Plus className="h-4 w-4 mr-1.5" /> Add RV Area
-                            </Button>
-                        </div>
-
-                        {rvAreas.length === 0 ? (
-                            <Card>
-                                <CardContent className="py-10 text-center">
-                                    <Car className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                    <p className="text-sm text-muted-foreground">No RV areas configured. Click "Add RV Area" to get started.</p>
-                                </CardContent>
-                            </Card>
-                        ) : (
-                            <div className="space-y-4">
-                                {rvAreas.map(rv => (
-                                    <RvAreaCard
-                                        key={rv.id}
-                                        rvArea={rv}
-                                        onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
-                                        onRemove={() => removeRvArea(rv.id)}
-                                    />
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* — Supplies / Feed Sales — */}
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <ShoppingCart className="h-5 w-5 text-amber-600" />
-                                <h3 className="text-base font-semibold">Supplies / Feed Sales</h3>
-                                <Badge variant="outline" className="text-xs">{supplies.length} item{supplies.length !== 1 ? 's' : ''}</Badge>
-                            </div>
-                            <Button onClick={() => addSupply()} variant="outline" size="sm">
-                                <Plus className="h-4 w-4 mr-1.5" /> Add Supply Item
-                            </Button>
-                        </div>
-
-                        {/* Quick-add presets */}
-                        <div className="flex flex-wrap gap-1.5">
-                            {SUPPLY_PRESETS.filter(p => !supplies.some(s => s.name === p.name)).map(preset => (
-                                <Button
-                                    key={preset.name}
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7 text-xs"
-                                    onClick={() => addSupply(preset)}
-                                >
-                                    <Plus className="h-3 w-3 mr-1" /> {preset.name}
-                                </Button>
-                            ))}
-                        </div>
-
-                        {supplies.length === 0 ? (
-                            <Card>
-                                <CardContent className="py-10 text-center">
-                                    <ShoppingCart className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                    <p className="text-sm text-muted-foreground">No supplies added. Use the quick-add buttons above or click "Add Supply Item".</p>
-                                </CardContent>
-                            </Card>
-                        ) : (
-                            <div className="space-y-2">
-                                {/* Column labels */}
-                                <div className="flex items-center gap-3 px-3 text-[10px] font-semibold text-muted-foreground uppercase">
-                                    <span className="w-4 flex-shrink-0" />
-                                    <span className="flex-1">Item Name</span>
-                                    <span className="w-20 text-right">Price</span>
-                                    <span className="w-24">Unit</span>
-                                    <span className="w-20">Stock Qty</span>
-                                    <span className="w-7" />
+                        {/* — Livestock Housing — */}
+                        <TabsContent value="livestock" className="space-y-4 mt-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Building2 className="h-5 w-5 text-primary" />
+                                    <h3 className="text-base font-semibold">Livestock Housing</h3>
+                                    <Badge variant="outline" className="text-xs">{barns.length} area{barns.length !== 1 ? 's' : ''}</Badge>
                                 </div>
-                                {supplies.map(item => (
-                                    <SupplyItemCard
-                                        key={item.id}
-                                        item={item}
-                                        onUpdate={(field, value) => updateSupply(item.id, field, value)}
-                                        onRemove={() => removeSupply(item.id)}
-                                    />
+                                <div className="flex items-center gap-2">
+                                    <Button onClick={addBarn} variant="outline" size="sm">
+                                        <Plus className="h-4 w-4 mr-1.5" /> Add Area
+                                    </Button>
+                                    <Button onClick={autoGenerateBarns} variant="outline" size="sm">
+                                        <Wand2 className="h-4 w-4 mr-1.5" /> Auto-Generate
+                                    </Button>
+                                </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground -mt-2">Horse stalls, cattle pens, sheep/goat pens.</p>
+
+                            {barns.length === 0 ? (
+                                <Card>
+                                    <CardContent className="py-10 text-center">
+                                        <Warehouse className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                        <p className="text-sm text-muted-foreground">No livestock housing configured. Click "Add Area" or "Auto-Generate" to get started.</p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="space-y-4">
+                                    {barns.map(barn => (
+                                        <BarnCard
+                                            key={barn.id}
+                                            barn={barn}
+                                            onUpdate={(field, value) => updateBarn(barn.id, field, value)}
+                                            onRemove={() => removeBarn(barn.id)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </TabsContent>
+
+                        {/* — Support Spaces — */}
+                        <TabsContent value="support" className="space-y-4 mt-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Warehouse className="h-5 w-5 text-indigo-600" />
+                                    <h3 className="text-base font-semibold">Support Spaces</h3>
+                                    <Badge variant="outline" className="text-xs">{supportSpaces.length} space{supportSpaces.length !== 1 ? 's' : ''}</Badge>
+                                </div>
+                                <Button onClick={() => addSupportSpace()} variant="outline" size="sm">
+                                    <Plus className="h-4 w-4 mr-1.5" /> Add Space
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground -mt-2">Tack stalls, wash racks, feed storage, equipment zones.</p>
+
+                            {/* Quick-add presets */}
+                            <div className="flex flex-wrap gap-1.5">
+                                {SUPPORT_SPACE_TYPES.map(t => {
+                                    const TypeIcon = t.icon;
+                                    return (
+                                        <Button
+                                            key={t.id}
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs"
+                                            onClick={() => addSupportSpace(t.id)}
+                                        >
+                                            <TypeIcon className={cn('h-3 w-3 mr-1', t.color)} /> {t.name}
+                                        </Button>
+                                    );
+                                })}
+                            </div>
+
+                            {supportSpaces.length === 0 ? (
+                                <Card>
+                                    <CardContent className="py-10 text-center">
+                                        <Warehouse className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                        <p className="text-sm text-muted-foreground">No support spaces yet. Use the quick-add buttons above or click "Add Space".</p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="space-y-4">
+                                    {supportSpaces.map(space => (
+                                        <SupportSpaceCard
+                                            key={space.id}
+                                            space={space}
+                                            onUpdate={(field, value) => updateSupportSpace(space.id, field, value)}
+                                            onRemove={() => removeSupportSpace(space.id)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </TabsContent>
+
+                        {/* — RV & Camping — */}
+                        <TabsContent value="rv" className="space-y-4 mt-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Car className="h-5 w-5 text-cyan-600" />
+                                    <h3 className="text-base font-semibold">RV & Camping</h3>
+                                    <Badge variant="outline" className="text-xs">{rvAreas.length} area{rvAreas.length !== 1 ? 's' : ''}</Badge>
+                                </div>
+                                <Button onClick={addRvArea} variant="outline" size="sm">
+                                    <Plus className="h-4 w-4 mr-1.5" /> Add Area
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground -mt-2">RV hookups (full / partial / dry), trailer parking, camping spots.</p>
+
+                            {rvAreas.length === 0 ? (
+                                <Card>
+                                    <CardContent className="py-10 text-center">
+                                        <Car className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                        <p className="text-sm text-muted-foreground">No RV or camping areas configured. Click "Add Area" to get started.</p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="space-y-4">
+                                    {rvAreas.map(rv => (
+                                        <RvAreaCard
+                                            key={rv.id}
+                                            rvArea={rv}
+                                            onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
+                                            onRemove={() => removeRvArea(rv.id)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </TabsContent>
+
+                        {/* — Supplies / Feed Sales — */}
+                        <TabsContent value="supplies" className="space-y-4 mt-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <ShoppingCart className="h-5 w-5 text-amber-600" />
+                                    <h3 className="text-base font-semibold">Supplies / Feed Sales</h3>
+                                    <Badge variant="outline" className="text-xs">{supplies.length} item{supplies.length !== 1 ? 's' : ''}</Badge>
+                                </div>
+                                <Button onClick={() => addSupply()} variant="outline" size="sm">
+                                    <Plus className="h-4 w-4 mr-1.5" /> Add Supply Item
+                                </Button>
+                            </div>
+
+                            {/* Quick-add presets */}
+                            <div className="flex flex-wrap gap-1.5">
+                                {SUPPLY_PRESETS.filter(p => !supplies.some(s => s.name === p.name)).map(preset => (
+                                    <Button
+                                        key={preset.name}
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 text-xs"
+                                        onClick={() => addSupply(preset)}
+                                    >
+                                        <Plus className="h-3 w-3 mr-1" /> {preset.name}
+                                    </Button>
                                 ))}
                             </div>
-                        )}
-                    </div>
+
+                            {supplies.length === 0 ? (
+                                <Card>
+                                    <CardContent className="py-10 text-center">
+                                        <ShoppingCart className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                        <p className="text-sm text-muted-foreground">No supplies added. Use the quick-add buttons above or click "Add Supply Item".</p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="space-y-2">
+                                    {/* Column labels */}
+                                    <div className="flex items-center gap-3 px-3 text-[10px] font-semibold text-muted-foreground uppercase">
+                                        <span className="w-4 flex-shrink-0" />
+                                        <span className="flex-1">Item Name</span>
+                                        <span className="w-20 text-right">Price</span>
+                                        <span className="w-24">Unit</span>
+                                        <span className="w-20">Stock Qty</span>
+                                        <span className="w-7" />
+                                    </div>
+                                    {supplies.map(item => (
+                                        <SupplyItemCard
+                                            key={item.id}
+                                            item={item}
+                                            onUpdate={(field, value) => updateSupply(item.id, field, value)}
+                                            onRemove={() => removeSupply(item.id)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </TabsContent>
+                    </Tabs>
                 </TabsContent>
 
                 {/* ── Bookings Tab ── */}
@@ -984,12 +1233,12 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-6">
-                            {barns.length === 0 && rvAreas.length === 0 && supplies.length === 0 ? (
-                                <p className="text-sm text-muted-foreground text-center py-6">Add barns, RV areas, or supplies to see pricing summary.</p>
+                            {barns.length === 0 && rvAreas.length === 0 && supportSpaces.length === 0 && supplies.length === 0 ? (
+                                <p className="text-sm text-muted-foreground text-center py-6">Add livestock housing, support spaces, RV / camping, or supplies to see pricing summary.</p>
                             ) : (
                                 <>
-                                    {/* Barns & RV table */}
-                                    {(barns.length > 0 || rvAreas.length > 0) && (
+                                    {/* Spaces table */}
+                                    {(barns.length > 0 || rvAreas.length > 0 || supportSpaces.length > 0) && (
                                         <div className="overflow-x-auto">
                                             <table className="w-full text-sm">
                                                 <thead>
@@ -1041,16 +1290,36 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                                                             </tr>
                                                         );
                                                     })}
+                                                    {supportSpaces.map(space => {
+                                                        const typeInfo = SUPPORT_SPACE_TYPES.find(t => t.id === space.spaceType) || SUPPORT_SPACE_TYPES[0];
+                                                        const maxRev = (space.unitCount || 0) * (space.pricePerNight || 0) * (showNights || 3);
+                                                        return (
+                                                            <tr key={space.id} className="border-b last:border-0">
+                                                                <td className="px-3 py-2 font-medium">{space.name}</td>
+                                                                <td className={cn('px-3 py-2 text-center', typeInfo.color)}>{typeInfo.name}</td>
+                                                                <td className="px-3 py-2 text-center">{space.unitCount || 0}</td>
+                                                                <td className="px-3 py-2 text-right">${(space.pricePerNight || 0).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-center">
+                                                                    <Badge variant="outline" className="text-xs">-</Badge>
+                                                                </td>
+                                                                <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
                                                 </tbody>
                                                 <tfoot>
                                                     <tr className="bg-muted/30 font-semibold">
                                                         <td className="px-3 py-2">Total</td>
                                                         <td className="px-3 py-2" />
-                                                        <td className="px-3 py-2 text-center">{totalUnits}</td>
+                                                        <td className="px-3 py-2 text-center">{totalUnits + supportSpaces.reduce((sum, s) => sum + (s.unitCount || 0), 0)}</td>
                                                         <td className="px-3 py-2" />
                                                         <td className="px-3 py-2 text-center">{confirmedBookings}</td>
                                                         <td className="px-3 py-2 text-right">
-                                                            ${(barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0) + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * (showNights || 3)), 0)).toLocaleString()}
+                                                            ${(
+                                                                barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0)
+                                                                + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * (showNights || 3)), 0)
+                                                                + supportSpaces.reduce((sum, s) => sum + ((s.unitCount || 0) * (s.pricePerNight || 0) * (showNights || 3)), 0)
+                                                            ).toLocaleString()}
                                                         </td>
                                                     </tr>
                                                 </tfoot>
@@ -1118,7 +1387,7 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
 
 // ── Main Page ──
 
-const StallingServiceManagerPage = () => {
+const HousingGroundsManagerPage = () => {
     const navigate = useNavigate();
     const { showId } = useParams();
     const { user } = useAuth();
@@ -1149,14 +1418,14 @@ const StallingServiceManagerPage = () => {
         fetchShows();
     }, [user, showId]);
 
-    const handleSave = async ({ barns, rvAreas, supplies, bookings }) => {
+    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings }) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
-            const updatedData = {
+            const updatedData = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
-                stallingService: { barns, rvAreas, supplies, bookings },
-            };
+                stallingService: { barns, rvAreas, supportSpaces, supplies, bookings },
+            }, 'housing');
             const { error } = await supabase
                 .from('projects')
                 .update({ project_data: updatedData })
@@ -1164,7 +1433,7 @@ const StallingServiceManagerPage = () => {
             if (error) throw error;
             setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
             setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
-            toast({ title: 'Stalling Service Saved', description: 'All stall and booking data saved successfully.' });
+            toast({ title: 'Housing & Grounds Saved', description: 'All housing, grounds, and booking data saved successfully.' });
         } catch (error) {
             toast({ title: 'Error saving', description: error.message, variant: 'destructive' });
         } finally {
@@ -1182,11 +1451,11 @@ const StallingServiceManagerPage = () => {
 
     return (
         <>
-            <Helmet><title>Stalling Service - Horse Show Manager</title></Helmet>
+            <Helmet><title>Housing & Grounds Manager - Horse Show Manager</title></Helmet>
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                    <PageHeader title="Stalling Service" backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
+                    <PageHeader title="Housing & Grounds Manager" backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
 
                     {!showId && (
                         <div className="mb-6">
@@ -1198,7 +1467,7 @@ const StallingServiceManagerPage = () => {
                                     const show = shows.find(s => s.id === projectId);
                                     if (show) setSelectedShow(show);
                                 }}
-                                description="Link to an existing show to manage its stalling services."
+                                description="Link to an existing show to manage its housing and grounds."
                             />
                         </div>
                     )}
@@ -1212,4 +1481,4 @@ const StallingServiceManagerPage = () => {
     );
 };
 
-export default StallingServiceManagerPage;
+export default HousingGroundsManagerPage;

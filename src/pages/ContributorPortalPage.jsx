@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, UploadCloud, BarChart2, PlusCircle, AlertCircle, LogIn, DollarSign, Share2, Eye, MessageCircle, Pencil } from 'lucide-react';
+import { Loader2, UploadCloud, BarChart2, PlusCircle, AlertCircle, LogIn, DollarSign, Share2, Eye, MessageCircle, Pencil, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { format } from 'date-fns';
@@ -24,6 +24,16 @@ const ContributorPortalPage = () => {
     const [loadingData, setLoadingData] = useState(true);
     const [error, setError] = useState(null);
     const [previewPattern, setPreviewPattern] = useState(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const PAGE_SIZE = 10;
+    const totalPages = Math.max(1, Math.ceil(patterns.length / PAGE_SIZE));
+    const paginatedPatterns = patterns.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+    useEffect(() => {
+        if (currentPage > totalPages) {
+            setCurrentPage(totalPages);
+        }
+    }, [totalPages, currentPage]);
 
     const fetchPatterns = useCallback(async () => {
         if (!user) {
@@ -280,7 +290,7 @@ const ContributorPortalPage = () => {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {patterns.map((pattern) => {
+                                {paginatedPatterns.map((pattern) => {
                                     const isCapo = Array.isArray(pattern.tags) && pattern.tags.includes('CAPO');
                                     const structuredId = buildPatternId({
                                         discipline: pattern.class_name,
@@ -355,6 +365,34 @@ const ContributorPortalPage = () => {
                         </Table>
                     )}
                 </CardContent>
+                {!loadingData && !error && patterns.length > PAGE_SIZE && (
+                    <CardFooter className="flex items-center justify-between border-t pt-4">
+                        <div className="text-sm text-muted-foreground">
+                            Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, patterns.length)} of {patterns.length}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                            >
+                                <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+                            </Button>
+                            <span className="text-sm text-muted-foreground">
+                                Page {currentPage} of {totalPages}
+                            </span>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                            >
+                                Next <ChevronRight className="h-4 w-4 ml-1" />
+                            </Button>
+                        </div>
+                    </CardFooter>
+                )}
             </Card>
         </>
     );

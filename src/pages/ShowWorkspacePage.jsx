@@ -289,7 +289,7 @@ const ShowWorkspacePage = () => {
         { key: 'results', icon: ClipboardList, title: 'Results Entry', description: 'Enter class results, placings, and scores from the schedule.', to: `/horse-show-manager/results-management/${showId}`, color: 'amber' },
         { key: 'awards', icon: Award, title: 'Awards Management', description: 'Configure awards, ribbons, and trophies.', to: `/horse-show-manager/awards-management/${showId}`, color: 'violet' },
         { key: 'financials', icon: BarChart3, title: 'Financials & Analytics', description: 'View financial projections, revenue, and analytics.', to: `/horse-show-manager/financials/${showId}`, color: 'rose' },
-        { key: 'stalling', icon: Warehouse, title: 'Stalling Service', description: 'Manage stall assignments and barn configurations.', to: `/horse-show-manager/stalling-service-manager/${showId}`, color: 'sky', comingSoon: true },
+        { key: 'housing', icon: Warehouse, title: 'Housing & Grounds Manager', description: 'Manage stalls, pens, RV hookups, camping, and support spaces.', to: `/horse-show-manager/housing-grounds-manager/${showId}`, color: 'sky' },
       ],
     },
   ];

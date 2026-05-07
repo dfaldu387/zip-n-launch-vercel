@@ -52,7 +52,7 @@ import PatternUploadLandingPage from '@/pages/PatternUploadLandingPage';
 import HorseShowManagerPage from '@/pages/HorseShowManagerPage';
 import CreateShowPage from '@/pages/CreateShowPage';
 import ShowStructurePage from '@/pages/ShowStructurePage';
-import StallingServiceManagerPage from '@/pages/StallingServiceManagerPage';
+import HousingGroundsManagerPage from '@/pages/HousingGroundsManagerPage';
 import EmployeeArenaSchedulingManagerPage from '@/pages/EmployeeArenaSchedulingManagerPage';
 import AwardsPresenterManagerPage from '@/pages/AwardsPresenterManagerPage';
 import EmployeeManagementPage from '@/pages/EmployeeManagementPage';
@@ -238,8 +238,8 @@ function App() {
                   <Route path="/horse-show-manager/show-dashboard/:showId" element={<MembershipRoute><ShowDashboardPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/financials" element={<MembershipRoute><ShowFinancialDashboardPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/financials/:showId" element={<MembershipRoute><ShowFinancialDashboardPage /></MembershipRoute>} />
-                  <Route path="/horse-show-manager/stalling-service-manager" element={<MembershipRoute><StallingServiceManagerPage /></MembershipRoute>} />
-                  <Route path="/horse-show-manager/stalling-service-manager/:showId" element={<MembershipRoute><StallingServiceManagerPage /></MembershipRoute>} />
+                  <Route path="/horse-show-manager/housing-grounds-manager" element={<MembershipRoute><HousingGroundsManagerPage /></MembershipRoute>} />
+                  <Route path="/horse-show-manager/housing-grounds-manager/:showId" element={<MembershipRoute><HousingGroundsManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-scheduling" element={<MembershipRoute><EmployeeArenaSchedulingManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-scheduling/:showId" element={<MembershipRoute><EmployeeArenaSchedulingManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-budgeting" element={<MembershipRoute><EmployeeBudgetingToolPage /></MembershipRoute>} />

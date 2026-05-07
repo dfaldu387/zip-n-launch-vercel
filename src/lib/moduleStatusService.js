@@ -87,6 +87,7 @@ export const MODULE_KEYS = Object.freeze({
   AWARDS:              'awards',
   FINANCIALS:          'financials',
   STALLING:            'stalling',
+  HOUSING:             'housing',
 });
 
 // ── Validation Results ──

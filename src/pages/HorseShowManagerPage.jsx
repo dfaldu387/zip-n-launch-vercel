@@ -121,12 +121,12 @@ const sections = [
   {
     icon: FolderManagementIcon,
     title: 'Horse Show Management',
-    link: '/horse-show-manager/stalling-service-manager',
+    link: '/horse-show-manager/housing-grounds-manager',
     items: [
       { icon: Radio, label: 'Equipment Management', link: '/horse-show-manager/equipment-planning', line: 1 },
       { icon: Award, label: 'Awards Management', link: '/horse-show-manager/awards-management', line: 2 },
       { icon: DollarSign, label: 'Horse Show Financials / Analytics', link: '/horse-show-manager/financials', line: 3 },
-      { icon: Building2, label: 'Stalling Service', link: '/horse-show-manager/stalling-service-manager', line: 4, unimplemented: true },
+      { icon: Building2, label: 'Housing & Grounds Manager', link: '/horse-show-manager/housing-grounds-manager', line: 4 },
     ],
   },
 ];
