@@ -74,6 +74,11 @@ import AdminShowManagementPage from '@/pages/AdminShowManagementPage';
 import AdminEventsManagementPage from '@/pages/AdminEventsManagementPage';
 import AdminSponsorshipPackagesPage from '@/pages/AdminSponsorshipPackagesPage';
 import PublicShowPage from '@/pages/PublicShowPage';
+import PublicBookingPage from '@/pages/PublicBookingPage';
+import PublicShowsListPage from '@/pages/PublicShowsListPage';
+import CheckInPage from '@/pages/CheckInPage';
+import BookingStatusPage from '@/pages/BookingStatusPage';
+import FindBookingPage from '@/pages/FindBookingPage';
 import AdminDivisionManagementPage from '@/pages/AdminDivisionManagementPage';
 import AdminDivisionLevelManagementPage from '@/pages/AdminDivisionLevelManagementPage';
 import ApprovalsDashboardPage from '@/pages/ApprovalsDashboardPage';
@@ -153,7 +158,11 @@ function App() {
                   <Route path="/membership" element={<PricingPage />} />
                   <Route path="/database-schema" element={<DatabaseSchemaPage />} />
                   <Route path="/not-authorized" element={<NotAuthorizedPage />} />
+                  <Route path="/book-stalls" element={<PublicShowsListPage />} />
                   <Route path="/show/:showId" element={<PublicShowPage />} />
+                  <Route path="/show/:showId/book" element={<PublicBookingPage />} />
+                  <Route path="/booking/:bookingId" element={<BookingStatusPage />} />
+                  <Route path="/find-booking" element={<FindBookingPage />} />
                   
                   {/* EquiPatterns Routes */}
                   <Route path="/dashboard" element={<RoleBasedRoute requiredPermission="ep_dashboard:view"><EquiPatternsDashboard /></RoleBasedRoute>} />
@@ -240,6 +249,7 @@ function App() {
                   <Route path="/horse-show-manager/financials/:showId" element={<MembershipRoute><ShowFinancialDashboardPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/housing-grounds-manager" element={<MembershipRoute><HousingGroundsManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/housing-grounds-manager/:showId" element={<MembershipRoute><HousingGroundsManagerPage /></MembershipRoute>} />
+                  <Route path="/horse-show-manager/check-in/:showId" element={<MembershipRoute><CheckInPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-scheduling" element={<MembershipRoute><EmployeeArenaSchedulingManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-scheduling/:showId" element={<MembershipRoute><EmployeeArenaSchedulingManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-budgeting" element={<MembershipRoute><EmployeeBudgetingToolPage /></MembershipRoute>} />

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-    import { useParams } from 'react-router-dom';
+    import { useParams, useNavigate } from 'react-router-dom';
     import { Helmet } from 'react-helmet-async';
     import { motion } from 'framer-motion';
     import { supabase } from '@/lib/supabaseClient';
-    import { Loader2, Info, Users, DollarSign, Calendar, Download, FileText, Facebook, Instagram, Youtube } from 'lucide-react';
+    import { Loader2, Info, Users, DollarSign, Calendar, Download, FileText, Facebook, Instagram, Youtube, Home, Car, ArrowRight } from 'lucide-react';
     import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
     import { Button } from '@/components/ui/button';
     import { useToast } from '@/components/ui/use-toast';
@@ -22,6 +22,7 @@ import React, { useState, useEffect } from 'react';
 
     const PublicShowPage = () => {
         const { showId } = useParams();
+        const navigate = useNavigate();
         const { toast } = useToast();
         const [showData, setShowData] = useState(null);
         const [assets, setAssets] = useState([]);
@@ -91,6 +92,8 @@ import React, { useState, useEffect } from 'react';
         const { project_name, project_data } = showData;
         const { showDetails = {} } = project_data || {};
         const { general = {}, venue = {}, officials = {}, fees = [], entry = {}, scheduling = {}, awards = {} } = showDetails;
+        const stalling = project_data?.stallingService || {};
+        const hasInventory = (stalling.barns?.length || 0) + (stalling.rvAreas?.length || 0) + (stalling.supportSpaces?.length || 0) + (stalling.supplies?.length || 0) > 0;
         const marketing = project_data?.marketing || {};
         const socialLinks = [
             { url: marketing.facebook, icon: Facebook, label: 'Facebook' },
@@ -121,6 +124,37 @@ import React, { useState, useEffect } from 'react';
                                     </div>
                                 )}
                             </CardHeader>
+
+                            {hasInventory && (
+                                <Card className="mb-8 border-2 border-primary bg-primary/5">
+                                    <CardContent className="flex flex-col md:flex-row items-center justify-between gap-4 p-6">
+                                        <div className="flex items-center gap-4 flex-1">
+                                            <div className="flex gap-2">
+                                                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                                                    <Home className="h-6 w-6 text-primary" />
+                                                </div>
+                                                <div className="h-12 w-12 rounded-full bg-cyan-500/10 flex items-center justify-center">
+                                                    <Car className="h-6 w-6 text-cyan-600" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h3 className="text-xl font-bold">Reserve Your Stalls & RV Spots</h3>
+                                                <p className="text-sm text-muted-foreground">
+                                                    {stalling.barns?.length || 0} barn{stalling.barns?.length !== 1 ? 's' : ''} · {stalling.rvAreas?.length || 0} RV area{stalling.rvAreas?.length !== 1 ? 's' : ''} · Pay online with Stripe
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                            <Button size="lg" onClick={() => navigate(`/show/${showId}/book`)}>
+                                                Book Now <ArrowRight className="h-4 w-4 ml-2" />
+                                            </Button>
+                                            <Button variant="outline" size="lg" onClick={() => navigate('/find-booking')}>
+                                                Already booked? Find it
+                                            </Button>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
 
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                                 <div className="lg:col-span-2 space-y-8">

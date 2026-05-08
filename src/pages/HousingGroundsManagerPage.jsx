@@ -16,7 +16,8 @@ import {
     Loader2, Home, Hash, Calendar, FolderOpen,
     MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, Edit2, AlertCircle, Wand2, Moon,
-    Droplets, Wrench, Package, Beef, PawPrint,
+    Droplets, Wrench, Package, Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
+    ScanLine,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -26,6 +27,10 @@ import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
 import { useToast } from '@/components/ui/use-toast';
+import SmartAssignDialog from '@/components/housing/SmartAssignDialog';
+import ManageStallsDialog from '@/components/housing/ManageStallsDialog';
+import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
+import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 
 // ── Constants ──
 
@@ -83,6 +88,81 @@ function getShowNights(pd) {
     const diff = Math.round((end - start) / (1000 * 60 * 60 * 24));
     return Math.max(diff, 1); // At least 1 night
 }
+
+// ── Booking Link Card (Public URL share) ──
+
+const BookingLinkCard = ({ show }) => {
+    const { toast } = useToast();
+    const stalling = show?.project_data?.stallingService || {};
+    const inventoryCount =
+        (stalling.barns?.length || 0) +
+        (stalling.rvAreas?.length || 0) +
+        (stalling.supportSpaces?.length || 0) +
+        (stalling.supplies?.length || 0);
+    const publicUrl = `${window.location.origin}/show/${show.id}/book`;
+    const showPageUrl = `${window.location.origin}/show/${show.id}`;
+
+    const copyLink = async () => {
+        try {
+            await navigator.clipboard.writeText(publicUrl);
+            toast({ title: 'Link copied!', description: 'Share this URL with your exhibitors.' });
+        } catch {
+            toast({ title: 'Copy failed', description: 'Please copy the link manually.', variant: 'destructive' });
+        }
+    };
+
+    if (inventoryCount === 0) {
+        return (
+            <Card className="mb-6 border-dashed">
+                <CardContent className="py-4 text-sm text-muted-foreground flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4" />
+                    Add barns, RV areas, or supplies below — then your exhibitors can reserve online.
+                </CardContent>
+            </Card>
+        );
+    }
+
+    return (
+        <Card className="mb-6 border-2 border-primary/30 bg-primary/5">
+            <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                    <LinkIcon className="h-4 w-4 text-primary" /> Public Booking Link
+                </CardTitle>
+                <CardDescription className="text-xs">
+                    Share this URL on your website, social media, or email so exhibitors can book online and pay with Stripe.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <div className="flex items-center gap-2">
+                    <Input readOnly value={publicUrl} className="font-mono text-xs" onFocus={(e) => e.target.select()} />
+                    <Button type="button" variant="default" size="sm" onClick={copyLink}>
+                        <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => window.open(publicUrl, '_blank')}>
+                        <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open
+                    </Button>
+                </div>
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground border-t pt-3">
+                    <div className="flex items-center gap-2">
+                        <span>Show details page:</span>
+                        <a href={showPageUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono">
+                            {showPageUrl}
+                        </a>
+                    </div>
+                    <a
+                        href={`/horse-show-manager/check-in/${show.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition text-xs font-semibold flex-shrink-0"
+                        title="Open check-in kiosk in new tab (great for tablets at the show entrance)"
+                    >
+                        <ScanLine className="h-3.5 w-3.5" /> Open Check-In Kiosk
+                    </a>
+                </div>
+            </CardContent>
+        </Card>
+    );
+};
 
 // ── Barn/Area Card ──
 
@@ -511,7 +591,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove }) => {
 
 // ── Booking Row ──
 
-const BookingRow = ({ booking, barns, onUpdate, onRemove }) => {
+const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStatusChange }) => {
     const stallOptions = useMemo(() => {
         const options = [];
         for (const barn of barns) {
@@ -521,6 +601,10 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove }) => {
         }
         return options;
     }, [barns]);
+
+    const requestedStalls = getRequestedStallCount(booking);
+    const assignedStalls = useMemo(() => getAssignedStallsForBooking(booking, barns), [booking, barns]);
+    const isMultiStall = (booking.items || []).some(it => it.type === 'stall' && (it.qty || 0) > 1) || requestedStalls > 1;
 
     return (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-background border text-sm">
@@ -543,17 +627,45 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove }) => {
                     className="h-7 text-xs"
                     placeholder="Trainer"
                 />
-                <Select value={booking.stallId || '__none__'} onValueChange={(val) => onUpdate('stallId', val === '__none__' ? '' : val)}>
-                    <SelectTrigger className="h-7 text-xs">
-                        <SelectValue placeholder="Assign stall..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="__none__" className="text-xs">Unassigned</SelectItem>
-                        {stallOptions.map(s => (
-                            <SelectItem key={s.id} value={s.id} className="text-xs">{s.label}</SelectItem>
+                {isMultiStall || (booking.items || []).length > 0 ? (
+                    <div className="flex items-center gap-1 flex-wrap min-h-[28px]">
+                        {assignedStalls.length === 0 && requestedStalls > 0 && (
+                            <Badge variant="outline" className="text-[10px] text-muted-foreground">unassigned</Badge>
+                        )}
+                        {assignedStalls.slice(0, 6).map(s => (
+                            <Badge
+                                key={s.id}
+                                className="bg-emerald-600 text-white text-[10px] font-mono"
+                                title={`${s.barnName} · Stall ${s.number}`}
+                            >
+                                {s.number}
+                            </Badge>
                         ))}
-                    </SelectContent>
-                </Select>
+                        {assignedStalls.length > 6 && (
+                            <Badge variant="outline" className="text-[10px]">+{assignedStalls.length - 6}</Badge>
+                        )}
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() => onManageStalls?.(booking)}
+                        >
+                            Manage
+                        </Button>
+                    </div>
+                ) : (
+                    <Select value={booking.stallId || '__none__'} onValueChange={(val) => onUpdate('stallId', val === '__none__' ? '' : val)}>
+                        <SelectTrigger className="h-7 text-xs">
+                            <SelectValue placeholder="Assign stall..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="__none__" className="text-xs">Unassigned</SelectItem>
+                            {stallOptions.map(s => (
+                                <SelectItem key={s.id} value={s.id} className="text-xs">{s.label}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                )}
                 <Input
                     type="number"
                     value={booking.nights || ''}
@@ -561,7 +673,13 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove }) => {
                     className="h-7 text-xs"
                     placeholder="Nights"
                 />
-                <Select value={booking.status || 'pending'} onValueChange={(val) => onUpdate('status', val)}>
+                <Select
+                    value={booking.status || 'pending'}
+                    onValueChange={(val) => {
+                        onUpdate('status', val);
+                        onStatusChange?.(booking.id, val); // immediate save to DB
+                    }}
+                >
                     <SelectTrigger className="h-7 text-xs">
                         <SelectValue />
                     </SelectTrigger>
@@ -581,7 +699,7 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove }) => {
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBarns }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const showNights = getShowNights(pd);
@@ -592,6 +710,22 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Sync from parent when DB changes externally (kiosk update, tab-focus refetch, immediate-save).
+    // Merge to preserve any in-flight local edits to non-status fields.
+    const remoteBookingsRef = pd?.stallingService?.bookings;
+    useEffect(() => {
+        const remote = remoteBookingsRef || [];
+        setBookings(local => {
+            const localById = new Map((local || []).map(b => [b.id, b]));
+            return remote.map(r => {
+                const lm = localById.get(r.id);
+                if (!lm) return r;
+                // Trust remote for status/check-in timestamps; keep local for other in-progress edits.
+                return { ...lm, status: r.status, checkedInAt: r.checkedInAt, checkedOutAt: r.checkedOutAt };
+            });
+        });
+    }, [remoteBookingsRef]);
 
     // ── Barn CRUD ──
     const addBarn = () => {
@@ -787,7 +921,10 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
     const totalStalls = barns.reduce((sum, b) => sum + (b.stallCount || 0), 0);
     const totalRvSpots = rvAreas.reduce((sum, r) => sum + (r.spotCount || 0), 0);
     const totalBookings = bookings.length;
-    const confirmedBookings = bookings.filter(b => b.status === 'confirmed' || b.status === 'checked_in').length;
+    const confirmedOnly = bookings.filter(b => b.status === 'confirmed').length;
+    const checkedInOnly = bookings.filter(b => b.status === 'checked_in').length;
+    // "Confirmed" stat shows confirmed-status only; OCCUPANCY counts anyone actively holding a stall (confirmed OR checked_in).
+    const confirmedBookings = confirmedOnly + checkedInOnly;
     const totalUnits = totalStalls + totalRvSpots;
     const occupancyRate = totalUnits > 0 ? Math.round((confirmedBookings / totalUnits) * 100) : 0;
 
@@ -815,6 +952,14 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
 
     return (
         <div className="space-y-6">
+            {/* Conflict & capacity alerts */}
+            <ConflictAlertsPanel
+                bookings={bookings}
+                barns={barns}
+                rvAreas={rvAreas}
+                showInfo={pd?.showDetails?.general || pd}
+            />
+
             {/* KPIs */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 <div className="rounded-xl border p-4 bg-blue-50 dark:bg-blue-950/20 border-blue-200">
@@ -831,7 +976,12 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                 </div>
                 <div className="rounded-xl border p-4 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200">
                     <p className="text-xs font-medium text-muted-foreground uppercase">Confirmed</p>
-                    <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{confirmedBookings}</p>
+                    <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{confirmedOnly}</p>
+                    {checkedInOnly > 0 && (
+                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                            +{checkedInOnly} checked in
+                        </p>
+                    )}
                 </div>
                 <div className="rounded-xl border p-4 bg-amber-50 dark:bg-amber-950/20 border-amber-200">
                     <p className="text-xs font-medium text-muted-foreground uppercase">Occupancy</p>
@@ -1153,6 +1303,14 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                         <Button onClick={addBooking} variant="outline">
                             <ShoppingCart className="h-4 w-4 mr-2" /> Add Booking
                         </Button>
+                        <SmartAssignDialog
+                            bookings={bookings}
+                            barns={barns}
+                            onApply={async (newBarns) => {
+                                setBarns(newBarns);
+                                if (onUpdateBarns) await onUpdateBarns(newBarns);
+                            }}
+                        />
                         <div className="relative flex-1 max-w-sm">
                             <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
                             <Input
@@ -1197,13 +1355,25 @@ const StallingDashboard = ({ show, onSave, isSaving }) => {
                     ) : (
                         <div className="space-y-2">
                             {filteredBookings.map(booking => (
-                                <BookingRow
-                                    key={booking.id}
-                                    booking={booking}
-                                    barns={barns}
-                                    onUpdate={(field, value) => updateBooking(booking.id, field, value)}
-                                    onRemove={() => removeBooking(booking.id)}
-                                />
+                                <div key={booking.id} className="flex items-stretch gap-2">
+                                    <div className="flex-1">
+                                        <BookingRow
+                                            booking={booking}
+                                            barns={barns}
+                                            onUpdate={(field, value) => updateBooking(booking.id, field, value)}
+                                            onRemove={() => removeBooking(booking.id)}
+                                            onStatusChange={onUpdateBookingStatus}
+                                        />
+                                    </div>
+                                    <ManageStallsDialog
+                                        booking={booking}
+                                        barns={barns}
+                                        onApply={async (newBarns) => {
+                                            setBarns(newBarns);
+                                            if (onUpdateBarns) await onUpdateBarns(newBarns);
+                                        }}
+                                    />
+                                </div>
                             ))}
                         </div>
                     )}
@@ -1397,26 +1567,91 @@ const HousingGroundsManagerPage = () => {
     const [selectedShow, setSelectedShow] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
 
-    useEffect(() => {
-        const fetchShows = async () => {
-            if (!user) { setIsLoading(false); return; }
-            const { data, error } = await supabase
-                .from('projects')
-                .select('id, project_name, project_type, project_data, status, created_at')
-                .not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: false });
-            if (!error && data) {
-                setShows(data);
-                if (showId) {
-                    const match = data.find(s => s.id === showId);
-                    if (match) setSelectedShow(match);
-                }
+    const fetchShows = useCallback(async () => {
+        if (!user) { setIsLoading(false); return; }
+        const { data, error } = await supabase
+            .from('projects')
+            .select('id, project_name, project_type, project_data, status, created_at')
+            .not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")')
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false });
+        if (!error && data) {
+            setShows(data);
+            if (showId) {
+                const match = data.find(s => s.id === showId);
+                if (match) setSelectedShow(match);
             }
-            setIsLoading(false);
-        };
-        fetchShows();
+        }
+        setIsLoading(false);
     }, [user, showId]);
+
+    useEffect(() => { fetchShows(); }, [fetchShows]);
+
+    // Refetch when tab regains focus so kiosk-side changes appear here automatically.
+    useEffect(() => {
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') fetchShows();
+        };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => document.removeEventListener('visibilitychange', onVisible);
+    }, [fetchShows]);
+
+    // Persist updated barns array immediately (used by Smart Auto-Assign + ManageStallsDialog).
+    // This commits stall->booking assignments without requiring "Save All".
+    const updateBarnsImmediate = useCallback(async (nextBarns) => {
+        if (!selectedShow) return;
+        try {
+            const updatedData = stampModuleStatusOnSave({
+                ...selectedShow.project_data,
+                stallingService: {
+                    ...(selectedShow.project_data?.stallingService || {}),
+                    barns: nextBarns,
+                },
+            }, 'housing');
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+        } catch (error) {
+            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+            throw error;
+        }
+    }, [selectedShow, toast]);
+
+    // Persist a single booking's status immediately (no Save All needed).
+    const updateBookingStatusImmediate = useCallback(async (bookingId, newStatus) => {
+        if (!selectedShow) return;
+        try {
+            const currentBookings = selectedShow.project_data?.stallingService?.bookings || [];
+            const updatedBookings = currentBookings.map(b =>
+                b.id === bookingId
+                    ? {
+                        ...b,
+                        status: newStatus,
+                        ...(newStatus === 'checked_in' ? { checkedInAt: new Date().toISOString() } : {}),
+                        ...(newStatus === 'checked_out' ? { checkedOutAt: new Date().toISOString() } : {}),
+                    }
+                    : b
+            );
+            const updatedData = stampModuleStatusOnSave({
+                ...selectedShow.project_data,
+                stallingService: { ...(selectedShow.project_data?.stallingService || {}), bookings: updatedBookings },
+            }, 'housing');
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            toast({ title: 'Status updated', description: `Booking is now ${newStatus.replace('_', ' ')}.` });
+        } catch (error) {
+            toast({ title: 'Status save failed', description: error.message, variant: 'destructive' });
+        }
+    }, [selectedShow, toast]);
 
     const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings }) => {
         if (!selectedShow) return;
@@ -1473,7 +1708,16 @@ const HousingGroundsManagerPage = () => {
                     )}
 
                     {selectedShow && (
-                        <StallingDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                        <>
+                            <BookingLinkCard show={selectedShow} />
+                            <StallingDashboard
+                                show={selectedShow}
+                                onSave={handleSave}
+                                isSaving={isSaving}
+                                onUpdateBookingStatus={updateBookingStatusImmediate}
+                                onUpdateBarns={updateBarnsImmediate}
+                            />
+                        </>
                     )}
                 </main>
             </div>

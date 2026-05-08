@@ -44,6 +44,8 @@ const Navigation = () => {
         { name: 'Pattern Book Builder', path: '/pattern-book-builder', show: 'always' },
         { name: 'Horse Show Manager', path: '/horse-show-manager', show: 'always' },
         { name: 'Events', path: '/events', show: 'always' },
+        { name: 'Book Stalls', path: '/book-stalls', show: 'always' },
+        { name: 'Find My Booking', path: '/find-booking', show: 'always' },
         { name: 'Upload Pattern', path: '/upload-patterns', show: 'always' },
         { name: 'Pricing', path: '/pricing', show: 'always' },
         { name: 'Admin Portal', path: '/admin', show: 'admin' },
