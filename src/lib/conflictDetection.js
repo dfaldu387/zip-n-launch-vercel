@@ -288,6 +288,34 @@ function checkDateWindow(bookings, showInfo) {
     return out;
 }
 
+// 11. RV length exceeds area's max length
+function checkRvLengthViolations(bookings, rvAreas) {
+    const out = [];
+    const byId = new Map((rvAreas || []).map(a => [a.id, a]));
+    for (const b of bookings || []) {
+        if (b.status === 'cancelled') continue;
+        const rvOpts = b.rvOptions || {};
+        for (const it of b.items || []) {
+            if (it.type !== 'rv') continue;
+            const area = byId.get(it.refId);
+            if (!area || !area.maxLength) continue;
+            const len = Number((rvOpts[it.refId]?.length) ?? it.options?.length ?? 0);
+            if (len > 0 && len > area.maxLength) {
+                out.push({
+                    id: `rvlen-${b.id}-${it.refId}`,
+                    severity: 'warning',
+                    type: 'rv_length_violation',
+                    title: 'RV exceeds area length limit',
+                    description: `${labelOf(b)}'s ${len}ft RV is parked in "${area.name}" (limit ${area.maxLength}ft).`,
+                    relatedIds: { bookingId: b.id, rvAreaId: area.id },
+                    fix: 'Move the booking to a larger RV area, or note the exception manually.',
+                });
+            }
+        }
+    }
+    return out;
+}
+
 // Top-level entry: aggregate all checks and sort by severity.
 export function detectConflicts({ bookings, barns, rvAreas, showInfo } = {}) {
     const all = [
@@ -301,6 +329,7 @@ export function detectConflicts({ bookings, barns, rvAreas, showInfo } = {}) {
         ...checkDuplicateContacts(bookings),
         ...checkMissingContact(bookings),
         ...checkDateWindow(bookings, showInfo),
+        ...checkRvLengthViolations(bookings, rvAreas),
     ];
     const order = { error: 0, warning: 1, info: 2 };
     return all.sort((a, b) => (order[a.severity] - order[b.severity]) || a.title.localeCompare(b.title));

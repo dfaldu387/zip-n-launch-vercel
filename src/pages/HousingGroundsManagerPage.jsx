@@ -17,7 +17,7 @@ import {
     MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, Edit2, AlertCircle, Wand2, Moon,
     Droplets, Wrench, Package, Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
-    ScanLine,
+    ScanLine, FileText,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -30,7 +30,9 @@ import { useToast } from '@/components/ui/use-toast';
 import SmartAssignDialog from '@/components/housing/SmartAssignDialog';
 import ManageStallsDialog from '@/components/housing/ManageStallsDialog';
 import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
+import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
+import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
 
 // ── Constants ──
 
@@ -44,15 +46,24 @@ const STALL_TYPES = [
 ];
 
 const RV_HOOKUP_TYPES = [
-    { id: 'full', name: 'Full Hookup' },
+    { id: 'full', name: 'Full Hookup (water + electric + sewer)' },
+    { id: 'partial', name: 'Partial (water + electric)' },
     { id: 'electric_only', name: 'Electric Only' },
+    { id: 'dry_camping', name: 'Dry Camping (no hookups)' },
     { id: 'day_parking', name: 'Day Parking' },
 ];
 
 const RV_POWER_TYPES = [
     { id: '50amp', name: '50 Amp' },
+    { id: '30amp', name: '30 Amp' },
     { id: '35amp', name: '35 Amp' },
     { id: '25amp', name: '25 Amp' },
+    { id: 'none', name: 'No Power' },
+];
+
+const RV_PRICING_MODELS = [
+    { id: 'nightly', name: 'Per Night' },
+    { id: 'flat', name: 'Flat Rate (entire stay)' },
 ];
 
 const SUPPORT_SPACE_TYPES = [
@@ -306,13 +317,15 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
 
 const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
     const [expanded, setExpanded] = useState(true);
+    const [advancedOpen, setAdvancedOpen] = useState(false);
+    const pricingModel = rvArea.pricingModel || 'nightly';
 
     return (
-        <Card className="border-l-4 border-l-cyan-500">
+        <Card className={cn('border-l-4 border-l-cyan-500', rvArea.isOverflow && 'border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/10')}>
             <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-1">
-                        <Car className="h-4 w-4 text-cyan-600" />
+                        <Car className={cn('h-4 w-4', rvArea.isOverflow ? 'text-amber-600' : 'text-cyan-600')} />
                         <Input
                             value={rvArea.name}
                             onChange={(e) => onUpdate('name', e.target.value)}
@@ -322,6 +335,12 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                         <Badge variant="outline" className="text-xs">
                             {rvArea.spotCount || 0} spots
                         </Badge>
+                        {rvArea.isOverflow && (
+                            <Badge className="text-xs bg-amber-500 text-white">Overflow</Badge>
+                        )}
+                        {rvArea.maxLength > 0 && (
+                            <Badge variant="outline" className="text-xs">Max {rvArea.maxLength}ft</Badge>
+                        )}
                     </div>
                     <div className="flex items-center gap-1">
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
@@ -347,12 +366,17 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                             />
                         </div>
                         <div className="space-y-1">
-                            <Label className="text-xs">Price / Night ($)</Label>
+                            <Label className="text-xs">
+                                {pricingModel === 'flat' ? 'Flat Rate ($)' : 'Price / Night ($)'}
+                            </Label>
                             <Input
                                 type="number"
                                 min={0}
-                                value={rvArea.pricePerNight || ''}
-                                onChange={(e) => onUpdate('pricePerNight', parseFloat(e.target.value) || 0)}
+                                value={pricingModel === 'flat' ? (rvArea.flatRate || '') : (rvArea.pricePerNight || '')}
+                                onChange={(e) => onUpdate(
+                                    pricingModel === 'flat' ? 'flatRate' : 'pricePerNight',
+                                    parseFloat(e.target.value) || 0
+                                )}
                                 className="h-8 text-xs"
                                 placeholder="$0"
                             />
@@ -415,6 +439,78 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                             />
                             <Label className="text-xs">Wi-Fi</Label>
                         </div>
+                    </div>
+
+                    {/* Advanced settings */}
+                    <div className="border-t pt-3">
+                        <button
+                            type="button"
+                            onClick={() => setAdvancedOpen(o => !o)}
+                            className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1"
+                        >
+                            {advancedOpen ? '▾' : '▸'} Advanced (pricing model, length limit, fees, overflow)
+                        </button>
+                        {advancedOpen && (
+                            <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Pricing Model</Label>
+                                        <Select value={pricingModel} onValueChange={(val) => onUpdate('pricingModel', val)}>
+                                            <SelectTrigger className="h-8 text-xs">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {RV_PRICING_MODELS.map(m => (
+                                                    <SelectItem key={m.id} value={m.id} className="text-xs">{m.name}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Max RV Length (ft)</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={rvArea.maxLength || ''}
+                                            onChange={(e) => onUpdate('maxLength', parseInt(e.target.value) || 0)}
+                                            className="h-8 text-xs"
+                                            placeholder="0 = no limit"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Early Arrival Fee / Day ($)</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={rvArea.earlyArrivalFeePerDay || ''}
+                                            onChange={(e) => onUpdate('earlyArrivalFeePerDay', parseFloat(e.target.value) || 0)}
+                                            className="h-8 text-xs"
+                                            placeholder="$0"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Late Departure Fee / Day ($)</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={rvArea.lateDepartureFeePerDay || ''}
+                                            onChange={(e) => onUpdate('lateDepartureFeePerDay', parseFloat(e.target.value) || 0)}
+                                            className="h-8 text-xs"
+                                            placeholder="$0"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 pt-1">
+                                    <Checkbox
+                                        checked={rvArea.isOverflow || false}
+                                        onCheckedChange={(checked) => onUpdate('isOverflow', checked)}
+                                    />
+                                    <Label className="text-xs">
+                                        Overflow lot — only used when primary RV areas are full
+                                    </Label>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </CardContent>
             )}
@@ -946,6 +1042,103 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         return total;
     }, [bookings, barns]);
 
+    // ───── Analytics ─────
+    // Computed from existing data; no DB calls. Drives the Analytics tab.
+    const analytics = useMemo(() => {
+        const ACTIVE_STATUSES = new Set(['confirmed', 'checked_in', 'checked_out']);
+        const POWER_AMPS = { '50amp': 50, '30amp': 30, '35amp': 35, '25amp': 25, 'none': 0 };
+
+        let realizedRevenue = 0;
+        let stallRevenue = 0;
+        let rvRevenue = 0;
+        let supplyRevenue = 0;
+        let supportRevenue = 0;
+        let cancelledCount = 0;
+        let totalBookingsCount = bookings.length;
+
+        // Track demand: how many bookings request each barn/RV area
+        const demandByRefId = new Map(); // refId → { name, type, count }
+        const recordDemand = (refId, name, type) => {
+            if (!refId) return;
+            if (!demandByRefId.has(refId)) {
+                demandByRefId.set(refId, { refId, name, type, count: 0 });
+            }
+            demandByRefId.get(refId).count += 1;
+        };
+
+        for (const b of bookings) {
+            if (b.status === 'cancelled') { cancelledCount += 1; continue; }
+            const amt = Number(b.totalAmount ?? b.amount ?? 0);
+            if (ACTIVE_STATUSES.has(b.status)) realizedRevenue += amt;
+
+            // Per-item revenue breakdown
+            for (const it of b.items || []) {
+                const itAmt = Number(it.amount || 0);
+                if (it.type === 'stall') {
+                    stallRevenue += itAmt;
+                    const barn = barns.find(x => x.id === it.refId);
+                    if (barn) recordDemand(barn.id, barn.name, 'stall');
+                } else if (it.type === 'rv' || it.type === 'rv_fee') {
+                    rvRevenue += itAmt;
+                    if (it.type === 'rv') {
+                        const area = rvAreas.find(x => x.id === it.refId);
+                        if (area) recordDemand(area.id, area.name, 'rv');
+                    }
+                } else if (it.type === 'support') {
+                    supportRevenue += itAmt;
+                } else if (it.type === 'supply') {
+                    supplyRevenue += itAmt;
+                }
+            }
+            // Legacy single-stall bookings have no items[]
+            if ((!b.items || b.items.length === 0) && b.stallId) {
+                const barn = barns.find(x => (x.stalls || []).some(s => s.id === b.stallId));
+                if (barn) recordDemand(barn.id, barn.name, 'stall');
+            }
+        }
+
+        // Peak demand zone (most-requested area)
+        const demandList = [...demandByRefId.values()].sort((a, b) => b.count - a.count);
+        const peakDemand = demandList[0] || null;
+
+        // RV power load
+        let ampsUsed = 0;
+        let ampsCapacity = 0;
+        for (const area of rvAreas) {
+            const ampPer = POWER_AMPS[area.powerType] || 0;
+            ampsCapacity += ampPer * (area.spotCount || 0);
+        }
+        for (const b of bookings) {
+            if (b.status === 'cancelled') continue;
+            for (const it of b.items || []) {
+                if (it.type !== 'rv') continue;
+                const area = rvAreas.find(x => x.id === it.refId);
+                if (!area) continue;
+                ampsUsed += (POWER_AMPS[area.powerType] || 0) * (it.qty || 0);
+            }
+        }
+        const powerLoadPct = ampsCapacity > 0 ? Math.round((ampsUsed / ampsCapacity) * 100) : 0;
+
+        const noShowRate = totalBookingsCount > 0
+            ? Math.round((cancelledCount / totalBookingsCount) * 100)
+            : 0;
+
+        return {
+            occupancy: { rate: occupancyRate, occupied: confirmedBookings, total: totalUnits },
+            revenue: {
+                total: realizedRevenue,
+                byStalls: stallRevenue,
+                byRv: rvRevenue,
+                bySupplies: supplyRevenue,
+                bySupport: supportRevenue,
+            },
+            noShow: { count: cancelledCount, total: totalBookingsCount, rate: noShowRate },
+            peakDemand,
+            demandList: demandList.slice(0, 5),
+            powerLoad: { ampsUsed, ampsCapacity, pct: powerLoadPct },
+        };
+    }, [bookings, barns, rvAreas, occupancyRate, confirmedBookings, totalUnits]);
+
     const handleSave = () => {
         onSave({ barns, rvAreas, supportSpaces, supplies, bookings });
     };
@@ -1084,6 +1277,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         <TabsTrigger value="inventory">Inventory</TabsTrigger>
                         <TabsTrigger value="bookings">Bookings ({totalBookings})</TabsTrigger>
                         <TabsTrigger value="pricing">Pricing Summary</TabsTrigger>
+                        <TabsTrigger value="analytics">Analytics</TabsTrigger>
                     </TabsList>
                     <Button onClick={handleSave} disabled={isSaving}>
                         {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
@@ -1373,6 +1567,32 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             if (onUpdateBarns) await onUpdateBarns(newBarns);
                                         }}
                                     />
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-xs"
+                                        title="Download invoice PDF"
+                                        onClick={() => {
+                                            const assignedStalls = getAssignedStallsForBooking(booking, barns)
+                                                .map(s => ({ barnId: s.barnId, number: s.number }));
+                                            downloadInvoicePdf({
+                                                booking,
+                                                show: {
+                                                    id: show.id,
+                                                    name: show.project_name,
+                                                    startDate: pd?.showDetails?.general?.startDate || pd?.startDate,
+                                                    endDate: pd?.showDetails?.general?.endDate || pd?.endDate,
+                                                    venueFacility: pd?.showDetails?.venue?.facilityName,
+                                                },
+                                                assignedStalls,
+                                                options: {
+                                                    organizerContact: pd?.showDetails?.general?.managerContactEmail,
+                                                },
+                                            });
+                                        }}
+                                    >
+                                        <FileText className="h-3 w-3 mr-1" /> Invoice
+                                    </Button>
                                 </div>
                             ))}
                         </div>
@@ -1549,6 +1769,109 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             )}
                         </CardContent>
                     </Card>
+                </TabsContent>
+
+                {/* ── Analytics Tab ── */}
+                <TabsContent value="analytics" className="mt-4 space-y-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">📊 Analytics</CardTitle>
+                            <CardDescription>
+                                Per-show metrics. Auto-computed from your bookings, stalls, and RV data — updates live as bookings come in.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                                {/* 1. Occupancy */}
+                                <div className="rounded-xl border-2 p-5 bg-amber-50 dark:bg-amber-950/20 border-amber-200">
+                                    <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide mb-1">Occupancy</p>
+                                    <p className="text-4xl font-bold text-amber-900 dark:text-amber-200">{analytics.occupancy.rate}%</p>
+                                    <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-2">
+                                        {analytics.occupancy.occupied} of {analytics.occupancy.total} units occupied
+                                    </p>
+                                </div>
+
+                                {/* 2. Revenue */}
+                                <div className="rounded-xl border-2 p-5 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200">
+                                    <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wide mb-1">Realized Revenue</p>
+                                    <p className="text-4xl font-bold text-emerald-900 dark:text-emerald-200">${analytics.revenue.total.toLocaleString()}</p>
+                                    <div className="text-xs text-emerald-700/80 dark:text-emerald-400/80 mt-2 space-y-0.5">
+                                        <p>Stalls: ${analytics.revenue.byStalls.toLocaleString()}</p>
+                                        <p>RV: ${analytics.revenue.byRv.toLocaleString()}</p>
+                                        {analytics.revenue.bySupport > 0 && <p>Support: ${analytics.revenue.bySupport.toLocaleString()}</p>}
+                                        {analytics.revenue.bySupplies > 0 && <p>Supplies: ${analytics.revenue.bySupplies.toLocaleString()}</p>}
+                                    </div>
+                                </div>
+
+                                {/* 3. No-show / cancel rate */}
+                                <div className="rounded-xl border-2 p-5 bg-red-50 dark:bg-red-950/20 border-red-200">
+                                    <p className="text-xs font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">No-show / Cancel</p>
+                                    <p className="text-4xl font-bold text-red-900 dark:text-red-200">{analytics.noShow.rate}%</p>
+                                    <p className="text-xs text-red-700/80 dark:text-red-400/80 mt-2">
+                                        {analytics.noShow.count} of {analytics.noShow.total} booking{analytics.noShow.total !== 1 ? 's' : ''}
+                                    </p>
+                                </div>
+
+                                {/* 4. Peak demand zone */}
+                                <div className="rounded-xl border-2 p-5 bg-purple-50 dark:bg-purple-950/20 border-purple-200">
+                                    <p className="text-xs font-semibold text-purple-700 dark:text-purple-300 uppercase tracking-wide mb-1">Peak Demand</p>
+                                    {analytics.peakDemand ? (
+                                        <>
+                                            <p className="text-2xl font-bold text-purple-900 dark:text-purple-200 leading-tight truncate" title={analytics.peakDemand.name}>
+                                                {analytics.peakDemand.name}
+                                            </p>
+                                            <p className="text-xs text-purple-700/80 dark:text-purple-400/80 mt-2">
+                                                {analytics.peakDemand.count} booking{analytics.peakDemand.count !== 1 ? 's' : ''} requested
+                                            </p>
+                                            {analytics.demandList.length > 1 && (
+                                                <div className="text-[11px] text-purple-700/70 dark:text-purple-400/70 mt-2 pt-2 border-t border-purple-200 dark:border-purple-800 space-y-0.5">
+                                                    {analytics.demandList.slice(1, 4).map(d => (
+                                                        <p key={d.refId} className="truncate" title={d.name}>
+                                                            {d.name} · {d.count}
+                                                        </p>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <p className="text-sm text-purple-700/80 dark:text-purple-400/80 italic">No bookings yet</p>
+                                    )}
+                                </div>
+
+                                {/* 5. Power load */}
+                                <div className="rounded-xl border-2 p-5 bg-blue-50 dark:bg-blue-950/20 border-blue-200">
+                                    <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 uppercase tracking-wide mb-1">RV Power Load</p>
+                                    {analytics.powerLoad.ampsCapacity > 0 ? (
+                                        <>
+                                            <p className="text-4xl font-bold text-blue-900 dark:text-blue-200">{analytics.powerLoad.pct}%</p>
+                                            <p className="text-xs text-blue-700/80 dark:text-blue-400/80 mt-2">
+                                                {analytics.powerLoad.ampsUsed} A used of {analytics.powerLoad.ampsCapacity} A available
+                                            </p>
+                                            {analytics.powerLoad.pct > 80 && (
+                                                <p className="text-[11px] text-red-600 dark:text-red-400 mt-2 font-semibold">
+                                                    ⚠ Approaching capacity
+                                                </p>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <p className="text-sm text-blue-700/80 dark:text-blue-400/80 italic">No RV power data</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Empty state */}
+                            {analytics.noShow.total === 0 && (
+                                <div className="mt-6 text-center py-8 text-sm text-muted-foreground border border-dashed rounded-lg">
+                                    📭 No bookings yet — analytics will populate as exhibitors reserve.
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    {/* Charts */}
+                    {analytics.noShow.total > 0 && (
+                        <AnalyticsCharts analytics={analytics} bookings={bookings} />
+                    )}
                 </TabsContent>
             </Tabs>
         </div>

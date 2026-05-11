@@ -37,14 +37,18 @@ const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
 const HOOKUP_LABELS = {
     full: 'Full Hookup',
+    partial: 'Partial Hookup',
     electric_only: 'Electric Only',
+    dry_camping: 'Dry Camping',
     day_parking: 'Day Parking',
 };
 
 const POWER_LABELS = {
     '50amp': '50 Amp',
+    '30amp': '30 Amp',
     '35amp': '35 Amp',
     '25amp': '25 Amp',
+    'none': 'No Power',
 };
 
 // ───────────────────────── Quantity Stepper ─────────────────────────
@@ -145,19 +149,37 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                         {rvAreas.map(rv => {
                             const total = rv.spotCount || 0;
                             const qty = selection.rvs?.[rv.id] || 0;
+                            const pricingModel = rv.pricingModel || 'nightly';
+                            const isFlatRate = pricingModel === 'flat';
+                            const priceLabel = isFlatRate
+                                ? `${money(rv.flatRate)} flat`
+                                : `${money(rv.pricePerNight)}/night`;
+                            const userLen = Number(selection.rvOptions?.[rv.id]?.length || 0);
+                            const lengthExceeded = rv.maxLength > 0 && userLen > 0 && userLen > rv.maxLength;
                             return (
-                                <div key={rv.id} className="p-3 border rounded-lg space-y-2">
+                                <div key={rv.id} className={`p-3 border rounded-lg space-y-2 ${rv.isOverflow ? 'border-amber-400 bg-amber-50/50 dark:bg-amber-900/10' : ''}`}>
                                     <div className="flex items-center justify-between">
                                         <div className="flex-1">
-                                            <p className="font-semibold text-sm">{rv.name}</p>
-                                            <p className="text-xs text-muted-foreground">
-                                                {money(rv.pricePerNight)}/night · {total} spots ·{' '}
-                                                {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}
+                                            <p className="font-semibold text-sm flex items-center gap-2">
+                                                {rv.name}
+                                                {rv.isOverflow && (
+                                                    <Badge className="bg-amber-500 text-white text-[10px]">Overflow</Badge>
+                                                )}
                                             </p>
-                                            <div className="flex gap-1 mt-1">
+                                            <p className="text-xs text-muted-foreground">
+                                                {priceLabel} · {total} spots ·{' '}
+                                                {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}
+                                                {rv.maxLength > 0 && <> · Max {rv.maxLength}ft</>}
+                                            </p>
+                                            <div className="flex gap-1 mt-1 flex-wrap">
                                                 {rv.hasWater && <Badge variant="secondary" className="text-xs">Water</Badge>}
                                                 {rv.hasSewer && <Badge variant="secondary" className="text-xs">Sewer</Badge>}
                                                 {rv.hasWifi && <Badge variant="secondary" className="text-xs">Wi-Fi</Badge>}
+                                                {(rv.earlyArrivalFeePerDay > 0 || rv.lateDepartureFeePerDay > 0) && (
+                                                    <Badge variant="outline" className="text-[10px]">
+                                                        Early/late {money(rv.earlyArrivalFeePerDay || rv.lateDepartureFeePerDay)}/day
+                                                    </Badge>
+                                                )}
                                             </div>
                                         </div>
                                         <QtyStepper
@@ -172,15 +194,22 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                                     {qty > 0 && (
                                         <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                                             <div>
-                                                <Label className="text-xs">RV Length (ft)</Label>
+                                                <Label className="text-xs">
+                                                    RV Length (ft){rv.maxLength > 0 && ` · max ${rv.maxLength}`}
+                                                </Label>
                                                 <Input
                                                     type="number"
                                                     min={0}
                                                     value={selection.rvOptions?.[rv.id]?.length || ''}
                                                     onChange={(e) => updateRvFields(rv.id, { length: e.target.value })}
-                                                    className="h-8 text-xs"
+                                                    className={`h-8 text-xs ${lengthExceeded ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                                                     placeholder="e.g., 32"
                                                 />
+                                                {lengthExceeded && (
+                                                    <p className="text-[10px] text-red-600 mt-1">
+                                                        Your RV is longer than this area allows.
+                                                    </p>
+                                                )}
                                             </div>
                                             <div>
                                                 <Label className="text-xs">License Plate</Label>
@@ -580,22 +609,72 @@ const PublicBookingPage = () => {
             }
         }
 
+        // Days outside the show window count toward early-arrival / late-departure fees
+        let earlyDays = 0;
+        let lateDays = 0;
+        try {
+            if (showWindow.start && details.arrivalDate) {
+                const e = differenceInCalendarDays(parseISO(showWindow.start), parseISO(details.arrivalDate));
+                if (e > 0) earlyDays = e;
+            }
+            if (showWindow.end && details.departureDate) {
+                const l = differenceInCalendarDays(parseISO(details.departureDate), parseISO(showWindow.end));
+                if (l > 0) lateDays = l;
+            }
+        } catch { /* date parse issue — skip fees */ }
+
         for (const rv of inventory.rvAreas) {
             const qty = selection.rvs?.[rv.id] || 0;
             if (qty > 0) {
-                const amount = qty * (rv.pricePerNight || 0) * nights;
-                subtotal += amount;
+                const pricingModel = rv.pricingModel || 'nightly';
+                const isFlat = pricingModel === 'flat';
+                const baseUnitPrice = isFlat ? (rv.flatRate || 0) : (rv.pricePerNight || 0);
+                const baseAmount = isFlat ? qty * baseUnitPrice : qty * baseUnitPrice * nights;
+                const baseDetail = isFlat
+                    ? `${money(baseUnitPrice)} flat × ${qty}`
+                    : `${money(baseUnitPrice)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${qty}`;
+                subtotal += baseAmount;
                 items.push({
                     type: 'rv',
                     refId: rv.id,
                     name: `${rv.name} (RV) × ${qty}`,
-                    detail: `${money(rv.pricePerNight)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${qty}`,
+                    detail: baseDetail,
                     qty,
                     nights,
-                    unitPrice: rv.pricePerNight || 0,
-                    amount,
+                    unitPrice: baseUnitPrice,
+                    amount: baseAmount,
                     options: selection.rvOptions?.[rv.id] || {},
+                    pricingModel,
                 });
+
+                // Early-arrival fee
+                if (earlyDays > 0 && (rv.earlyArrivalFeePerDay || 0) > 0) {
+                    const fee = qty * earlyDays * rv.earlyArrivalFeePerDay;
+                    subtotal += fee;
+                    items.push({
+                        type: 'rv_fee',
+                        refId: rv.id,
+                        name: `${rv.name} · Early arrival fee`,
+                        detail: `${earlyDays} day${earlyDays !== 1 ? 's' : ''} early × ${money(rv.earlyArrivalFeePerDay)} × ${qty}`,
+                        qty,
+                        unitPrice: rv.earlyArrivalFeePerDay,
+                        amount: fee,
+                    });
+                }
+                // Late-departure fee
+                if (lateDays > 0 && (rv.lateDepartureFeePerDay || 0) > 0) {
+                    const fee = qty * lateDays * rv.lateDepartureFeePerDay;
+                    subtotal += fee;
+                    items.push({
+                        type: 'rv_fee',
+                        refId: rv.id,
+                        name: `${rv.name} · Late departure fee`,
+                        detail: `${lateDays} day${lateDays !== 1 ? 's' : ''} late × ${money(rv.lateDepartureFeePerDay)} × ${qty}`,
+                        qty,
+                        unitPrice: rv.lateDepartureFeePerDay,
+                        amount: fee,
+                    });
+                }
             }
         }
 
@@ -640,10 +719,30 @@ const PublicBookingPage = () => {
 
     const hasSelection = orderSummary.lineItems.length > 0;
 
+    // Any selected RV area where the customer's length exceeds the maxLength?
+    const lengthViolation = useMemo(() => {
+        for (const rv of inventory.rvAreas) {
+            const qty = selection.rvs?.[rv.id] || 0;
+            const len = Number(selection.rvOptions?.[rv.id]?.length || 0);
+            if (qty > 0 && rv.maxLength > 0 && len > 0 && len > rv.maxLength) {
+                return { rvName: rv.name, len, max: rv.maxLength };
+            }
+        }
+        return null;
+    }, [inventory.rvAreas, selection]);
+
     const validateStep = () => {
         if (step === 1) {
             if (!hasSelection) {
                 toast({ title: 'Select at least one item', description: 'Add a stall, RV, or supply to continue.', variant: 'destructive' });
+                return false;
+            }
+            if (lengthViolation) {
+                toast({
+                    title: 'RV too long for selected area',
+                    description: `${lengthViolation.rvName} only fits RVs up to ${lengthViolation.max}ft. Your RV is ${lengthViolation.len}ft.`,
+                    variant: 'destructive',
+                });
                 return false;
             }
         }

@@ -1424,9 +1424,14 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                 // "Group 1" placeholder when no divisions ever get assigned to it.
                 // Without this filter, a merged APHA+AQHA discipline shows "3
                 // Groups" even though only 2 groups actually hold divisions.
-                const groups = (discipline.patternGroups || []).filter(
-                  g => Array.isArray(g?.divisions) && g.divisions.length > 0
-                );
+                // Hub mode skips Step 3 (Configure Classes), so divisions never
+                // get attached to the placeholder group — keep it so the user
+                // can still select a pattern.
+                const groups = isHubMode
+                  ? (discipline.patternGroups || [])
+                  : (discipline.patternGroups || []).filter(
+                      g => Array.isArray(g?.divisions) && g.divisions.length > 0
+                    );
                 
                 // Check if this is a scoresheet-only discipline
                 const isScoresheetOnly = discipline.pattern_type === 'scoresheet_only' || (!discipline.pattern && discipline.scoresheet);

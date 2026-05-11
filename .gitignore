@@ -26,3 +26,4 @@ Thumbs.db
 /config/plan_overrides.json
 *.md
 config/plan_overrides.json
+.vercel
