@@ -3,7 +3,7 @@ import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { Plus, Trash2, Loader2, Save, Search, Filter, Edit2 } from 'lucide-react';
 import Navigation from '@/components/Navigation';
-import { Button } from '@/components/ui/button';w
+import { Button } from '@/components/ui/button';
 import AdminBackButton from '@/components/admin/AdminBackButton';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
