@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { GripVertical, Undo2, Redo2, CalendarDays, X, CopyPlus, AlertTriangle, ChevronDown, ChevronRight, Lock, Unlock, Clock, Plus, Coffee, FileText, Megaphone, Grip, MapPin, Building2, Award, Stethoscope, CircleDot, HeartHandshake } from 'lucide-react';
+import { GripVertical, Undo2, Redo2, CalendarDays, X, CopyPlus, AlertTriangle, ChevronDown, ChevronRight, Lock, Unlock, Clock, Plus, Coffee, FileText, Megaphone, Grip, MapPin, Building2, Award, Stethoscope, CircleDot, HeartHandshake, ArrowDownToLine } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '@/lib/utils';
@@ -231,9 +231,6 @@ const SortableNonClassItem = ({ item, onRemove, onUpdateTitle }) => {
                     title="Double-click to edit"
                 >
                     {item.title || NON_CLASS_LABELS[item.type] || 'Item'}
-                    {item.type === 'break' && item.duration && (
-                        <span className="text-muted-foreground"> — {item.duration}</span>
-                    )}
                 </span>
             )}
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
@@ -246,6 +243,29 @@ const SortableNonClassItem = ({ item, onRemove, onUpdateTitle }) => {
             >
                 <X className="h-3 w-3 text-destructive" />
             </button>
+        </div>
+    );
+};
+
+// ─── Drop target rendered below the last item so users can drop at the END of the list ───
+const ArenaEndDropZone = ({ dayId, arenaId }) => {
+    const { setNodeRef, isOver } = useDroppable({
+        id: `arena-end-${dayId}-${arenaId}`,
+        data: { dayId, arenaId, origin: 'arena-zone' },
+    });
+
+    return (
+        <div
+            ref={setNodeRef}
+            className={cn(
+                'mt-1 flex items-center justify-center gap-1.5 rounded-md border-2 border-dashed py-2 text-xs font-medium transition-colors',
+                isOver
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-muted-foreground/20 text-muted-foreground/60 hover:border-muted-foreground/40 hover:text-muted-foreground'
+            )}
+        >
+            <ArrowDownToLine className="h-3.5 w-3.5" />
+            Drop here to add at end
         </div>
     );
 };
@@ -362,30 +382,33 @@ const ArenaContainer = ({ arena, dayId, dayDate, allClassItems, associationsData
                                 {arena.items.length === 0 ? (
                                     <p className="text-sm text-muted-foreground py-6">Drag classes here</p>
                                 ) : (
-                                    arena.items.map(item => (
-                                        item.type === 'classBox' ? (
-                                            <SortableClassCard
-                                                key={item.id}
-                                                item={item}
-                                                allClassItems={allClassItems}
-                                                associationsData={associationsData}
-                                                onRemove={onRemoveItem}
-                                                onUpdateTitle={onUpdateTitle}
-                                                onAddSecondGo={onAddSecondGo}
-                                                isSelected={selectedArenaItemIds?.has(item.id)}
-                                                onToggleSelection={onToggleArenaItemSelection}
-                                                isLocked={lockedItemIds?.has(item.id)}
-                                                onToggleLock={onToggleLock}
-                                            />
-                                        ) : (
-                                            <SortableNonClassItem
-                                                key={item.id}
-                                                item={item}
-                                                onRemove={onRemoveItem}
-                                                onUpdateTitle={onUpdateTitle}
-                                            />
-                                        )
-                                    ))
+                                    <>
+                                        {arena.items.map(item => (
+                                            item.type === 'classBox' ? (
+                                                <SortableClassCard
+                                                    key={item.id}
+                                                    item={item}
+                                                    allClassItems={allClassItems}
+                                                    associationsData={associationsData}
+                                                    onRemove={onRemoveItem}
+                                                    onUpdateTitle={onUpdateTitle}
+                                                    onAddSecondGo={onAddSecondGo}
+                                                    isSelected={selectedArenaItemIds?.has(item.id)}
+                                                    onToggleSelection={onToggleArenaItemSelection}
+                                                    isLocked={lockedItemIds?.has(item.id)}
+                                                    onToggleLock={onToggleLock}
+                                                />
+                                            ) : (
+                                                <SortableNonClassItem
+                                                    key={item.id}
+                                                    item={item}
+                                                    onRemove={onRemoveItem}
+                                                    onUpdateTitle={onUpdateTitle}
+                                                />
+                                            )
+                                        ))}
+                                        <ArenaEndDropZone dayId={dayId} arenaId={arena.id} />
+                                    </>
                                 )}
                             </div>
                         </SortableContext>
@@ -423,12 +446,13 @@ const ArenaContainer = ({ arena, dayId, dayDate, allClassItems, associationsData
     );
 };
 
-// Get the assigned competition date for a class from formData disciplines
+// Get the assigned competition date for a class from formData disciplines.
+// Reads divisionDates first, then falls back to divisionGos[divId].go1Date.
 function getClassAssignedDate(classId, formData) {
     // classId may be composite "disciplineId::divisionId" or plain "divisionId"
     const divId = classId.includes('::') ? classId.split('::')[1] : classId;
     for (const disc of formData.disciplines || []) {
-        const date = disc.divisionDates?.[divId];
+        const date = disc.divisionDates?.[divId] || disc.divisionGos?.[divId]?.go1Date;
         if (date) return date;
     }
     return null;
@@ -841,7 +865,11 @@ export const Step3_ConfigureDivisions = ({ formData, setFormData, associationsDa
             const arena = sb.days.find(d => d.id === dayId)?.arenas.find(a => a.id === arenaId);
             if (!arena) return;
             const oldIdx = arena.items.findIndex(i => i.id === activeId);
-            const newIdx = arena.items.findIndex(i => i.id === overId);
+            let newIdx = arena.items.findIndex(i => i.id === overId);
+            // If dropped on the end-of-arena zone, treat as "move to bottom"
+            if (newIdx === -1 && typeof overId === 'string' && overId.startsWith('arena-end-')) {
+                newIdx = arena.items.length - 1;
+            }
             if (oldIdx === -1 || newIdx === -1 || oldIdx === newIdx) return;
             arena.items = arrayMove(arena.items, oldIdx, newIdx);
             setShowBill(renumberShowBill(sb));

@@ -329,6 +329,10 @@ export const applyTextOverlay = async (imageUrl, overlayData, qrUrl = null) => {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Failed to create canvas context');
 
+    // Fill with white so transparent source pixels don't render as black in PNG viewers
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
     // Draw the original image
     ctx.drawImage(img, 0, 0);
 
@@ -655,6 +659,9 @@ export const applyTextOverlayWithPositions = async (imageUrl, overlayData, field
     canvas.height = img.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Failed to create canvas context');
+    // Fill with white so transparent source pixels don't render as black in PNG viewers
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0);
 
     if (fieldPositions?.fields) {

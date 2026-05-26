@@ -21,6 +21,8 @@ const AdminTrackingUserPage = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [activeTab, setActiveTab] = useState('pattern-events');
     const [selectedUserId, setSelectedUserId] = useState('all'); // For Pattern Events user filter
+    const [currentPage, setCurrentPage] = useState(1); // Pattern Events pagination
+    const PAGE_SIZE = 10;
     const { toast } = useToast();
 
     // Data states
@@ -42,6 +44,11 @@ const AdminTrackingUserPage = () => {
     useEffect(() => {
         fetchData();
     }, [activeTab]);
+
+    // Reset to first page when the Pattern Events filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm, selectedUserId]);
 
     const fetchData = async () => {
         setIsLoading(true);
@@ -785,37 +792,75 @@ const AdminTrackingUserPage = () => {
                             <CardContent>
                                 {isLoading ? (
                                     <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
-                                ) : (
-                                    <Table>
-                                        <TableHeader>
-                                            <TableRow>
-                                                <TableHead>User</TableHead>
-                                                <TableHead>Action</TableHead>
-                                                <TableHead>Association</TableHead>
-                                                <TableHead>Discipline</TableHead>
-                                                <TableHead>Time Spent</TableHead>
-                                                <TableHead>Device</TableHead>
-                                                <TableHead>Date</TableHead>
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {getFilteredPatternEvents().map((event) => (
-                                                <TableRow key={event.id}>
-                                                    <TableCell className="font-medium">{profiles[event.user_id]}</TableCell>
-                                                    <TableCell>{getActionBadge(event.action)}</TableCell>
-                                                    <TableCell>{event.association_id || '-'}</TableCell>
-                                                    <TableCell>{event.discipline || '-'}</TableCell>
-                                                    <TableCell>{event.time_spent_seconds ? `${event.time_spent_seconds}s` : '-'}</TableCell>
-                                                    <TableCell className="flex items-center gap-1">{getDeviceIcon(event.device_type)}{event.device_type || 'Unknown'}</TableCell>
-                                                    <TableCell>{format(new Date(event.created_at), 'MMM d, yyyy HH:mm')}</TableCell>
-                                                </TableRow>
-                                            ))}
-                                            {getFilteredPatternEvents().length === 0 && (
-                                                <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No pattern events recorded yet.</TableCell></TableRow>
+                                ) : (() => {
+                                    const filteredEvents = getFilteredPatternEvents();
+                                    const totalPages = Math.max(1, Math.ceil(filteredEvents.length / PAGE_SIZE));
+                                    const page = Math.min(currentPage, totalPages);
+                                    const startIndex = (page - 1) * PAGE_SIZE;
+                                    const pagedEvents = filteredEvents.slice(startIndex, startIndex + PAGE_SIZE);
+                                    return (
+                                        <>
+                                            <Table>
+                                                <TableHeader>
+                                                    <TableRow>
+                                                        <TableHead>User</TableHead>
+                                                        <TableHead>Action</TableHead>
+                                                        <TableHead>Association</TableHead>
+                                                        <TableHead>Discipline</TableHead>
+                                                        <TableHead>Time Spent</TableHead>
+                                                        <TableHead>Device</TableHead>
+                                                        <TableHead>Date</TableHead>
+                                                    </TableRow>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {pagedEvents.map((event) => (
+                                                        <TableRow key={event.id}>
+                                                            <TableCell className="font-medium">{profiles[event.user_id]}</TableCell>
+                                                            <TableCell>{getActionBadge(event.action)}</TableCell>
+                                                            <TableCell>{event.association_id || '-'}</TableCell>
+                                                            <TableCell>{event.discipline || '-'}</TableCell>
+                                                            <TableCell>{event.time_spent_seconds ? `${event.time_spent_seconds}s` : '-'}</TableCell>
+                                                            <TableCell className="flex items-center gap-1">{getDeviceIcon(event.device_type)}{event.device_type || 'Unknown'}</TableCell>
+                                                            <TableCell>{format(new Date(event.created_at), 'MMM d, yyyy HH:mm')}</TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                    {filteredEvents.length === 0 && (
+                                                        <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No pattern events recorded yet.</TableCell></TableRow>
+                                                    )}
+                                                </TableBody>
+                                            </Table>
+
+                                            {filteredEvents.length > 0 && (
+                                                <div className="flex items-center justify-between pt-4">
+                                                    <p className="text-sm text-muted-foreground">
+                                                        Showing {startIndex + 1}-{Math.min(startIndex + PAGE_SIZE, filteredEvents.length)} of {filteredEvents.length}
+                                                    </p>
+                                                    <div className="flex items-center gap-2">
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                                            disabled={page <= 1}
+                                                        >
+                                                            Previous
+                                                        </Button>
+                                                        <span className="text-sm text-muted-foreground">
+                                                            Page {page} of {totalPages}
+                                                        </span>
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                                            disabled={page >= totalPages}
+                                                        >
+                                                            Next
+                                                        </Button>
+                                                    </div>
+                                                </div>
                                             )}
-                                        </TableBody>
-                                    </Table>
-                                )}
+                                        </>
+                                    );
+                                })()}
                             </CardContent>
                         </Card>
                     </TabsContent>

@@ -44,6 +44,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+const PAGE_SIZE = 10;
+
 const AdminUserManagementPage = () => {
   const { toast } = useToast();
   const [users, setUsers] = useState([]);
@@ -51,6 +53,7 @@ const AdminUserManagementPage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const { hasPermission, user: adminUser } = useAuth();
   const [impersonatingUser, setImpersonatingUser] = useState(null);
   const [isImpersonateDialogOpen, setIsImpersonateDialogOpen] = useState(false);
@@ -115,18 +118,28 @@ const AdminUserManagementPage = () => {
         return;
     }
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .update({ role: newRole })
-        .eq('id', userId);
+        .eq('id', userId)
+        .select('id, role');
 
       if (error) throw error;
+
+      if (!data || data.length === 0) {
+        toast({
+          title: 'Update blocked',
+          description: 'No rows were updated. The profiles table is likely missing an UPDATE RLS policy for admins.',
+          variant: 'destructive',
+        });
+        return;
+      }
 
       toast({
         title: 'Role updated',
         description: `User role has been changed to ${newRole}.`,
       });
-      
+
       fetchData();
     } catch (error) {
       toast({
@@ -183,15 +196,24 @@ const AdminUserManagementPage = () => {
   const filteredUsers = users.filter(user => {
     const email = user.email || '';
     const fullName = user.full_name || '';
-    
-    const matchesSearch = 
+
+    const matchesSearch =
       fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       email.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     const matchesRole = roleFilter === 'all' || user.role === roleFilter;
-    
+
     return matchesSearch && matchesRole;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, roleFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
+  const page = Math.min(currentPage, totalPages);
+  const startIndex = (page - 1) * PAGE_SIZE;
+  const pagedUsers = filteredUsers.slice(startIndex, startIndex + PAGE_SIZE);
 
   return (
     <>
@@ -267,7 +289,7 @@ const AdminUserManagementPage = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredUsers.map((user) => (
+                      {pagedUsers.map((user) => (
                           <TableRow key={user.id}>
                             <TableCell>
                               <div className="flex items-center space-x-3">
@@ -322,6 +344,35 @@ const AdminUserManagementPage = () => {
                         ))}
                     </TableBody>
                   </Table>
+
+                  {filteredUsers.length > 0 && (
+                    <div className="flex items-center justify-between pt-4">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {startIndex + 1}-{Math.min(startIndex + PAGE_SIZE, filteredUsers.length)} of {filteredUsers.length}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                          disabled={page <= 1}
+                        >
+                          Previous
+                        </Button>
+                        <span className="text-sm text-muted-foreground">
+                          Page {page} of {totalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                          disabled={page >= totalPages}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}

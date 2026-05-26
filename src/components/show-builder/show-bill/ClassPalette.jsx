@@ -112,13 +112,20 @@ const DisciplineGroupHeader = ({ discipline, classes, selectedIds, onBulkToggle 
   );
 };
 
-// Get the assigned competition date for a class from formData disciplines
+// Get the assigned competition date for a class from formData disciplines.
+// Reads divisionDates first, then falls back to divisionGos[divId].go1Date
+// for shows whose dates were assigned before divisionDates was kept in sync.
 function getClassDate(classItem, formData) {
   const divId = classItem.divisionId || classItem.id;
   const discipline = (formData.disciplines || []).find(d =>
     d.id === classItem.disciplineId || (d.divisionOrder || []).includes(divId)
   );
-  return discipline?.divisionDates?.[divId] || null;
+  if (!discipline) return null;
+  return (
+    discipline.divisionDates?.[divId] ||
+    discipline.divisionGos?.[divId]?.go1Date ||
+    null
+  );
 }
 
 function formatDateLabel(dateStr) {
@@ -195,6 +202,15 @@ const ClassPalette = ({ allClassItems, unplacedClasses, associationsData, select
   const placedCount = allClassItems.length - unplacedClasses.length;
   const isEmpty = filteredClasses.length === 0;
 
+  const allFilteredIds = useMemo(() => filteredClasses.map(c => c.id), [filteredClasses]);
+  const allFilteredSelected =
+    allFilteredIds.length > 0 && allFilteredIds.every(id => selectedIds?.has(id));
+
+  const handleSelectAllToggle = () => {
+    if (!onBulkToggle || allFilteredIds.length === 0) return;
+    onBulkToggle(allFilteredIds, !allFilteredSelected);
+  };
+
   // Render a list of classes grouped by discipline with select-all headers
   const renderDisciplineClasses = (classes) => {
     const groups = groupByDiscipline(classes);
@@ -237,9 +253,30 @@ const ClassPalette = ({ allClassItems, unplacedClasses, associationsData, select
         <Input placeholder="Search classes..." className="pl-8" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
       </div>
 
-      <Label className="text-sm font-medium text-muted-foreground mb-2">
-        Unplaced Classes ({dayFilteredClasses.length})
-      </Label>
+      <div className="flex items-center justify-between mb-2">
+        <Label className="text-sm font-medium text-muted-foreground">
+          Unplaced Classes ({dayFilteredClasses.length})
+        </Label>
+        {onBulkToggle && allFilteredIds.length > 0 && (
+          <button
+            type="button"
+            onClick={handleSelectAllToggle}
+            className={cn(
+              'flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded transition-colors',
+              allFilteredSelected
+                ? 'text-primary bg-primary/10 hover:bg-primary/15'
+                : 'text-muted-foreground hover:text-primary hover:bg-accent'
+            )}
+            title={allFilteredSelected ? 'Deselect all visible classes' : 'Select all visible classes'}
+          >
+            <Checkbox
+              checked={allFilteredSelected}
+              className="h-3.5 w-3.5 pointer-events-none"
+            />
+            {allFilteredSelected ? 'Deselect All' : 'Select All'}
+          </button>
+        )}
+      </div>
 
       <ScrollArea className="flex-grow border rounded-lg p-2 bg-muted/30">
         {isEmpty && (

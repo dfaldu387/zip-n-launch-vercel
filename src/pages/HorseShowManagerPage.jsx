@@ -10,9 +10,10 @@ import {
   DollarSign, LayoutGrid, Building2, Radio, Award,
   Plus, Loader2, FolderOpen, Hash, Calendar, ChevronRight,
   Search, MapPin, Trash2, Shield, Crown, ArrowLeft,
+  Users, UserPlus, X, Mail, Bed, Ticket,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import Navigation from '@/components/Navigation';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
@@ -127,6 +128,8 @@ const sections = [
       { icon: Award, label: 'Awards Management', link: '/horse-show-manager/awards-management', line: 2 },
       { icon: DollarSign, label: 'Horse Show Financials / Analytics', link: '/horse-show-manager/financials', line: 3 },
       { icon: Building2, label: 'Housing & Grounds Manager', link: '/horse-show-manager/housing-grounds-manager', line: 4 },
+      { icon: Bed, label: 'Book Stalls', link: '/book-stalls', line: 5 },
+      { icon: Ticket, label: 'My Booking', link: '/find-booking', line: 5 },
     ],
   },
 ];
@@ -222,6 +225,16 @@ const HorseShowManagerPage = () => {
   const [deletingId, setDeletingId] = useState(null);
   const [showLimitModal, setShowLimitModal] = useState(false);
 
+  // Manage Access (admin sharing) state
+  const [manageAccessShow, setManageAccessShow] = useState(null);
+  const [allUsers, setAllUsers] = useState([]);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [pendingAdmins, setPendingAdmins] = useState([]);
+  const [isSavingAccess, setIsSavingAccess] = useState(false);
+
+  const isOwner = (show) => show?.user_id === user?.id;
+
   const handleCreateNew = () => {
     if (canCreate) {
       navigate('/horse-show-manager/create');
@@ -245,19 +258,79 @@ const HorseShowManagerPage = () => {
     setDeletingId(null);
   };
 
+  // ── Manage Access (admin sharing) handlers ──
+  const handleOpenManageAccess = async (e, show) => {
+    e.stopPropagation();
+    setManageAccessShow(show);
+    setPendingAdmins(Array.isArray(show.admins) ? show.admins : []);
+    setUserSearchQuery('');
+
+    // Load all users (only the first time)
+    if (allUsers.length === 0) {
+      setIsLoadingUsers(true);
+      const { data, error } = await supabase.rpc('get_shareable_users');
+      if (!error && data) {
+        setAllUsers(data);
+      } else if (error) {
+        toast({ title: 'Failed to load users', description: error.message, variant: 'destructive' });
+      }
+      setIsLoadingUsers(false);
+    }
+  };
+
+  const handleCloseManageAccess = () => {
+    setManageAccessShow(null);
+    setPendingAdmins([]);
+    setUserSearchQuery('');
+  };
+
+  const handleAddAdmin = (userToAdd) => {
+    if (pendingAdmins.some(a => a.user_id === userToAdd.user_id)) return;
+    setPendingAdmins(prev => [
+      ...prev,
+      {
+        user_id: userToAdd.user_id,
+        email: userToAdd.email,
+        full_name: userToAdd.full_name,
+        added_at: new Date().toISOString(),
+        added_by: user.id,
+      },
+    ]);
+  };
+
+  const handleRemoveAdmin = (userId) => {
+    setPendingAdmins(prev => prev.filter(a => a.user_id !== userId));
+  };
+
+  const handleSaveAdmins = async () => {
+    if (!manageAccessShow) return;
+    setIsSavingAccess(true);
+    const { error } = await supabase
+      .from('projects')
+      .update({ admins: pendingAdmins })
+      .eq('id', manageAccessShow.id)
+      .eq('user_id', user.id);
+    if (error) {
+      toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+    } else {
+      setShows(prev => prev.map(s =>
+        s.id === manageAccessShow.id ? { ...s, admins: pendingAdmins } : s
+      ));
+      toast({ title: 'Access updated', description: `${pendingAdmins.length} show manager(s) saved.` });
+      handleCloseManageAccess();
+    }
+    setIsSavingAccess(false);
+  };
+
   useEffect(() => {
     const fetchShows = async () => {
       if (!user) { setIsLoading(false); return; }
-      const { data, error } = await supabase
-        .from('projects')
-        .select('id, project_name, project_type, project_data, status, created_at')
-        .eq('user_id', user.id)
-        .not('project_type', 'in', '("pattern_book","pattern_folder","pattern_hub","pattern_upload","contract")')
-        .order('created_at', { ascending: false });
-
-      if (!error && data) {
-        setShows(data);
+      // Fetch shows where I am owner OR I am in the admins list (via RPC)
+      const { data, error } = await supabase.rpc('get_my_horse_shows');
+      if (error) {
+        console.error('get_my_horse_shows error:', error);
       }
+      setShows(data || []);
       setIsLoading(false);
     };
     fetchShows();
@@ -401,6 +474,11 @@ const HorseShowManagerPage = () => {
                                   >
                                     {show.status || 'draft'}
                                   </Badge>
+                                  {!isOwner(show) && (
+                                    <Badge variant="outline" className="text-xs flex-shrink-0 bg-purple-50 text-purple-700 border-purple-300">
+                                      <Shield className="h-3 w-3 mr-0.5" /> Show Manager
+                                    </Badge>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                                   {pd.startDate && (
@@ -419,17 +497,29 @@ const HorseShowManagerPage = () => {
                                   {arenaCount > 0 && <span>{arenaCount} arenas</span>}
                                 </div>
                               </div>
-                              <button
-                                type="button"
-                                className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
-                                title="Delete show"
-                                disabled={deletingId === show.id}
-                                onClick={(e) => handleDelete(e, show)}
-                              >
-                                {deletingId === show.id
-                                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                                  : <Trash2 className="h-4 w-4" />}
-                              </button>
+                              {isOwner(show) && (
+                                <button
+                                  type="button"
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors shrink-0"
+                                  title="Manage Access"
+                                  onClick={(e) => handleOpenManageAccess(e, show)}
+                                >
+                                  <Users className="h-4 w-4" />
+                                </button>
+                              )}
+                              {isOwner(show) && (
+                                <button
+                                  type="button"
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                                  title="Delete show"
+                                  disabled={deletingId === show.id}
+                                  onClick={(e) => handleDelete(e, show)}
+                                >
+                                  {deletingId === show.id
+                                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                                    : <Trash2 className="h-4 w-4" />}
+                                </button>
+                              )}
                               <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                             </div>
                           </CardContent>
@@ -499,6 +589,131 @@ const HorseShowManagerPage = () => {
                 You can still edit and manage your existing shows at any time.
               </p>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Manage Access Dialog */}
+        <Dialog open={!!manageAccessShow} onOpenChange={(open) => !open && handleCloseManageAccess()}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Users className="h-5 w-5 text-blue-600" />
+                Manage Access
+              </DialogTitle>
+              <DialogDescription>
+                {manageAccessShow?.project_name || 'Untitled Show'} — show managers can edit but cannot delete the show.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              {/* Current admins list */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                  <Shield className="h-4 w-4 text-muted-foreground" />
+                  Current Show Managers ({pendingAdmins.length})
+                </h4>
+                {pendingAdmins.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic px-2 py-3 bg-muted/40 rounded-md">
+                    No show managers yet. Add users below to share access.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                    {pendingAdmins.map((a) => (
+                      <div key={a.user_id} className="flex items-center justify-between gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">{a.full_name || '(no name)'}</p>
+                          <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                            <Mail className="h-3 w-3" /> {a.email}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveAdmin(a.user_id)}
+                          className="p-1 rounded text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                          title="Remove show manager"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Add new admin search */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                  <UserPlus className="h-4 w-4 text-muted-foreground" />
+                  Add New Show Manager
+                </h4>
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by name or email..."
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+
+                {isLoadingUsers ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                  </div>
+                ) : (
+                  <div className="max-h-48 overflow-y-auto border rounded-md divide-y">
+                    {(() => {
+                      const q = userSearchQuery.trim().toLowerCase();
+                      const adminIds = new Set(pendingAdmins.map(a => a.user_id));
+                      const filtered = allUsers
+                        .filter(u => !adminIds.has(u.user_id))
+                        .filter(u => {
+                          if (!q) return true;
+                          return (
+                            (u.full_name || '').toLowerCase().includes(q) ||
+                            (u.email || '').toLowerCase().includes(q)
+                          );
+                        })
+                        .slice(0, 50);
+                      if (filtered.length === 0) {
+                        return (
+                          <p className="text-xs text-muted-foreground italic px-3 py-4 text-center">
+                            {q ? `No users match "${userSearchQuery}"` : 'No users available to add.'}
+                          </p>
+                        );
+                      }
+                      return filtered.map((u) => (
+                        <button
+                          key={u.user_id}
+                          type="button"
+                          onClick={() => handleAddAdmin(u)}
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-muted text-left transition-colors"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{u.full_name || '(no name)'}</p>
+                            <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                          </div>
+                          <Plus className="h-4 w-4 text-blue-600 shrink-0" />
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={handleCloseManageAccess} disabled={isSavingAccess}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveAdmins} disabled={isSavingAccess} className="bg-blue-500 hover:bg-blue-600 text-white">
+                {isSavingAccess ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
+                ) : (
+                  'Save Access'
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

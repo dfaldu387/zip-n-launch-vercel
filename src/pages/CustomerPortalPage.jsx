@@ -4055,8 +4055,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 });
             }
 
-            // Fallback for patterns without a groupName: check if any of the discipline's associations match
-            if (!matched && !patternGroupName) {
+            // Fallback only when the pattern has neither a resolved associationId nor a groupName.
+            // Skipping this when associationId is set prevents APHA-only patterns from leaking
+            // through an AQHA filter just because their discipline is offered under both
+            // associations at the project level (see getDisciplineAssocIdsLocal).
+            if (!matched && !patternGroupName && !patternAssocId) {
                 const allAssocIds = (pattern.associationIds || []).map(a => String(a).toUpperCase());
                 matched = allAssocIds.some(a => filterAssociations.has(a));
             }
@@ -7462,7 +7465,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         const showAssocAbbrevs = detectShowAssociations(projectData);
                                                         const multiBreed = showAssocAbbrevs.length > 1;
                                                         const getPatternAssocKey = (p) => {
-                                                            const raw = p?.association_name || p?.associationName || p?.association_abbrev || p?.associationAbbrev || p?.associationId;
+                                                            const raw = p?.associationId || p?.association_abbrev || p?.associationAbbrev || p?.association_name || p?.associationName;
                                                             if (!raw) return 'OTHER';
                                                             const upper = String(raw).toUpperCase();
                                                             if (upper.includes('PAINT')) return 'APHA';
@@ -8341,12 +8344,15 @@ const ProjectCard = ({ project, menuType = 'full', onRefresh, isPastPatternPorta
     const isPatternBook = project.project_type === 'pattern_book';
     const isPatternFolder = project.project_type === 'pattern_folder';
     const isPatternHub = project.project_type === 'pattern_hub';
+    const isPatternUpload = project.project_type === 'pattern_upload';
     const editPath = isPatternBook
         ? `/pattern-book-builder/${project.id}`
         : isPatternFolder
         ? `/pattern-folder/${project.id}`
         : isPatternHub
         ? `/pattern-hub/${project.id}`
+        : isPatternUpload
+        ? `/upload-patterns/edit/${project.id}`
         : `/horse-show-manager/edit/${project.id}`;
     
     // Check if project is locked (supports both old and new status values)
@@ -8907,7 +8913,7 @@ const ProjectCard = ({ project, menuType = 'full', onRefresh, isPastPatternPorta
                     {/* Project Type Badge */}
                     <div className="mb-3">
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary text-primary-foreground">
-                            {isPatternHub ? 'Pattern' : isPatternBook ? 'Pattern Book' : 'Horse Show'}
+                            {isPatternHub ? 'Pattern' : isPatternBook ? 'Pattern Book' : isPatternUpload ? 'Pattern Upload' : 'Horse Show'}
                         </span>
                     </div>
 
@@ -9138,7 +9144,7 @@ const CustomerPortalPage = () => {
     const patternBookProjects = projects.filter(p => p.project_type === 'pattern_book');
     const allShowProjects = projects.filter(p => {
         const mode = (p.mode || '').toString().trim();
-        return p.project_type !== 'pattern_book' && p.project_type !== 'pattern_folder' && p.project_type !== 'pattern_hub' && p.project_type !== 'contract' && mode.toLowerCase() !== 'archived';
+        return p.project_type !== 'pattern_book' && p.project_type !== 'pattern_folder' && p.project_type !== 'pattern_hub' && p.project_type !== 'pattern_upload' && p.project_type !== 'contract' && mode.toLowerCase() !== 'archived';
     });
 
     // Active Horse Shows: Only Locked/Final (credit-consuming, exportable)
@@ -9151,6 +9157,15 @@ const CustomerPortalPage = () => {
     const inProgressShowProjects = allShowProjects.filter(p => {
         const status = (p.status || 'Draft').toString().trim().toLowerCase();
         return status === 'in progress' || status === 'draft';
+    });
+
+    // In Progress Uploaded Patterns: Draft, In progress, and Pending pattern_upload projects
+    const inProgressUploads = projects.filter(p => {
+        const status = (p.status || 'Draft').toString().trim().toLowerCase();
+        const mode = (p.mode || '').toString().trim();
+        return p.project_type === 'pattern_upload' &&
+               (status === 'in progress' || status === 'draft' || status === 'pending') &&
+               mode.toLowerCase() !== 'archived';
     });
 
     // Keep combined list for backward compatibility
@@ -9210,7 +9225,8 @@ const CustomerPortalPage = () => {
         patternPortal: true,
         choosePatternPortal: true,
         pastPatternPortal: true,
-        horseShows: true
+        horseShows: true,
+        inProgressUploads: true
     });
     
     const toggleSection = (section) => {
@@ -9415,6 +9431,15 @@ const CustomerPortalPage = () => {
                                 "/horse-show-manager/create",
                                 "New Horse Show",
                                 "inProgressHorseShows",
+                                "default"
+                            )}
+                            {renderProjectList(
+                                inProgressUploads,
+                                "Uploaded Patterns – In Progress",
+                                "Pattern uploads still being completed.",
+                                "/upload-patterns/new",
+                                "New Upload",
+                                "inProgressUploads",
                                 "default"
                             )}
                         </div>

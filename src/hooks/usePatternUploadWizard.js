@@ -10,6 +10,33 @@ const JUMPING_DISCIPLINE_NAMES = new Set([
   'Hunter Hack', 'Working Hunter', 'Equitation Over Fences', 'Jumping',
 ]);
 
+// Disciplines that get their own dedicated upload slot (not bucketed into skill levels)
+const STANDALONE_DISCIPLINE_NAMES = new Set([
+  'In-Hand Trail',
+]);
+
+// Max upload size for a single pattern PDF. Supabase storage rejects beyond ~50 MB by default.
+export const MAX_PDF_MB = 50;
+const MAX_PDF_BYTES = MAX_PDF_MB * 1024 * 1024;
+
+const validatePdfFile = (file, toast) => {
+  if (!file) return false;
+  if (file.type !== 'application/pdf') {
+    toast({ title: 'Invalid File Type', description: 'Please upload a PDF file.', variant: 'destructive' });
+    return false;
+  }
+  if (file.size > MAX_PDF_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    toast({
+      title: 'File Too Large',
+      description: `"${file.name}" is ${mb} MB. Maximum allowed is ${MAX_PDF_MB} MB — try compressing the PDF or splitting it.`,
+      variant: 'destructive',
+    });
+    return false;
+  }
+  return true;
+};
+
 const toSlotId = (name) => `disc-${name.toLowerCase().replace(/\s+/g, '-')}`;
 
 const initialFormData = {
@@ -185,23 +212,20 @@ export const usePatternUploadWizard = (projectId) => {
 
   // --- Pattern handlers (migrated from usePatternUpload) ---
   const handleFileDrop = useCallback(async (levelId, file) => {
-    if (file && file.type === 'application/pdf') {
-      try {
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = (event) => resolve(event.target.result);
-          reader.onerror = (error) => reject(error);
-          reader.readAsDataURL(file);
-        });
-        setFormData(prev => ({
-          ...prev,
-          patterns: { ...prev.patterns, [levelId]: { id: levelId, file, dataUrl, name: file.name } },
-        }));
-      } catch (error) {
-        toast({ title: 'Error reading file', description: 'Could not read the selected file.', variant: 'destructive' });
-      }
-    } else {
-      toast({ title: 'Invalid File Type', description: 'Please upload a PDF file.', variant: 'destructive' });
+    if (!validatePdfFile(file, toast)) return;
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => resolve(event.target.result);
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(file);
+      });
+      setFormData(prev => ({
+        ...prev,
+        patterns: { ...prev.patterns, [levelId]: { id: levelId, file, dataUrl, name: file.name } },
+      }));
+    } catch (error) {
+      toast({ title: 'Error reading file', description: 'Could not read the selected file.', variant: 'destructive' });
     }
   }, [toast]);
 
@@ -273,7 +297,7 @@ export const usePatternUploadWizard = (projectId) => {
 
   // --- PDF splitting ---
   const handlePdfSplit = useCallback(async (file) => {
-    if (!file) return;
+    if (!validatePdfFile(file, toast)) return;
     toast({ title: 'Processing PDF...', description: 'Splitting pages into individual patterns.' });
     try {
       const { pdfToDataUrls } = await import('@/lib/pdfUtils');
@@ -583,7 +607,10 @@ export const usePatternUploadWizard = (projectId) => {
     [formData.associations]
   );
 
-  // Dynamic upload slots: discipline-based for Jumping group, skill-level for everything else
+  // Dynamic upload slots:
+  //   - Jumping group → per-discipline slots (replaces skill levels)
+  //   - Otherwise → 5 skill-level slots
+  //   - In-Hand Trail (and other standalone disciplines) → extra slot appended on top
   const uploadSlots = useMemo(() => {
     const selectedNames = [...new Set(
       (formData.selectedClasses || [])
@@ -591,15 +618,25 @@ export const usePatternUploadWizard = (projectId) => {
         .map(k => k.split('::')[1])
     )];
     const jumpingSelected = selectedNames.filter(n => JUMPING_DISCIPLINE_NAMES.has(n));
-    if (jumpingSelected.length > 0) {
-      return jumpingSelected.map(name => ({
-        id: toSlotId(name),
-        title: name,
-        description: `Upload pattern for ${name}`,
-        isDisciplineSlot: true,
-      }));
-    }
-    return formData.hierarchyOrder;
+    const standaloneSelected = selectedNames.filter(n => STANDALONE_DISCIPLINE_NAMES.has(n));
+
+    const baseSlots = jumpingSelected.length > 0
+      ? jumpingSelected.map(name => ({
+          id: toSlotId(name),
+          title: name,
+          description: `Upload pattern for ${name}`,
+          isDisciplineSlot: true,
+        }))
+      : formData.hierarchyOrder;
+
+    const standaloneSlots = standaloneSelected.map(name => ({
+      id: toSlotId(name),
+      title: name,
+      description: `Upload pattern for ${name}`,
+      isDisciplineSlot: true,
+    }));
+
+    return [...baseSlots, ...standaloneSlots];
   }, [formData.selectedClasses, formData.hierarchyOrder]);
 
   const handlePatternSkillLevel = useCallback((slotId, skillLevel) => {

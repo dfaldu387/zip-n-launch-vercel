@@ -6,9 +6,14 @@ const JUMPING_DISCIPLINE_NAMES = new Set([
   'Hunter Hack', 'Working Hunter', 'Equitation Over Fences', 'Jumping',
 ]);
 
+// Disciplines that get an additional dedicated upload slot on top of the base slots
+const STANDALONE_DISCIPLINE_NAMES = new Set([
+  'In-Hand Trail',
+]);
+
 const toSlotId = (name) => `disc-${name.toLowerCase().replace(/\s+/g, '-')}`;
 
-/** Compute the active upload slots for a given formData. */
+/** Compute the active upload slots for a given formData. Mirrors logic in usePatternUploadWizard. */
 const getUploadSlots = (formData) => {
   const selectedNames = [...new Set(
     (formData.selectedClasses || [])
@@ -16,14 +21,17 @@ const getUploadSlots = (formData) => {
       .map(k => k.split('::')[1])
   )];
   const jumpingSelected = selectedNames.filter(n => JUMPING_DISCIPLINE_NAMES.has(n));
-  if (jumpingSelected.length > 0) {
-    return jumpingSelected.map(name => ({
-      id: toSlotId(name),
-      title: name,
-      isDisciplineSlot: true,
-    }));
-  }
-  return formData.hierarchyOrder;
+  const standaloneSelected = selectedNames.filter(n => STANDALONE_DISCIPLINE_NAMES.has(n));
+
+  const baseSlots = jumpingSelected.length > 0
+    ? jumpingSelected.map(name => ({ id: toSlotId(name), title: name, isDisciplineSlot: true }))
+    : formData.hierarchyOrder;
+
+  const standaloneSlots = standaloneSelected.map(name => ({
+    id: toSlotId(name), title: name, isDisciplineSlot: true,
+  }));
+
+  return [...baseSlots, ...standaloneSlots];
 };
 
 /**

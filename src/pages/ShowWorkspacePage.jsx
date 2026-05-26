@@ -169,11 +169,11 @@ const ShowWorkspacePage = () => {
       if (!user || !showId) { setIsLoading(false); return; }
 
       const [showRes, contractsRes] = await Promise.all([
+        // No user_id filter — RLS policy allows owner OR admin
         supabase
           .from('projects')
-          .select('id, project_name, project_data, status, created_at')
+          .select('id, project_name, project_data, status, created_at, user_id, admins')
           .eq('id', showId)
-          .eq('user_id', user.id)
           .single(),
         supabase
           .from('projects')

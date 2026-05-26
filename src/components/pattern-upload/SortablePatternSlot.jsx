@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { X, GripVertical, FileText, Eye, Upload, ArrowRightLeft, Undo2 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '@/lib/utils';
+import { MAX_PDF_MB } from '@/hooks/usePatternUploadWizard';
 
 // Mirrors PATTERN_LEVELS in src/lib/patternNumbering.js. Each option maps to
 // one of the client's difficulty codes (C, S, I, B, WT, L1, GR_NOV, ALL) via
@@ -132,6 +133,7 @@ const SortablePatternSlot = ({
               <p className={cn("text-sm", showDropHighlight ? "text-primary font-medium" : "text-muted-foreground")}>
                 {isDragActive ? "Drop pattern here" : showDropHighlight ? "Drop here" : "Drag from staging or click to upload"}
               </p>
+              <p className="text-[10px] text-muted-foreground/50">PDF · max {MAX_PDF_MB} MB</p>
             </div>
           )}
         </div>

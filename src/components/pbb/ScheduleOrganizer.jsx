@@ -260,13 +260,17 @@ import React, { useState, useMemo } from 'react';
                 const newDisciplines = prev.disciplines.map(disc => {
                     if (disc.id === pbbDiscipline.id) {
                         const newDivisionGos = { ...(disc.divisionGos || {}) };
+                        const newDivisionDates = { ...(disc.divisionDates || {}) };
                         selectedDivisions.forEach(divId => {
                             newDivisionGos[divId] = {
                                 ...(newDivisionGos[divId] || { hasGo2: false, go2Date: null }),
                                 go1Date: dateString
                             };
+                            // Keep divisionDates in sync so Step 6 (Organize Schedule)
+                            // and downstream consumers see the assigned date.
+                            newDivisionDates[divId] = dateString;
                         });
-                        return { ...disc, divisionGos: newDivisionGos };
+                        return { ...disc, divisionGos: newDivisionGos, divisionDates: newDivisionDates };
                     }
                     return disc;
                 });

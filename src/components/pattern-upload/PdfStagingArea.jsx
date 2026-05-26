@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { MAX_PDF_MB } from '@/hooks/usePatternUploadWizard';
 
 const StagedPdfItem = ({ pdf, onRemove, onRename, onAssign, availableSlots }) => {
     const [isEditing, setIsEditing] = useState(false);
@@ -167,7 +168,7 @@ const PdfStagingArea = ({ stagedPdfs, onPdfSplit, onRemove, onRename, onAssign, 
                 <p className="text-sm font-medium text-muted-foreground">
                     {isDragActive ? 'Drop PDF here' : 'Drop multi-page PDF here'}
                 </p>
-                <p className="text-xs text-muted-foreground/60 mt-1">or click to browse — max 5 pages per PDF</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">or click to browse — max 5 pages per PDF · max {MAX_PDF_MB} MB</p>
             </div>
             <ScrollArea className="h-96">
                 <div className="space-y-2 pr-3">

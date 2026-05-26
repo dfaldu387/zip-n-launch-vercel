@@ -154,7 +154,7 @@ export function initializeShowBill(formData) {
 export function createShowBillItem(type, overrides = {}) {
   const defaults = {
     classBox: { type: 'classBox', id: uuidv4(), number: 0, title: '', classes: [] },
-    break: { type: 'break', id: uuidv4(), title: 'Break', duration: '15 min' },
+    break: { type: 'break', id: uuidv4(), title: 'Break' },
     drag: { type: 'drag', id: uuidv4(), title: 'Arena Drag' },
     sectionHeader: { type: 'sectionHeader', id: uuidv4(), title: 'Section Header' },
     custom: { type: 'custom', id: uuidv4(), title: 'Custom Event', content: '' },

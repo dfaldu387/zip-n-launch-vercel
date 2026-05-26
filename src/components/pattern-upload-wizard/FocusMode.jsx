@@ -173,7 +173,7 @@ const FocusMode = ({ isOpen, onClose, imageUrl, onCapture, onExtractText, pdfFil
                 variant="outline"
                 size="sm"
                 onClick={() => setZoom(z => Math.max(0.25, z - 0.25))}
-                disabled={zoom <= 0.25 || selectMode}
+                disabled={zoom <= 0.25}
               >
                 <ZoomOut className="h-4 w-4" />
               </Button>
@@ -184,7 +184,7 @@ const FocusMode = ({ isOpen, onClose, imageUrl, onCapture, onExtractText, pdfFil
                 variant="outline"
                 size="sm"
                 onClick={() => setZoom(z => Math.min(4, z + 0.25))}
-                disabled={zoom >= 4 || selectMode}
+                disabled={zoom >= 4}
               >
                 <ZoomIn className="h-4 w-4" />
               </Button>
@@ -192,7 +192,6 @@ const FocusMode = ({ isOpen, onClose, imageUrl, onCapture, onExtractText, pdfFil
                 variant="outline"
                 size="sm"
                 onClick={() => setZoom(1)}
-                disabled={selectMode}
               >
                 <RotateCcw className="h-4 w-4 mr-1.5" /> Reset
               </Button>
@@ -208,7 +207,6 @@ const FocusMode = ({ isOpen, onClose, imageUrl, onCapture, onExtractText, pdfFil
                     onClick={() => {
                       setSelectMode(!selectMode);
                       if (selectMode) clearSelection();
-                      if (!selectMode) setZoom(1); // reset zoom for accurate selection
                     }}
                     disabled={isExtracting}
                   >
@@ -253,7 +251,7 @@ const FocusMode = ({ isOpen, onClose, imageUrl, onCapture, onExtractText, pdfFil
             {imageUrl ? (
               <div
                 className="relative inline-block"
-                style={{ transform: `scale(${selectMode ? 1 : zoom})`, transformOrigin: 'center center' }}
+                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
               >
                 <img
                   ref={imageRef}
