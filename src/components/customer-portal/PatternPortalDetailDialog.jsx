@@ -100,14 +100,20 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
             // Batch fetch
             let patternImageMap = {};
             let patternDetailsMap = {};
+            let patternManeuversMap = {};
             if (patternIds.size > 0) {
                 const ids = Array.from(patternIds);
-                const [mediaRes, detailRes] = await Promise.all([
+                const [mediaRes, detailRes, maneuversRes] = await Promise.all([
                     supabase.from('tbl_pattern_media').select('pattern_id, image_url').in('pattern_id', ids),
-                    supabase.from('tbl_patterns').select('id, pdf_file_name, pattern_version, discipline, association_name').in('id', ids)
+                    supabase.from('tbl_patterns').select('id, pdf_file_name, pattern_version, discipline, association_name').in('id', ids),
+                    supabase.from('tbl_maneuvers').select('pattern_id, step_no, instruction').in('pattern_id', ids)
                 ]);
                 (mediaRes.data || []).forEach(pm => { if (!patternImageMap[pm.pattern_id]) patternImageMap[pm.pattern_id] = pm.image_url; });
                 (detailRes.data || []).forEach(p => { patternDetailsMap[p.id] = p; });
+                (maneuversRes.data || []).forEach(m => {
+                    if (!patternManeuversMap[m.pattern_id]) patternManeuversMap[m.pattern_id] = [];
+                    patternManeuversMap[m.pattern_id].push(m);
+                });
             }
 
             const patternsList = [];
@@ -130,7 +136,8 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
                             version: detail?.pattern_version || 'ALL',
                             disciplineName: discipline.name, groupName: group.name,
                             associationName: assocDisplayName,
-                            divisions: extractedDivisions
+                            divisions: extractedDivisions,
+                            maneuvers: patternManeuversMap[patternId] || []
                         });
                         processedPatterns.add(patternKey);
                     }
@@ -344,8 +351,10 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
                 // This keeps PDF under Postmark's 10MB attachment limit
                 let base64 = await compressImage(rawBase64, 1240, 1754, 0.85) || rawBase64;
 
-                // Smart-crop pattern images (removes baked-in header/footer) — skip for hub projects
-                if (shouldCrop && !isHubProject) {
+                // Smart-crop pattern images (removes baked-in header/footer).
+                // Hub projects used to skip this, but the cropper now produces
+                // a much tighter result so cropping always wins for patterns.
+                if (shouldCrop) {
                     base64 = await cropPatternImageSmart(base64);
                 }
 
@@ -433,14 +442,71 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
                     img.src = base64;
                 });
 
+                // Estimate Pattern Language block height so the image can
+                // shrink to leave room for the maneuvers list below it.
+                // Same compact spacing used by bookGenerator.js.
+                const maneuvers = Array.isArray(item.maneuvers) ? item.maneuvers : [];
+                let maneuversHeight = 0;
+                if (maneuvers.length > 0) {
+                    const savedFontName = doc.getFont().fontName;
+                    const savedStyle = doc.getFont().fontStyle;
+                    const savedSize = doc.getFontSize();
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(10);
+                    maneuversHeight = 4 + 12 + 6; // gap above title + title + gap below
+                    const textWidth = pageWidth - margin * 2;
+                    const sortedEst = [...maneuvers].sort((a, b) => (a.step_no || 0) - (b.step_no || 0));
+                    for (const m of sortedEst) {
+                        const stepLabel = m.step_no != null ? `${m.step_no}.` : '•';
+                        const line = `${stepLabel} ${m.instruction || ''}`.trim();
+                        const wrapped = doc.splitTextToSize(line, textWidth);
+                        maneuversHeight += wrapped.length * 11 + 1;
+                    }
+                    maneuversHeight += 4;
+                    doc.setFont(savedFontName, savedStyle);
+                    doc.setFontSize(savedSize);
+                }
+
                 const maxW = pageWidth - margin * 2;
-                const maxH = pageHeight - yPos - 28;
+                const maxH = pageHeight - yPos - 28 - maneuversHeight;
                 const ratio = Math.min(maxW / img.width, maxH / img.height, 1);
                 const w = img.width * ratio;
                 const h = img.height * ratio;
                 const x = (pageWidth - w) / 2;
 
                 doc.addImage(base64, imageType.toUpperCase(), x, yPos, w, h);
+                yPos += h + 4;
+
+                // Render Pattern Language block (compact, DB-driven) below image
+                if (maneuvers.length > 0) {
+                    yPos += 4;
+                    const patternNumber = extractPatternNumber(item.patternName);
+                    const langTitle = patternNumber
+                        ? `${item.disciplineName || 'Pattern'} – Pattern ${patternNumber} – Pattern Language`
+                        : 'Pattern Language';
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(11);
+                    doc.setTextColor(0, 0, 0);
+                    doc.text(langTitle, pageWidth / 2, yPos, { align: 'center' });
+                    yPos += 12;
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(10);
+                    const textWidth = pageWidth - margin * 2;
+                    const bottomReserve = 30;
+                    const sorted = [...maneuvers].sort((a, b) => (a.step_no || 0) - (b.step_no || 0));
+                    for (const m of sorted) {
+                        const stepLabel = m.step_no != null ? `${m.step_no}.` : '•';
+                        const line = `${stepLabel} ${m.instruction || ''}`.trim();
+                        const wrapped = doc.splitTextToSize(line, textWidth);
+                        if (yPos + wrapped.length * 11 > pageHeight - bottomReserve) {
+                            doc.addPage();
+                            yPos = margin + 20;
+                        }
+                        doc.text(wrapped, margin, yPos);
+                        yPos += wrapped.length * 11 + 1;
+                    }
+                }
 
                 // Branding footer — bottom-right
                 doc.setFontSize(7);

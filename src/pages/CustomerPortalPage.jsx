@@ -2634,19 +2634,19 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 const savedSize = doc.getFontSize();
                 doc.setFont('helvetica', 'normal');
                 doc.setFontSize(10);
-                // 14 id-label line + 10 gap + 14 title + 8 gap
-                let h = 14 + 10 + 14 + 8;
+                // 16 gap below image + 12 title + 4 gap (id-label removed; tightened to match other PDF flows)
+                let h = 16 + 12 + 4;
                 const textWidth = pageWidth - margin * 2;
                 const sorted = [...maneuvers].sort((a, b) => (a.step_no || 0) - (b.step_no || 0));
                 for (const m of sorted) {
                     const stepLabel = m.step_no != null ? `${m.step_no}.` : '\u2022';
                     const line = `${stepLabel} ${m.instruction || ''}`.trim();
                     const wrapped = doc.splitTextToSize(line, textWidth);
-                    h += wrapped.length * 12 + 4;
+                    h += wrapped.length * 11 + 1;
                 }
                 doc.setFont(savedFontName, savedStyle);
                 doc.setFontSize(savedSize);
-                return h + 6;
+                return h + 4;
             };
             const maneuversHeight = measureManeuversHeight();
 
@@ -2679,26 +2679,18 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             doc.addImage(croppedBase64, imageType, x, y, imgWidth, imgHeight);
 
             // Identification label below the diagram — e.g. "Western Riding – Pattern 0002"
+            // (Previously we drew a separate "Discipline \u2013 Pattern N"
+            // label here, but it overlapped with the Pattern Language title
+            // which already includes the same text. Removed for clarity.)
             const idDiscipline = headerInfo?.disciplineName || (patternTitle || '').replace(/\.pdf$/i, '').trim();
             const idNumber = headerInfo?.patternNumber || null;
-            if (idDiscipline || idNumber) {
-                const idLabel = idNumber
-                    ? `${idDiscipline} \u2013 Pattern ${idNumber}`
-                    : `${idDiscipline}`;
-                doc.setFont('helvetica', 'bold');
-                doc.setFontSize(10);
-                doc.setTextColor(0, 0, 0);
-                const labelY = Math.min(y + imgHeight + 14, pageHeight - bottomReserve);
-                doc.text(idLabel, pageWidth / 2, labelY, { align: 'center' });
-            }
 
             // Pattern language / maneuvers — render INLINE directly below the
             // pattern diagram on the same page. Space was pre-reserved above
             // by shrinking the image. Only spills to a new page if individual
             // maneuvers overflow the bottom margin.
             if (Array.isArray(maneuvers) && maneuvers.length > 0) {
-                const labelY = Math.min(y + imgHeight + 14, pageHeight - bottomReserve);
-                let py = labelY + 10;
+                let py = Math.min(y + imgHeight + 16, pageHeight - bottomReserve);
                 doc.setFont('helvetica', 'bold');
                 doc.setFontSize(11);
                 doc.setTextColor(0, 0, 0);
@@ -2706,7 +2698,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     ? `${idDiscipline} \u2013 Pattern ${idNumber} \u2013 Pattern Language`
                     : 'Pattern Language';
                 doc.text(langTitle, pageWidth / 2, py, { align: 'center' });
-                py += 14;
+                py += 12;
 
                 doc.setFont('helvetica', 'normal');
                 doc.setFontSize(10);
@@ -2716,12 +2708,12 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     const stepLabel = m.step_no != null ? `${m.step_no}.` : '\u2022';
                     const line = `${stepLabel} ${m.instruction || ''}`.trim();
                     const wrapped = doc.splitTextToSize(line, textWidth);
-                    if (py + wrapped.length * 12 > pageHeight - bottomReserve) {
+                    if (py + wrapped.length * 11 > pageHeight - bottomReserve) {
                         doc.addPage();
                         py = margin;
                     }
                     doc.text(wrapped, margin, py);
-                    py += wrapped.length * 12 + 4;
+                    py += wrapped.length * 11 + 1;
                 }
             }
 

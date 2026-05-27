@@ -52,11 +52,18 @@ export const compressImage = (base64, maxWidth = 200, maxHeight = 200, quality =
 };
 
 /**
- * Smart-crop a pattern image (base64): removes baked-in header text at top
- * and summary/legend at bottom, keeping only the diagram portion.
- * Uses pixel scanning to find the largest blank gaps that separate the
- * header and footer regions from the diagram.
- * Falls back to a simple 3% bottom trim if scanning doesn't find clear gaps.
+ * Smart-crop a pattern image (base64). Strategy:
+ *   1. Find bounding box of all rows/cols that contain dark content
+ *      (loose threshold so we don't lose thin diagram lines).
+ *   2. Within that bounding box, find blank gaps — vertical gaps that
+ *      typically separate title/diagram/description, horizontal gaps that
+ *      separate diagram from a side-attached numbered list.
+ *   3. Use the LARGEST gap in the top zone (mid<0.45) to drop a header,
+ *      and the LARGEST gap in the bottom zone (mid>0.55) to drop a
+ *      description/legend. Same for left/right columns.
+ *   4. Safety: if any crop axis would shrink to <40% of the original
+ *      extent, keep the original extent for that axis (avoid catastrophic
+ *      cropping where we lose the diagram itself).
  */
 export const cropPatternImageSmart = (base64) => {
     return new Promise((resolve) => {
@@ -77,7 +84,9 @@ export const cropPatternImageSmart = (base64) => {
 
                 const DARK = 200;
                 const step = 2;
-                const minDark = Math.max(3, Math.floor(w / step * 0.005));
+                const sampledCols = Math.floor(w / step);
+
+                // --- Per-row darkness ---
                 const rowDark = new Array(h).fill(0);
                 for (let y = 0; y < h; y++) {
                     let cnt = 0;
@@ -88,15 +97,22 @@ export const cropPatternImageSmart = (base64) => {
                     rowDark[y] = cnt;
                 }
 
-                let firstRow = 0, lastRow = h - 1;
-                for (let y = 0; y < h; y++) { if (rowDark[y] > minDark) { firstRow = y; break; } }
-                for (let y = h - 1; y >= 0; y--) { if (rowDark[y] > minDark) { lastRow = y; break; } }
+                // "Has any content" threshold. Tuned slightly stricter so faint
+                // stray pixels (watermarks, header rules) don't mislocate firstRow.
+                const minDarkRow = Math.max(5, Math.floor(sampledCols * 0.008));
 
-                const minGap = Math.floor(h * 0.02);
+                let firstRow = 0, lastRow = h - 1;
+                for (let y = 0; y < h; y++) { if (rowDark[y] > minDarkRow) { firstRow = y; break; } }
+                for (let y = h - 1; y >= 0; y--) { if (rowDark[y] > minDarkRow) { lastRow = y; break; } }
+
+                // Find blank-row gaps inside the bounding box. Threshold is
+                // very small so a thin separator between title/diagram/text
+                // still registers.
+                const minGap = Math.max(3, Math.floor(h * 0.003)); // 0.3% of height
                 const gaps = [];
                 let gapStart = null;
                 for (let y = firstRow; y <= lastRow; y++) {
-                    const blank = rowDark[y] <= minDark;
+                    const blank = rowDark[y] <= minDarkRow;
                     if (blank && gapStart === null) gapStart = y;
                     else if (!blank && gapStart !== null) {
                         const size = y - gapStart;
@@ -105,17 +121,27 @@ export const cropPatternImageSmart = (base64) => {
                     }
                 }
 
-                const topGaps = gaps.filter(g => g.mid < 0.45).sort((a, b) => b.size - a.size);
-                const bottomGaps = gaps.filter(g => g.mid > 0.55).sort((a, b) => b.size - a.size);
+                // Top zone = upper 48%, bottom zone = lower 48%. Wider than
+                // before so gaps near vertical center still count.
+                const topGaps = gaps.filter(g => g.mid < 0.48).sort((a, b) => b.size - a.size);
+                const bottomGaps = gaps.filter(g => g.mid > 0.52).sort((a, b) => b.size - a.size);
 
                 let cropTop = topGaps[0] ? topGaps[0].end : firstRow;
                 let cropBottom = bottomGaps[0] ? bottomGaps[0].start : lastRow;
-                const pad = Math.floor(h * 0.008);
-                cropTop = Math.max(0, cropTop - pad);
-                cropBottom = Math.min(h, cropBottom + pad);
+                const padY = Math.floor(h * 0.01);
+                cropTop = Math.max(0, cropTop - padY);
+                cropBottom = Math.min(h, cropBottom + padY);
+
+                // Safety: if our crop would shrink height to <30% of the loose
+                // bounding box, abandon — likely the diagram itself got cut.
+                const originalContentH = lastRow - firstRow;
+                if (cropBottom - cropTop < originalContentH * 0.3) {
+                    cropTop = firstRow;
+                    cropBottom = lastRow;
+                }
                 const cropH = cropBottom - cropTop;
 
-                if (cropH <= 0 || cropH >= h * 0.90) {
+                if (cropH <= 0 || cropH >= h * 0.99) {
                     // Fallback: simple 3% bottom trim
                     const fbH = Math.floor(h * 0.97);
                     const fbCanvas = document.createElement('canvas');
@@ -125,12 +151,49 @@ export const cropPatternImageSmart = (base64) => {
                     return;
                 }
 
+                // --- Column crop intentionally disabled ---
+                // Heuristic column cropping was cutting INTO diagrams (START
+                // labels, arena boundaries) on AQHA / VRH-RHC patterns. The
+                // win (auto-removing side-attached numbered lists) wasn't
+                // worth the regression risk on horizontal arena patterns.
+                // Patterns with embedded side text should be re-uploaded with
+                // a cleaner source image (diagram only).
+                //
+                // We still trim any trailing whitespace using the loose
+                // bounding box so width is at least tight.
+                const rowStep = 2;
+                const sampledRowsInBand = Math.max(1, Math.floor(cropH / rowStep));
+                const colDark = new Array(w).fill(0);
+                for (let x = 0; x < w; x++) {
+                    let cnt = 0;
+                    for (let y = cropTop; y < cropBottom; y += rowStep) {
+                        const idx = (y * w + x) * 4;
+                        if ((pixels[idx] + pixels[idx + 1] + pixels[idx + 2]) / 3 < DARK) cnt++;
+                    }
+                    colDark[x] = cnt;
+                }
+
+                const minDarkCol = Math.max(3, Math.floor(sampledRowsInBand * 0.005));
+                let firstCol = 0, lastCol = w - 1;
+                for (let x = 0; x < w; x++) { if (colDark[x] > minDarkCol) { firstCol = x; break; } }
+                for (let x = w - 1; x >= 0; x--) { if (colDark[x] > minDarkCol) { lastCol = x; break; } }
+
+                const padX = Math.floor(w * 0.015);
+                let cropLeft = Math.max(0, firstCol - padX);
+                let cropRight = Math.min(w, lastCol + padX);
+                let cropW = cropRight - cropLeft;
+
+                if (cropW <= 0 || cropW < w * 0.20) {
+                    cropLeft = 0;
+                    cropW = w;
+                }
+
                 const outCanvas = document.createElement('canvas');
-                outCanvas.width = w; outCanvas.height = cropH;
+                outCanvas.width = cropW; outCanvas.height = cropH;
                 const oCtx = outCanvas.getContext('2d');
                 oCtx.fillStyle = '#FFFFFF';
-                oCtx.fillRect(0, 0, w, cropH);
-                oCtx.drawImage(img, 0, cropTop, w, cropH, 0, 0, w, cropH);
+                oCtx.fillRect(0, 0, cropW, cropH);
+                oCtx.drawImage(img, cropLeft, cropTop, cropW, cropH, 0, 0, cropW, cropH);
                 resolve(outCanvas.toDataURL('image/png'));
             } catch (e) {
                 resolve(base64);

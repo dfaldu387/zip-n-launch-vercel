@@ -37,6 +37,10 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     const PATTERN_IMAGE_MARGIN = 12;
     let yPos = margin;
     let toc = [];
+    // Pages that draw their own top banner (e.g. scoresheet pages) and must
+    // not receive the generic addPageHeader during the hub-mode finalize loop —
+    // otherwise the two headers collide.
+    const pagesWithOwnHeader = new Set();
 
     // --- Helper Functions ---
     const addPageHeader = (text, rightText = null, logoBase64 = null) => {
@@ -96,20 +100,20 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         doc.setFont(fontFamily, 'normal');
         doc.setFontSize(10);
 
-        // 8 gap above title + 14 title line + 10 gap below title
-        let height = 8 + 14 + 10;
+        // 4 gap above title + 12 title line + 6 gap below title
+        let height = 4 + 12 + 6;
         const textWidth = pageWidth - margin * 2;
         const sorted = [...maneuvers].sort((a, b) => (a.step_no || 0) - (b.step_no || 0));
         for (const m of sorted) {
             const stepLabel = m.step_no != null ? `${m.step_no}.` : '\u2022';
             const line = `${stepLabel} ${m.instruction || ''}`.trim();
             const wrapped = doc.splitTextToSize(line, textWidth);
-            height += wrapped.length * 12 + 4;
+            height += wrapped.length * 11 + 1;
         }
 
         doc.setFont(savedFontName, savedStyle);
         doc.setFontSize(savedSize);
-        return height + 6; // small bottom padding
+        return height + 4; // small bottom padding
     };
 
     // Render "Pattern Language" inline on the current page starting at yPos.
@@ -119,7 +123,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     const renderPatternLanguageInline = (maneuvers, titleBits = {}, fontFamily = 'helvetica') => {
         if (!Array.isArray(maneuvers) || maneuvers.length === 0) return;
 
-        yPos += 8;
+        yPos += 4;
         const { discipline, patternNumber } = titleBits;
         const langTitle = patternNumber
             ? `${discipline || 'Pattern'} \u2013 Pattern ${patternNumber} \u2013 Pattern Language`
@@ -129,7 +133,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         doc.setFontSize(11);
         doc.setTextColor(0, 0, 0);
         doc.text(langTitle, pageWidth / 2, yPos, { align: 'center' });
-        yPos += 14;
+        yPos += 12;
 
         doc.setFont(fontFamily, 'normal');
         doc.setFontSize(10);
@@ -140,12 +144,12 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             const stepLabel = m.step_no != null ? `${m.step_no}.` : '\u2022';
             const line = `${stepLabel} ${m.instruction || ''}`.trim();
             const wrapped = doc.splitTextToSize(line, textWidth);
-            if (yPos + wrapped.length * 12 > pageHeight - bottomReserve) {
+            if (yPos + wrapped.length * 11 > pageHeight - bottomReserve) {
                 doc.addPage();
                 yPos = margin + 20;
             }
             doc.text(wrapped, margin, yPos);
-            yPos += wrapped.length * 12 + 4;
+            yPos += wrapped.length * 11 + 1;
         }
     };
 
@@ -1345,10 +1349,9 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
 
             if (patternImageBase64) {
                 try {
-                    // In hub mode, use full image; in book mode, crop bottom summary box
-                    const imageBase64 = skipCoverAndToc
-                        ? patternImageBase64
-                        : await cropPatternImage(patternImageBase64);
+                    // Always crop to remove baked-in header/legend/side-text so
+                    // the rendered diagram can scale up to fill the page.
+                    const imageBase64 = await cropPatternImage(patternImageBase64);
                     const imgProps = doc.getImageProperties(imageBase64);
                     const aspect = imgProps.height / imgProps.width;
                     // Reserve space for footer + branding + maneuvers block
@@ -1418,6 +1421,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 const ssDateStrA = competitionDate ? format(parseLocalDate(competitionDate), 'MM-dd-yyyy') : '';
                 if (ssBase64) {
                     addNewPage();
+                    pagesWithOwnHeader.add(doc.internal.getNumberOfPages());
                     const ssMargin = SCORESHEET_LAYOUT.margin;
                     const topReserve = 40;
                     try {
@@ -1444,6 +1448,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     }
                 } else if (!hasNoPattern) {
                     addNewPage();
+                    pagesWithOwnHeader.add(doc.internal.getNumberOfPages());
                     drawGenericScoreSheetPage(doc, {
                         association: assocName,
                         showName: pbbData.showName || '',
@@ -1619,10 +1624,9 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
 
                 if (patternImageBase64) {
                     try {
-                        // In hub mode, use full image; in book mode, crop bottom summary box
-                        const imageBase64 = skipCoverAndToc
-                            ? patternImageBase64
-                            : await cropPatternImage(patternImageBase64);
+                        // Always crop to remove baked-in header/legend/side-text so
+                        // the rendered diagram can scale up to fill the page.
+                        const imageBase64 = await cropPatternImage(patternImageBase64);
                         const imgProps = doc.getImageProperties(imageBase64);
                         const aspect = imgProps.height / imgProps.width;
                         // Reserve space for footer + branding + maneuvers block
@@ -1689,6 +1693,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     const dateStrSsB = competitionDate ? format(parseLocalDate(competitionDate), 'MM-dd-yyyy') : '';
                     if (ssBase64B) {
                         addNewPage();
+                        pagesWithOwnHeader.add(doc.internal.getNumberOfPages());
                         const ssMarginB = SCORESHEET_LAYOUT.margin;
                         const topReserveB = 40;
                         try {
@@ -1715,6 +1720,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                         }
                     } else if (!hasNoPattern) {
                         addNewPage();
+                        pagesWithOwnHeader.add(doc.internal.getNumberOfPages());
                         drawGenericScoreSheetPage(doc, {
                             association: assocName,
                             showName: pbbData.showName || '',
@@ -1736,13 +1742,27 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     if (skipCoverAndToc) {
         // Hub mode: remove the blank first page (created by new jsPDF), then add simple headers/footers
         const totalPages = doc.internal.getNumberOfPages();
+        let pageShift = 0;
         if (totalPages > 1) {
             doc.deletePage(1);
+            pageShift = 1; // every previously-numbered page index is now (index - 1)
         }
+        // Re-key pagesWithOwnHeader to the new (post-deletion) page numbers
+        // so the skip-check in the finalize loop matches.
+        const shiftedOwnHeader = new Set();
+        for (const p of pagesWithOwnHeader) {
+            const np = p - pageShift;
+            if (np >= 1) shiftedOwnHeader.add(np);
+        }
+
         const finalPageCount = doc.internal.getNumberOfPages();
         for (let i = 1; i <= finalPageCount; i++) {
             doc.setPage(i);
-            addPageHeader(pbbData.showName || 'Pattern');
+            // Skip the generic page header on pages that drew their own banner
+            // (e.g. scoresheet pages), otherwise the two headers overlap.
+            if (!shiftedOwnHeader.has(i)) {
+                addPageHeader(pbbData.showName || 'Pattern');
+            }
             addPageFooter(i);
         }
         return doc.output('datauristring');
