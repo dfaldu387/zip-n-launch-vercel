@@ -75,6 +75,9 @@ export const Step4_ManeuverAnnotation = ({ formData, setFormData, uploadSlots })
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState(null);
   const [pdfImageUrls, setPdfImageUrls] = useState({});
+/*  */  // Auto-detected key (legend) bounding boxes per pattern slot. Each entry is
+  // { x, y, w, h } normalized 0–1 in image coords, or null if no key found.
+  const [keyHighlights, setKeyHighlights] = useState({});
   const [focusModeOpen, setFocusModeOpen] = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
 
@@ -142,6 +145,19 @@ export const Step4_ManeuverAnnotation = ({ formData, setFormData, uploadSlots })
           const imageUrl = canvas.toDataURL('image/png');
 
           setPdfImageUrls(prev => ({ ...prev, [levelId]: imageUrl }));
+
+          // Auto-detect the Key/Legend region. Image-based scan of the
+          // bottom-right corner only — the previous text-based path kept
+          // mis-matching the maneuver list, since both use the same words.
+          try {
+            const { detectKeyFromImage } = await import('@/lib/pdfUtils');
+            const rect = await detectKeyFromImage(imageUrl);
+            if (rect) {
+              setKeyHighlights(prev => ({ ...prev, [levelId]: rect }));
+            }
+          } catch (keyErr) {
+            console.warn('Key auto-detect failed (non-fatal):', keyErr);
+          }
         } catch (error) {
           console.error(`Error rendering PDF for ${levelId}:`, error);
         }
@@ -185,15 +201,43 @@ export const Step4_ManeuverAnnotation = ({ formData, setFormData, uploadSlots })
         return;
       }
 
+      // Also synthesize verbiage from maneuvers so DB `verbiage` column saves.
+      // Without this, Auto-Extract populates patternManeuvers only and the
+      // patterns row gets verbiage=null at INSERT (patternUploadUtils.js).
+      const rawText = maneuvers
+        .map(m => `${m.stepNumber}. ${m.instruction}`)
+        .join('\n');
+
+      let templateReady = null;
+      try {
+        const { toPatternBookFormat } = await import('@/lib/patternTextFormatter');
+        const activePattern = uploadedPatterns.find(p => p.levelId === levelId);
+        templateReady = toPatternBookFormat(maneuvers, {
+          levelTitle: activePattern?.title || '',
+        });
+      } catch (e) {
+        // Non-critical — template format is a bonus
+      }
+
       setFormData(prev => ({
         ...prev,
         patternManeuvers: {
           ...prev.patternManeuvers,
           [levelId]: maneuvers,
         },
+        patternVerbiage: {
+          ...prev.patternVerbiage,
+          [levelId]: {
+            raw: rawText,
+            formatted: maneuvers,
+            templateReady,
+            extractedAt: new Date().toISOString(),
+            source: 'auto-extract',
+          },
+        },
       }));
 
-      toast({ title: 'Maneuvers Extracted', description: `Found ${maneuvers.length} maneuver steps.` });
+      toast({ title: 'Maneuvers Extracted', description: `Found ${maneuvers.length} maneuver steps. Language saved.` });
     } catch (error) {
       toast({
         title: 'Extraction Failed',
@@ -1070,15 +1114,44 @@ export const Step4_ManeuverAnnotation = ({ formData, setFormData, uploadSlots })
 
               {/* Pattern Annotation */}
               <div className="space-y-3">
-                <h3 className="font-semibold text-sm">Pattern Annotation</h3>
-                <p className="text-xs text-muted-foreground">
-                  Draw, circle, or highlight areas on the pattern image.
-                </p>
-                <FreehandAnnotationCanvas
-                  backgroundImageUrl={pdfImageUrls[activePatternId]}
-                  onAnnotationChange={(annotation) => handleAnnotationChange(activePatternId, annotation)}
-                  initialAnnotation={activeAnnotation}
-                />
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <h3 className="font-semibold text-sm">Pattern Annotation</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Draw, circle, or highlight areas on the pattern image.
+                    </p>
+                  </div>
+                  {keyHighlights[activePatternId] && (
+                    <Badge variant="outline" className="text-[10px] border-red-500 text-red-600 dark:text-red-400">
+                      Key auto-detected
+                    </Badge>
+                  )}
+                </div>
+                <div className="relative">
+                  <FreehandAnnotationCanvas
+                    backgroundImageUrl={pdfImageUrls[activePatternId]}
+                    onAnnotationChange={(annotation) => handleAnnotationChange(activePatternId, annotation)}
+                    initialAnnotation={activeAnnotation}
+                  />
+                  {/* Auto-detected Key highlight — pointer-events-none so it
+                      never blocks the annotation drawing tools underneath. */}
+                  {keyHighlights[activePatternId] && (() => {
+                    const r = keyHighlights[activePatternId];
+                    return (
+                      <div
+                        className="absolute border-[3px] border-red-500 rounded-sm pointer-events-none"
+                        style={{
+                          left: `${r.x * 100}%`,
+                          top: `${r.y * 100}%`,
+                          width: `${r.w * 100}%`,
+                          height: `${r.h * 100}%`,
+                          boxShadow: '0 0 0 1px rgba(255,255,255,0.6)',
+                        }}
+                        title="Auto-detected pattern key"
+                      />
+                    );
+                  })()}
+                </div>
               </div>
             </div>
           </div>

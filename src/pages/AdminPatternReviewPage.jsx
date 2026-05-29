@@ -26,6 +26,7 @@ import { EmailSenderModal } from '@/components/admin/EmailSenderModal';
 import { ReviewEmailModal } from '@/components/admin/ReviewEmailModal';
 import { generateNextPatternNumber, assignPatternNumber, PATTERN_LEVELS, assignPatternDisplayName, updatePatternIdentifier, generateNextSharedPatternNumber, assignSharedPatternNumber } from '@/lib/patternNumbering';
 import { generateFinalFilePdf, uploadFinalFile } from '@/lib/finalFileGenerator';
+import { notifyPatternApproved, notifyPatternRejected, notifyPatternPublished } from '@/lib/notifications';
 import PatternArtifactCard from '@/components/admin/PatternArtifactCard';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -43,6 +44,7 @@ const AdminPatternReviewPage = () => {
   const [emailState, setEmailState] = useState({ isOpen: false, patternSet: null });
   const [editState, setEditState] = useState({ isOpen: false, pattern: null, fields: {} });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isRegeneratingLanguage, setIsRegeneratingLanguage] = useState(false);
   const [activeFilter, setActiveFilter] = useState('pending');
   const [selectedSets, setSelectedSets] = useState(new Set());
   const [allAssociations, setAllAssociations] = useState([]);
@@ -309,7 +311,7 @@ const AdminPatternReviewPage = () => {
     };
   };
 
-  const executeReview = async (patternIds, newStatus, discipline, setName, userId, rejectionReason = null) => {
+  const executeReview = async (patternIds, newStatus, discipline, setName, userId, rejectionReason = null, submitter = null) => {
     const now = new Date().toISOString();
     const updateData = {
       review_status: newStatus,
@@ -402,6 +404,28 @@ const AdminPatternReviewPage = () => {
       admin_email: user?.email || null,
     });
 
+    // In-app notification for the submitter (writes to existing
+    // judge_notifications table, same bell as everywhere else).
+    if (submitter?.email) {
+      if (newStatus === 'approved') {
+        await notifyPatternApproved({
+          email: submitter.email,
+          name: submitter.full_name,
+          setName: setName || 'Pattern Set',
+          patternCount: patternIds.length,
+          createdBy: user?.id || null,
+        });
+      } else if (newStatus === 'rejected') {
+        await notifyPatternRejected({
+          email: submitter.email,
+          name: submitter.full_name,
+          setName: setName || 'Pattern Set',
+          reason: rejectionReason,
+          createdBy: user?.id || null,
+        });
+      }
+    }
+
     toast({
       title: `Pattern Set ${newStatus === 'approved' ? 'Approved' : 'Rejected'}`,
       description: `The pattern set has been updated successfully.${newStatus === 'approved' ? ' Pattern numbers assigned. Approved package generated.' : ''}`,
@@ -416,7 +440,15 @@ const AdminPatternReviewPage = () => {
       isOpen: true,
       patternSet: set,
       reviewType: newStatus,
-      onConfirm: (rejectionReason) => executeReview(patternIds, newStatus, set.className, set.setName, set.patterns[0]?.user_id, rejectionReason),
+      onConfirm: (rejectionReason) => executeReview(
+        patternIds,
+        newStatus,
+        set.className,
+        set.setName,
+        set.patterns[0]?.user_id,
+        rejectionReason,
+        set.user, // { email, full_name } — used for in-app notification via judge_notifications
+      ),
     });
   };
 
@@ -499,6 +531,8 @@ const AdminPatternReviewPage = () => {
         patternImageUrl: pattern.preview_image_url,
         verbiageText: pattern.verbiage,
         patternName: pattern.display_name || pattern.name,
+        discipline: pattern.class_name,
+        level: pattern.level,
       });
       await uploadFinalFile(blob, pattern.id, pattern.user_id);
       toast({ title: 'Final File Generated', description: `Final file created for "${pattern.display_name || pattern.name}".` });
@@ -550,8 +584,59 @@ const AdminPatternReviewPage = () => {
       admin_email: user?.email || null,
     });
 
+    // In-app notification for the submitter
+    if (set.user?.email) {
+      await notifyPatternPublished({
+        email: set.user.email,
+        name: set.user.full_name,
+        setName: set.setName,
+        patternCount: patternIds.length,
+        createdBy: user?.id || null,
+      });
+    }
+
     toast({ title: 'Published', description: `"${set.setName}" is now available for system use.` });
     fetchPatterns();
+  };
+
+  // Re-run language extraction on the stored PDF and overwrite the textarea
+  // value. Admin can then review + Save Changes to persist.
+  const handleRegenerateLanguage = async () => {
+    const pattern = editState.pattern;
+    if (!pattern?.file_url) {
+      toast({ title: 'No source PDF', description: 'This pattern has no stored file to re-extract from.', variant: 'destructive' });
+      return;
+    }
+    setIsRegeneratingLanguage(true);
+    try {
+      const response = await fetch(pattern.file_url);
+      if (!response.ok) throw new Error(`Could not download PDF (${response.status})`);
+      const blob = await response.blob();
+      const file = new File([blob], pattern.original_file_name || 'pattern.pdf', { type: 'application/pdf' });
+
+      const { extractPatternStepsWithProgress } = await import('@/lib/pdfUtils');
+      const stepMap = await extractPatternStepsWithProgress(file);
+      const steps = Object.entries(stepMap)
+        .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+        .map(([num, instruction]) => `${num}. ${instruction}`);
+
+      if (steps.length === 0) {
+        toast({
+          title: 'No language found',
+          description: 'Could not extract numbered steps from this PDF. You may need to edit manually.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const newVerbiage = steps.join('\n');
+      setEditState(prev => ({ ...prev, fields: { ...prev.fields, verbiage: newVerbiage } }));
+      toast({ title: 'Language regenerated', description: `Found ${steps.length} steps. Click Save Changes to keep them.` });
+    } catch (err) {
+      toast({ title: 'Regeneration failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsRegeneratingLanguage(false);
+    }
   };
 
   const handleOpenEditDialog = (pattern) => {
@@ -735,6 +820,28 @@ const AdminPatternReviewPage = () => {
         } catch (e) {
           console.warn('Failed to assign shared pattern_number (bulk):', e);
         }
+      }
+    }
+
+    // In-app notification per set (each set may have a different submitter)
+    for (const s of selectedPatternSets) {
+      if (!s.user?.email) continue;
+      if (newStatus === 'approved') {
+        await notifyPatternApproved({
+          email: s.user.email,
+          name: s.user.full_name,
+          setName: s.setName,
+          patternCount: s.patterns.length,
+          createdBy: user?.id || null,
+        });
+      } else if (newStatus === 'rejected') {
+        await notifyPatternRejected({
+          email: s.user.email,
+          name: s.user.full_name,
+          setName: s.setName,
+          reason: null,
+          createdBy: user?.id || null,
+        });
       }
     }
 
@@ -1336,7 +1443,25 @@ const AdminPatternReviewPage = () => {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-verbiage">Verbiage / Instructions</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="edit-verbiage">Verbiage / Instructions</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={handleRegenerateLanguage}
+                  disabled={isRegeneratingLanguage || !editState.pattern?.file_url}
+                  title={!editState.pattern?.file_url ? 'No source PDF available' : 'Re-run extraction on the stored PDF'}
+                >
+                  {isRegeneratingLanguage ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-1 h-3 w-3" />
+                  )}
+                  Regenerate Language
+                </Button>
+              </div>
               <Textarea
                 id="edit-verbiage"
                 placeholder="Pattern description, maneuver instructions, or notes..."

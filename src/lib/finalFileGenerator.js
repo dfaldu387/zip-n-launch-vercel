@@ -26,23 +26,39 @@ function getImageDimensions(base64) {
  * @param {string} options.patternImageUrl - URL of the extracted pattern diagram
  * @param {string} options.verbiageText - Language/instructions text
  * @param {string} options.patternName - Display name for the header
+ * @param {string} [options.discipline] - Discipline (e.g. "Walk Trot") shown as subtitle
+ * @param {string} [options.level] - Level (e.g. "Beginner") shown as subtitle
  * @returns {Promise<Blob>} The generated PDF as a Blob
  */
-export async function generateFinalFilePdf({ patternImageUrl, verbiageText, patternName }) {
+export async function generateFinalFilePdf({ patternImageUrl, verbiageText, patternName, discipline, level }) {
   const doc = new jsPDF('p', 'pt', 'letter');
   let y = MARGIN;
 
-  // Title
+  // Title — large, bold, identifies the pattern
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
+  doc.setFontSize(18);
   doc.text(patternName || 'Pattern', PAGE_WIDTH / 2, y, { align: 'center' });
-  y += 28;
+  y += 22;
+
+  // Subtitle — Discipline · Level (so the header is meaningful instead of
+  // showing a page number from the source PDF).
+  const subtitleParts = [discipline, level].filter(Boolean);
+  if (subtitleParts.length > 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.setTextColor(90, 90, 90);
+    doc.text(subtitleParts.join(' · '), PAGE_WIDTH / 2, y, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+    y += 16;
+  } else {
+    y += 4;
+  }
 
   // Divider line under title
   doc.setDrawColor(180);
   doc.setLineWidth(0.5);
   doc.line(MARGIN, y, PAGE_WIDTH - MARGIN, y);
-  y += 16;
+  y += 18;
 
   // Pattern image
   if (patternImageUrl) {
@@ -51,8 +67,9 @@ export async function generateFinalFilePdf({ patternImageUrl, verbiageText, patt
       if (base64) {
         const { width: natW, height: natH } = await getImageDimensions(base64);
 
-        // Auto-size: fit within content width, max 55% of page height
-        const maxImgHeight = PAGE_HEIGHT * 0.55;
+        // Auto-size: fit within content width, max 52% of page height
+        // (slightly smaller than before to give the heading + Key more room).
+        const maxImgHeight = PAGE_HEIGHT * 0.52;
         const scaleW = CONTENT_WIDTH / natW;
         const scaleH = maxImgHeight / natH;
         const scale = Math.min(scaleW, scaleH, 1); // don't upscale
@@ -71,13 +88,19 @@ export async function generateFinalFilePdf({ patternImageUrl, verbiageText, patt
     }
   }
 
-  // Verbiage / language text
+  // Key / Verbiage section
   if (verbiageText && verbiageText.trim()) {
-    // Divider before verbiage
-    doc.setDrawColor(200);
+    // "KEY" section header
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(60, 60, 60);
+    doc.text('KEY', MARGIN, y);
+    y += 4;
+    doc.setDrawColor(180);
     doc.setLineWidth(0.5);
     doc.line(MARGIN, y, PAGE_WIDTH - MARGIN, y);
     y += 12;
+    doc.setTextColor(0, 0, 0);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);

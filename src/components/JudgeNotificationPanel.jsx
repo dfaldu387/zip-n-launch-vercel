@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, X, Check, FileText, Clock, ChevronRight } from 'lucide-react';
+import { Bell, X, Check, FileText, Clock, ChevronRight, CheckCircle2, XCircle, Globe } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -18,16 +18,20 @@ const JudgeNotificationPanel = ({ userEmail }) => {
 
     const unreadCount = notifications.filter(n => !n.is_read).length;
 
-    // Handle notification click - navigate to Judges Portal
+    // Handle notification click — route by notification type. Pattern review
+    // events (approve/reject/publish) belong in the Contributor Portal; legacy
+    // judge assignments still go to /judges-portal.
     const handleNotificationClick = async (notification) => {
-        // Mark as read if not already
         if (!notification.is_read) {
             await markAsRead(notification.id);
         }
-        
-        // Close the panel and navigate to Judges Portal
         setIsOpen(false);
-        navigate('/judges-portal');
+        const type = notification.notification_type;
+        if (type === 'pattern_approved' || type === 'pattern_rejected' || type === 'pattern_published') {
+            navigate('/contributor-portal');
+        } else {
+            navigate('/judges-portal');
+        }
     };
 
     // Fetch notifications
@@ -134,10 +138,11 @@ const JudgeNotificationPanel = ({ userEmail }) => {
 
     const getNotificationIcon = (type) => {
         switch (type) {
-            case 'assignment':
-                return <FileText className="h-4 w-4 text-primary" />;
-            default:
-                return <Bell className="h-4 w-4 text-primary" />;
+            case 'assignment':         return <FileText className="h-4 w-4 text-primary" />;
+            case 'pattern_approved':   return <CheckCircle2 className="h-4 w-4 text-green-600" />;
+            case 'pattern_rejected':   return <XCircle className="h-4 w-4 text-red-600" />;
+            case 'pattern_published':  return <Globe className="h-4 w-4 text-blue-600" />;
+            default:                   return <Bell className="h-4 w-4 text-primary" />;
         }
     };
 

@@ -533,9 +533,14 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
       try {
         let opQuery = supabase
           .from('patterns')
-          .select('id, name, original_file_name, class_name, tags, preview_image_url, pattern_number, review_status, use_as_original')
+          .select('id, name, original_file_name, class_name, tags, preview_image_url, pattern_number, review_status, publication_status, use_as_original')
           .eq('use_as_original', true)
           .eq('review_status', 'approved')
+          // Only surface patterns that have been published, or older approved
+          // patterns from before the publish gate existed (publication_status IS NULL).
+          // Keep both clauses until backfill is complete; safe to drop the null
+          // branch once every approved pattern has been re-published.
+          .or('publication_status.eq.published,publication_status.is.null')
           .overlaps('tags', ['OP', 'CAPO']);
 
         if (!isOpenShowDiscipline) {
