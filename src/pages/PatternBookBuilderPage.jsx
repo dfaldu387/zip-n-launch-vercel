@@ -23,7 +23,6 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import GenerateBookDialog from '@/components/pbb/GenerateBookDialog';
 import { ClassConfiguration } from '@/components/pbb/ClassConfiguration';
 import { useAnalytics } from '@/components/AnalyticsProvider';
-import { sendCustomPatternRequestEmails } from '@/lib/customPatternEmails';
 import { UsageLimitGate } from '@/components/shared/UsageLimitGate';
 
 const steps = [
@@ -318,17 +317,8 @@ const PatternBookBuilderPage = () => {
                 description: "Your project has been saved successfully.",
             });
 
-            // Send custom pattern request emails (non-blocking)
-            try {
-                const updatedSelections = await sendCustomPatternRequestEmails(formData);
-                if (updatedSelections !== formData.patternSelections) {
-                    setFormData(prev => ({ ...prev, patternSelections: updatedSelections }));
-                    // Persist the updated requestStatus values
-                    await createOrUpdateProject();
-                }
-            } catch (emailErr) {
-                console.error('Custom pattern request emails failed (non-blocking):', emailErr);
-            }
+            // Custom pattern request emails are sent explicitly via the per-request
+            // "Send Request" button in Step 6 — no longer auto-sent on save.
 
             // After saving, open the Generate & Email Pattern Book dialog
             setIsGenerateDialogOpen(true);

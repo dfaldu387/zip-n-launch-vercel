@@ -1137,7 +1137,27 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             if (!competitionDate || competitionDate === pbbData.startDate) {
                 competitionDate = pbbData.groupDueDates?.[discIndex]?.[groupIndex] || pbbData.startDate;
             }
-            
+
+            // A single class/group can contain divisions that run on different
+            // days (e.g. Open Junior on Fri, Youth on Sat). Collect every
+            // DISTINCT division date so the By-Date TOC can list the class under
+            // EACH day instead of only the first division's date — otherwise the
+            // later days look empty even though classes are scheduled then.
+            // Falls back to the resolved competitionDate when no division-level
+            // dates exist.
+            let groupDates = [];
+            if (group.divisions && group.divisions.length > 0) {
+                const seenDates = new Set();
+                group.divisions.forEach(div => {
+                    const divId = div.id || div;
+                    const d = discipline.divisionDates?.[divId];
+                    if (d && !seenDates.has(d)) { seenDates.add(d); groupDates.push(d); }
+                });
+            }
+            if (groupDates.length === 0 && competitionDate) {
+                groupDates = [competitionDate];
+            }
+
             // Resolve association per-class: prefer the association of the
             // actually-selected pattern (so AQHA/APHA/NSBA are labeled correctly
             // even when a single discipline has classes from multiple breeds).
@@ -1170,6 +1190,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     title: className,
                     page: doc.internal.getNumberOfPages() - 1,
                     date: competitionDate,
+                    dates: groupDates,
                     classNumber: showClassNumbers ? sequentialClassNumber.toString() : ''
                 });
 
@@ -1782,9 +1803,12 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     {
         const tocByDate = {};
         toc.forEach(item => {
-            if (!item.date) return;
-            if (!tocByDate[item.date]) tocByDate[item.date] = [];
-            tocByDate[item.date].push(item);
+            // List a class under every day its divisions run (multi-date groups).
+            const itemDates = (item.dates && item.dates.length) ? item.dates : (item.date ? [item.date] : []);
+            itemDates.forEach(d => {
+                if (!tocByDate[d]) tocByDate[d] = [];
+                tocByDate[d].push(item);
+            });
         });
 
         let estimatedHeight = 80;
@@ -1848,11 +1872,15 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     
         const tocByDate = {};
         toc.forEach(item => {
-            if (!item.date) return;
-            if (!tocByDate[item.date]) tocByDate[item.date] = [];
-            tocByDate[item.date].push(item);
+            // List a class under every day its divisions run (multi-date groups),
+            // so no scheduled day looks empty in the By-Date table of contents.
+            const itemDates = (item.dates && item.dates.length) ? item.dates : (item.date ? [item.date] : []);
+            itemDates.forEach(d => {
+                if (!tocByDate[d]) tocByDate[d] = [];
+                tocByDate[d].push(item);
+            });
         });
-    
+
         const sortedDates = Object.keys(tocByDate).sort();
         let tocCurrentPage = tocStartPage;
         

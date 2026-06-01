@@ -11,9 +11,42 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
     import { PatternGrouping } from '@/components/pbb/PatternGrouping';
     import { ScheduleOrganizer } from '@/components/pbb/ScheduleOrganizer';
     import { cn } from '@/lib/utils';
+    import { parseDivisionId } from '@/lib/showBillUtils';
     import { supabase } from '@/lib/supabaseClient';
     import { useToast } from '@/components/ui/use-toast';
-    
+
+    // Strip a division (by its base identifier, e.g. "AQHA-Horsemanship - Level 1")
+    // from every place it can live on a discipline: the schedule order, pattern
+    // groups (including Go 1/Go 2 split entries, which are stored as "<id>-go1"/"-go2"
+    // with baseId === the identifier), dates, print titles and go-config.
+    // Used when a division is unchecked or a custom division is deleted, so it does
+    // not "carry across" into the Add Dates / Group Patterns tabs.
+    const removeDivisionFromDiscipline = (disc, divisionIdentifier) => {
+        const matchesDivision = (d) => {
+            const id = typeof d === 'string' ? d : (d?.id ?? d);
+            const baseId = typeof d === 'string' ? d : (d?.baseId ?? id);
+            return id === divisionIdentifier || baseId === divisionIdentifier;
+        };
+
+        const newDivisionDates = { ...(disc.divisionDates || {}) };
+        const newDivisionPrintTitles = { ...(disc.divisionPrintTitles || {}) };
+        const newDivisionGos = { ...(disc.divisionGos || {}) };
+        delete newDivisionDates[divisionIdentifier];
+        delete newDivisionPrintTitles[divisionIdentifier];
+        delete newDivisionGos[divisionIdentifier];
+
+        return {
+            divisionOrder: (disc.divisionOrder || []).filter(d => d !== divisionIdentifier),
+            patternGroups: (disc.patternGroups || []).map(group => ({
+                ...group,
+                divisions: (group.divisions || []).filter(d => !matchesDivision(d)),
+            })),
+            divisionDates: newDivisionDates,
+            divisionPrintTitles: newDivisionPrintTitles,
+            divisionGos: newDivisionGos,
+        };
+    };
+
     const CustomDivisionManager = ({ pbbDiscipline, setFormData }) => {
         const [customDivisionName, setCustomDivisionName] = React.useState('');
         const [isCustomDivisionModalOpen, setIsCustomDivisionModalOpen] = React.useState(false);
@@ -237,9 +270,18 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
                         const newCustomDivisions = (disc.customDivisions || []).filter(d => !(d.name === divisionName && d.assocId === assocId));
                         const newDivisions = { ...disc.divisions };
                         if (newDivisions[assocId]) {
+                            newDivisions[assocId] = { ...newDivisions[assocId] };
                             delete newDivisions[assocId][`custom-${divisionName}`];
                         }
-                        return { ...disc, customDivisions: newCustomDivisions, divisions: newDivisions };
+                        // Also strip it from the schedule order, pattern groups, dates, etc.
+                        // so the deleted custom division does not carry across into Tabs 2 & 3.
+                        const divisionIdentifier = `${assocId}-custom-${divisionName}`;
+                        return {
+                            ...disc,
+                            customDivisions: newCustomDivisions,
+                            divisions: newDivisions,
+                            ...removeDivisionFromDiscipline(disc, divisionIdentifier),
+                        };
                     }
                     return disc;
                 })
@@ -253,50 +295,27 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
                     disciplines: prev.disciplines.map(disc => {
                         if (disc.id === disciplineId) {
                             const newDivisions = { ...(disc.divisions || {}) };
-                            if (!newDivisions[assocId]) newDivisions[assocId] = {};
+                            newDivisions[assocId] = { ...(newDivisions[assocId] || {}) };
                             const key = isCustom ? `custom-${groupName}` : `${groupName} - ${level}`;
+                            const divisionIdentifier = `${assocId}-${key}`;
+
                             if (isChecked) {
                                 newDivisions[assocId][key] = true;
-                            } else {
-                                delete newDivisions[assocId][key];
-                            }
-                            
-                            let newDivisionOrder = disc.divisionOrder ? [...disc.divisionOrder] : [];
-                            const divisionIdentifier = `${assocId}-${key}`;
-    
-                            if (isChecked) {
+                                const newDivisionOrder = disc.divisionOrder ? [...disc.divisionOrder] : [];
                                 if (!newDivisionOrder.includes(divisionIdentifier)) {
                                     newDivisionOrder.push(divisionIdentifier);
                                 }
-                            } else {
-                                newDivisionOrder = newDivisionOrder.filter(d => d !== divisionIdentifier);
+                                return { ...disc, divisions: newDivisions, divisionOrder: newDivisionOrder };
                             }
 
-                            // When unchecking, also remove division from pattern groups
-                            let newPatternGroups = disc.patternGroups || [];
-                            if (!isChecked) {
-                                newPatternGroups = newPatternGroups.map(group => ({
-                                    ...group,
-                                    divisions: (group.divisions || []).filter(d => d.id !== divisionIdentifier)
-                                }));
-                                
-                                // Also remove from divisionDates and divisionPrintTitles
-                                const newDivisionDates = { ...(disc.divisionDates || {}) };
-                                const newDivisionPrintTitles = { ...(disc.divisionPrintTitles || {}) };
-                                delete newDivisionDates[divisionIdentifier];
-                                delete newDivisionPrintTitles[divisionIdentifier];
-                                
-                                return { 
-                                    ...disc, 
-                                    divisions: newDivisions, 
-                                    divisionOrder: newDivisionOrder, 
-                                    patternGroups: newPatternGroups,
-                                    divisionDates: newDivisionDates,
-                                    divisionPrintTitles: newDivisionPrintTitles
-                                };
-                            }
-
-                            return { ...disc, divisions: newDivisions, divisionOrder: newDivisionOrder };
+                            // Unchecking: drop it everywhere it may have carried across
+                            // (schedule order, pattern groups incl. Go 1/Go 2 entries, dates, titles, go-config)
+                            delete newDivisions[assocId][key];
+                            return {
+                                ...disc,
+                                divisions: newDivisions,
+                                ...removeDivisionFromDiscipline(disc, divisionIdentifier),
+                            };
                         }
                         return disc;
                     })
@@ -552,20 +571,53 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
                 return;
             }
 
+            // Build the set of divisions that are actually valid (selectable) for THIS
+            // target discipline. We only copy these, so classes that belong only to the
+            // source discipline (e.g. a Non-Pro "Level 1 Horsemanship" level copied into
+            // Western Riding, or a custom division for an association this discipline does
+            // not have) are never brought across. Without this guard those classes have no
+            // checkbox here, can never be unchecked, and leak into the Add Dates / Group
+            // Patterns tabs even though the user never selected them.
+            const validKeysByAssoc = {};
+            Object.entries(getDivisionsForDiscipline).forEach(([assocId, groups]) => {
+                const keys = new Set();
+                (groups || []).forEach(group => {
+                    (group.levels || []).forEach(level => keys.add(`${group.group} - ${level}`));
+                });
+                validKeysByAssoc[assocId] = keys;
+            });
+
+            // Custom divisions only render (and can be unchecked) for associations this
+            // discipline actually has, so keep only those and register their keys as valid.
+            const newCustomDivisions = (sourceDiscipline.customDivisions || [])
+                .filter(cd => validKeysByAssoc[cd.assocId])
+                .map(cd => ({ ...cd }));
+            newCustomDivisions.forEach(cd => validKeysByAssoc[cd.assocId].add(`custom-${cd.name}`));
+
+            const isValidDivision = (assocId, key) => !!validKeysByAssoc[assocId]?.has(key);
+
             setFormData(prev => {
                 return {
                     ...prev,
                     disciplines: prev.disciplines.map(disc => {
                         if (disc.id === pbbDiscipline.id) {
-                            // Deep copy divisions
-                            const newDivisions = JSON.parse(JSON.stringify(sourceDiscipline.divisions || {}));
-                            
-                            // Copy divisionOrder
-                            const newDivisionOrder = sourceDiscipline.divisionOrder ? [...sourceDiscipline.divisionOrder] : [];
-                            
-                            // Copy customDivisions
-                            const newCustomDivisions = sourceDiscipline.customDivisions ? [...sourceDiscipline.customDivisions] : [];
-                            
+                            // Copy only the divisions that are valid for this discipline
+                            const newDivisions = {};
+                            Object.entries(sourceDiscipline.divisions || {}).forEach(([assocId, keysObj]) => {
+                                Object.entries(keysObj || {}).forEach(([key, isChecked]) => {
+                                    if (isChecked && isValidDivision(assocId, key)) {
+                                        if (!newDivisions[assocId]) newDivisions[assocId] = {};
+                                        newDivisions[assocId][key] = true;
+                                    }
+                                });
+                            });
+
+                            // Copy divisionOrder, dropping any entry that is not valid here
+                            const newDivisionOrder = (sourceDiscipline.divisionOrder || []).filter(divId => {
+                                const { assocId, divisionName } = parseDivisionId(divId);
+                                return isValidDivision(assocId, divisionName);
+                            });
+
                             return {
                                 ...disc,
                                 divisions: newDivisions,

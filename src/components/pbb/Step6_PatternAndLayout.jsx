@@ -23,6 +23,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { v4 as uuidv4 } from 'uuid';
+import { sendCustomPatternRequests } from '@/lib/customPatternEmails';
 
 // Judge Assignment Field — select from existing judges or type custom
 const JudgeAssignmentField = ({ disciplineName, currentValue, onValueChange, formData, isReadOnly }) => {
@@ -356,6 +357,42 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
   const [previewDiscipline, setPreviewDiscipline] = useState(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [uploadingCustomPattern, setUploadingCustomPattern] = useState(null); // track which group is uploading
+  const [sendingRequestId, setSendingRequestId] = useState(null); // track which discipline's custom-pattern request is being sent
+
+  // Send the custom-pattern request for a single discipline (per-request "Send Request" button)
+  const handleSendCustomPatternRequest = async (discipline) => {
+    if (isReadOnly || sendingRequestId) return;
+    setSendingRequestId(discipline.id);
+    try {
+      const result = await sendCustomPatternRequests(formData, { disciplineId: discipline.id });
+      if (result.patternSelections !== formData.patternSelections) {
+        setFormData(prev => ({ ...prev, patternSelections: result.patternSelections }));
+      }
+      if (result.sent > 0) {
+        toast({
+          title: 'Request Sent',
+          description: `Custom pattern request emailed for ${discipline.name.replace(' at Halter', '')}.`,
+        });
+      } else if (result.skipped > 0) {
+        toast({
+          variant: 'destructive',
+          title: 'Missing Details',
+          description: 'Enter the request name and email before sending.',
+        });
+      } else if (result.failed > 0) {
+        toast({
+          variant: 'destructive',
+          title: 'Send Failed',
+          description: 'Could not send the request email. Please try again.',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to send custom pattern request:', err);
+      toast({ variant: 'destructive', title: 'Send Failed', description: 'Something went wrong. Please try again.' });
+    } finally {
+      setSendingRequestId(null);
+    }
+  };
 
   // Database-driven pattern state
   const [dbPatterns, setDbPatterns] = useState({});
@@ -706,14 +743,11 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
           uploadedFileType: file.type,
           requestStatus: 'uploaded',
         };
-        // Apply to ALL groups in the discipline
-        const allGroupIds = Object.keys(newSelections[disciplineId]);
-        allGroupIds.forEach(gId => {
-          newSelections[disciplineId][gId] = {
-            ...newSelections[disciplineId][gId],
-            ...fileData,
-          };
-        });
+        // Apply only to the specific group that uploaded — each group has its own custom pattern
+        newSelections[disciplineId][groupId] = {
+          ...newSelections[disciplineId][groupId],
+          ...fileData,
+        };
         return { ...prev, patternSelections: newSelections };
       });
       toast({ title: 'Upload successful', description: `${file.name} has been uploaded.` });
@@ -736,15 +770,14 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
     }
     setFormData(prev => {
       const newSelections = { ...(prev.patternSelections || {}) };
-      // Remove file data from ALL groups in the discipline
-      const allGroupIds = Object.keys(newSelections[disciplineId] || {});
-      allGroupIds.forEach(gId => {
-        const { uploadedFileUrl: _u, uploadedFilePath: _p, uploadedFileName: _n, uploadedFileType: _t, ...rest } = newSelections[disciplineId][gId] || {};
-        newSelections[disciplineId][gId] = {
+      // Remove file data from only the specific group — each group has its own custom pattern
+      const { uploadedFileUrl: _u, uploadedFilePath: _p, uploadedFileName: _n, uploadedFileType: _t, ...rest } = newSelections[disciplineId]?.[groupId] || {};
+      if (newSelections[disciplineId]) {
+        newSelections[disciplineId][groupId] = {
           ...rest,
           requestStatus: rest.requestStatus === 'uploaded' ? 'requested' : rest.requestStatus,
         };
-      });
+      }
       return { ...prev, patternSelections: newSelections };
     });
     toast({ title: 'File removed' });
@@ -1306,13 +1339,18 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                           const selection = getPatternSelection(discipline.id, group.id);
                           return selection?.patternId;
                         }).length;
-                    
-                    // Get pattern names for display
+
+                    // Count custom-pattern-requested and judge-assigned groups so the
+                    // subtitle reflects those modes instead of a stale standard pattern.
+                    const customCount = isScoresheetOnly ? 0 : groups.filter(group => getPatternSelection(discipline.id, group.id)?.type === 'customRequest').length;
+                    const judgeCount = isScoresheetOnly ? 0 : groups.filter(group => getPatternSelection(discipline.id, group.id)?.type === 'judgeAssigned').length;
+
+                    // Get pattern names for display (standard patterns only)
                     const patternNames = [];
                     if (!isScoresheetOnly) {
                       groups.forEach(group => {
                         const selection = getPatternSelection(discipline.id, group.id);
-                        if (selection?.patternName) {
+                        if (selection?.patternId && selection?.patternName) {
                           const patternName = selection.patternName.replace(/\.(pdf|PDF)$/, '');
                           const version = selection.version || '';
                           const displayText = version && version !== 'ALL' ? `${patternName} (${version})` : patternName;
@@ -1322,20 +1360,22 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                         }
                       });
                     }
-                    
+
                     // Determine subtitle text
                     let subtitle = '';
                     let subtitleColor = 'text-muted-foreground';
                     if (isScoresheetOnly) {
                       subtitle = `${assignedCount} group${assignedCount !== 1 ? 's' : ''} configured`;
-                    } else if (assignedCount > 0) {
-                      subtitle = `${assignedCount} pattern${assignedCount !== 1 ? 's' : ''} assigned`;
-                      // Add pattern names if available
-                      if (patternNames.length > 0) {
-                        subtitle += ` ${patternNames.join(' ')}`;
-                      }
                     } else {
-                      subtitle = '0 patterns assigned';
+                      const parts = [];
+                      if (assignedCount > 0) {
+                        let s = `${assignedCount} pattern${assignedCount !== 1 ? 's' : ''} assigned`;
+                        if (patternNames.length > 0) s += ` ${patternNames.join(' ')}`;
+                        parts.push(s);
+                      }
+                      if (customCount > 0) parts.push(`${customCount} custom pattern${customCount !== 1 ? 's' : ''} requested`);
+                      if (judgeCount > 0) parts.push(`${judgeCount} judge-assigned`);
+                      subtitle = parts.length > 0 ? parts.join(' · ') : '0 patterns assigned';
                     }
                     
                     const handleDisciplineClick = () => {
@@ -1454,8 +1494,13 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                     groups.forEach(group => {
                       const existing = newSelections[discipline.id][group.id] || {};
                       if (type) {
+                        // Custom Pattern / Judge Assigned are mutually exclusive with a
+                        // standard pattern. Drop any previously selected standard pattern so
+                        // the group isn't left in a conflicting state (counted as "assigned"
+                        // while custom, and resurfacing when the user toggles the mode off).
+                        const { patternId: _pid, patternName: _pn, version: _ver, maneuversRange: _mr, scoresheetData: _ssd, patternFiles: _pf, patternNumber: _pnum, isOriginalPattern: _iop, ...rest } = existing;
                         newSelections[discipline.id][group.id] = {
-                          ...existing,
+                          ...rest,
                           type,
                           ...(type === 'judgeAssigned' && { judgeName: existing.judgeName || firstGroupSelection?.judgeName || '' }),
                           ...(type === 'customRequest' && { customPatternRequested: true, requestedFromName: existing.requestedFromName || '', requestedFromEmail: existing.requestedFromEmail || '', requestNotes: existing.requestNotes || '', requestStatus: existing.requestStatus || 'requested' }),
@@ -1704,6 +1749,9 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                         {(() => {
                           const groupSelections = (isHubMode ? groups.filter(g => !g._hubExtra) : groups).map((group) => {
                             const selection = getPatternSelection(discipline.id, group.id);
+                            // Don't show a standard-pattern badge when this group is set to
+                            // Custom Pattern or Judge Assigned — those have their own badges.
+                            if (selection?.type) return null;
                             if (!selection?.patternId && !selection?.patternName) return null;
 
                             const patternName = selection.patternName || '';
@@ -1749,7 +1797,7 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                             className={cn("h-7 text-xs", disciplineAssignType === 'judgeAssigned' && "bg-amber-600 hover:bg-amber-700")}
                             onClick={() => setDisciplineAssignType(disciplineAssignType === 'judgeAssigned' ? null : 'judgeAssigned')}
                           >
-                            {disciplineAssignType === 'judgeAssigned' ? `Judge: ${firstGroupSelection?.judgeName || 'TBD'}` : 'Assign Judge'}
+                            {disciplineAssignType === 'judgeAssigned' ? `Judge: ${firstGroupSelection?.judgeName || 'TBD'}` : 'Judge Picks Pattern'}
                           </Button>
 
                           <Button
@@ -1845,67 +1893,48 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                                   />
                                 </div>
 
-                                {/* Custom Pattern Upload — applies to all groups */}
-                                <div>
-                                  <Label className="text-xs text-muted-foreground mb-1 block">Upload Custom Pattern</Label>
-                                  {firstGroupSelection?.uploadedFileUrl ? (
-                                    <div className="border rounded-lg overflow-hidden bg-white dark:bg-slate-900">
-                                      {firstGroupSelection.uploadedFileType?.startsWith('image/') ? (
-                                        <img src={firstGroupSelection.uploadedFileUrl} alt="Custom pattern" className="w-full max-h-48 object-contain bg-slate-50 dark:bg-slate-800" />
-                                      ) : (
-                                        <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800">
-                                          <FileText className="h-8 w-8 text-red-500 flex-shrink-0" />
-                                          <div className="overflow-hidden">
-                                            <p className="text-sm font-medium truncate">{firstGroupSelection.uploadedFileName}</p>
-                                            <p className="text-xs text-muted-foreground">PDF Document</p>
-                                          </div>
-                                        </div>
-                                      )}
-                                      <div className="flex items-center justify-between p-2 border-t">
-                                        <div className="flex items-center gap-1.5 min-w-0">
-                                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs flex-shrink-0">Uploaded</Badge>
-                                          <span className="text-xs text-muted-foreground truncate">{firstGroupSelection.uploadedFileName}</span>
-                                        </div>
-                                        {!isReadOnly && groups.length > 0 && (
-                                          <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
-                                            onClick={() => handleRemoveCustomPatternUpload(discipline.id, groups[0].id)}
-                                          />
+                                {/* Send Request action + status */}
+                                {(() => {
+                                  const reqStatus = firstGroupSelection?.requestStatus;
+                                  const isSent = reqStatus === 'email_sent';
+                                  const sentAt = firstGroupSelection?.requestSentAt;
+                                  const canSend = !!firstGroupSelection?.requestedFromName?.trim() && !!firstGroupSelection?.requestedFromEmail?.trim();
+                                  const isSending = sendingRequestId === discipline.id;
+                                  return (
+                                    <div className="flex items-center gap-3 flex-wrap pt-1">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        className="h-8 bg-purple-600 hover:bg-purple-700 text-white"
+                                        disabled={isReadOnly || isSending || !canSend}
+                                        onClick={() => handleSendCustomPatternRequest(discipline)}
+                                      >
+                                        {isSending ? (
+                                          <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Sending…</>
+                                        ) : isSent ? (
+                                          <><CheckCircle2 className="w-4 h-4 mr-1.5" /> Resend Request</>
+                                        ) : (
+                                          'Send Request'
                                         )}
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <label
-                                      className={cn(
-                                        "flex flex-col items-center justify-center gap-2 p-4 border-2 border-dashed rounded-lg cursor-pointer transition-colors",
-                                        "border-purple-200 hover:border-purple-400 hover:bg-purple-50/50 dark:hover:bg-purple-950/30",
-                                        isReadOnly && "opacity-50 cursor-not-allowed"
+                                      </Button>
+                                      {isSent ? (
+                                        <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
+                                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                                          Request Sent{sentAt ? ` · ${format(new Date(sentAt), 'MMM d, h:mm a')}` : ''}
+                                        </Badge>
+                                      ) : !canSend ? (
+                                        <span className="text-xs text-muted-foreground">Enter name & email above to send.</span>
+                                      ) : (
+                                        <span className="text-xs text-muted-foreground">Not yet sent.</span>
                                       )}
-                                    >
-                                      <UploadCloud className="h-6 w-6 text-purple-400" />
-                                      <span className="text-xs text-purple-600">Drop or click to upload PDF, JPG, or PNG</span>
-                                      <input
-                                        type="file"
-                                        className="hidden"
-                                        accept=".pdf,.jpg,.jpeg,.png"
-                                        disabled={isReadOnly}
-                                        onChange={(e) => {
-                                          const file = e.target.files?.[0];
-                                          if (file && groups.length > 0) handleCustomPatternUpload(file, discipline.id, groups[0].id);
-                                          e.target.value = '';
-                                        }}
-                                      />
-                                    </label>
-                                  )}
-                                </div>
+                                    </div>
+                                  );
+                                })()}
 
-                                {!firstGroupSelection?.uploadedFileUrl && (
-                                  <p className="text-xs text-purple-700 dark:text-purple-400">
-                                    A custom pattern will be assigned later. No standard pattern will be selected.
-                                  </p>
-                                )}
+                                {/* Custom patterns are uploaded per group below — see each group's upload box */}
+                                <p className="text-xs text-purple-700 dark:text-purple-400">
+                                  Upload a custom pattern for each group below. A custom pattern will be assigned per group — no standard pattern will be selected.
+                                </p>
                               </div>
                             )}
                           </div>
@@ -2360,6 +2389,72 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                                     </div>
                                     
                                         {/* Pattern preview is handled by PatternBadgeWithHover (eye icon hover) */}
+                                  </div>
+                                )}
+
+                                {/* Per-group Custom Pattern Upload — each group gets its own custom pattern */}
+                                {!isScoresheetOnly && currentSelection?.type === 'customRequest' && (
+                                  <div className="space-y-2">
+                                    <Label className="text-sm text-muted-foreground">
+                                      Upload Custom Pattern{!isSingleGroup ? ` for ${group.name}` : ''}
+                                    </Label>
+                                    {currentSelection?.uploadedFileUrl ? (
+                                      <div className="border rounded-lg overflow-hidden bg-white dark:bg-slate-900">
+                                        {currentSelection.uploadedFileType?.startsWith('image/') ? (
+                                          <img src={currentSelection.uploadedFileUrl} alt="Custom pattern" className="w-full max-h-48 object-contain bg-slate-50 dark:bg-slate-800" />
+                                        ) : (
+                                          <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800">
+                                            <FileText className="h-8 w-8 text-red-500 flex-shrink-0" />
+                                            <div className="overflow-hidden">
+                                              <p className="text-sm font-medium truncate">{currentSelection.uploadedFileName}</p>
+                                              <p className="text-xs text-muted-foreground">PDF Document</p>
+                                            </div>
+                                          </div>
+                                        )}
+                                        <div className="flex items-center justify-between p-2 border-t">
+                                          <div className="flex items-center gap-1.5 min-w-0">
+                                            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs flex-shrink-0">Uploaded</Badge>
+                                            <span className="text-xs text-muted-foreground truncate">{currentSelection.uploadedFileName}</span>
+                                          </div>
+                                          {!isReadOnly && (
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
+                                              onClick={() => handleRemoveCustomPatternUpload(discipline.id, group.id)}
+                                            >
+                                              <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <label
+                                        className={cn(
+                                          "flex flex-col items-center justify-center gap-2 p-4 border-2 border-dashed rounded-lg cursor-pointer transition-colors",
+                                          "border-purple-200 hover:border-purple-400 hover:bg-purple-50/50 dark:hover:bg-purple-950/30",
+                                          (isReadOnly || uploadingCustomPattern === `${discipline.id}-${group.id}`) && "opacity-50 cursor-not-allowed"
+                                        )}
+                                      >
+                                        {uploadingCustomPattern === `${discipline.id}-${group.id}` ? (
+                                          <Loader2 className="h-6 w-6 text-purple-400 animate-spin" />
+                                        ) : (
+                                          <UploadCloud className="h-6 w-6 text-purple-400" />
+                                        )}
+                                        <span className="text-xs text-purple-600">Drop or click to upload PDF, JPG, or PNG</span>
+                                        <input
+                                          type="file"
+                                          className="hidden"
+                                          accept=".pdf,.jpg,.jpeg,.png"
+                                          disabled={isReadOnly || uploadingCustomPattern === `${discipline.id}-${group.id}`}
+                                          onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (file) handleCustomPatternUpload(file, discipline.id, group.id);
+                                            e.target.value = '';
+                                          }}
+                                        />
+                                      </label>
+                                    )}
                                   </div>
                                 )}
                               </div>
