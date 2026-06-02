@@ -52,16 +52,18 @@ const ShowDashboardPage = () => {
   const fetchShow = useCallback(async () => {
     if (!showId) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from('ep_shows')
-      .select('*')
-      .eq('id', showId)
-      .single();
+    const { data, error } = await supabase.rpc('get_horse_show_by_id', { p_show_id: showId });
 
     if (error) {
       toast({ title: 'Error fetching show data', description: error.message, variant: 'destructive' });
     } else {
-      setShow(data);
+      const row = data?.[0];
+      setShow(row ? {
+        ...row,
+        name: row.project_name || 'Untitled Show',
+        start_date: row.project_data?.startDate || null,
+        end_date: row.project_data?.endDate || null,
+      } : null);
     }
     setLoading(false);
   }, [showId, toast]);
@@ -109,7 +111,9 @@ const ShowDashboardPage = () => {
               <div>
                 <h1 className="text-4xl font-extrabold tracking-tight">{show.name}</h1>
                 <p className="text-lg text-muted-foreground">
-                  {format(new Date(show.start_date), 'PPP')} - {format(new Date(show.end_date), 'PPP')}
+                  {show.start_date && show.end_date
+                    ? `${format(new Date(show.start_date), 'PPP')} - ${format(new Date(show.end_date), 'PPP')}`
+                    : 'Dates not set'}
                 </p>
               </div>
               <Button asChild variant="outline">

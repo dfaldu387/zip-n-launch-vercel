@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import AdminBackButton from '@/components/admin/AdminBackButton';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Edit, Trash2, Eye, PlusCircle } from 'lucide-react';
+import { Loader2, Edit, Trash2, PlusCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import Navigation from '@/components/Navigation';
 import {
@@ -22,77 +22,62 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+const PAGE_SIZE = 10;
+
 const AdminShowManagementPage = () => {
   const [shows, setShows] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showToDelete, setShowToDelete] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const fetchShowsAndCreators = async () => {
-      setIsLoading(true);
-      const { data: showsData, error: showsError } = await supabase
-        .from('ep_shows')
-        .select('*')
-        .order('created_at', { ascending: false });
+  const totalPages = Math.max(1, Math.ceil(shows.length / PAGE_SIZE));
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const paginatedShows = shows.slice(pageStart, pageStart + PAGE_SIZE);
 
-      if (showsError) {
+  // Keep the current page valid if the list shrinks (e.g. after a delete).
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  useEffect(() => {
+    const fetchShows = async () => {
+      setIsLoading(true);
+      const { data, error } = await supabase.rpc('get_all_horse_shows');
+
+      if (error) {
         toast({
           title: 'Error fetching shows',
-          description: showsError.message,
+          description: error.message,
           variant: 'destructive',
         });
+        setShows([]);
         setIsLoading(false);
         return;
       }
 
-      if (showsData && showsData.length > 0) {
-        const creatorIds = [...new Set(showsData.map(show => show.created_by).filter(id => id))];
-        
-        let creatorsMap = {};
-        if (creatorIds.length > 0) {
-            const { data: profilesData, error: profilesError } = await supabase
-                .from('profiles')
-                .select('id, full_name, email')
-                .in('id', creatorIds);
-
-            if (profilesError) {
-                toast({
-                    title: 'Error fetching creators',
-                    description: profilesError.message,
-                    variant: 'destructive',
-                });
-            } else {
-                creatorsMap = profilesData.reduce((acc, profile) => {
-                    acc[profile.id] = profile;
-                    return acc;
-                }, {});
-            }
-        }
-
-        const transformedData = showsData.map(show => {
-            const creator = creatorsMap[show.created_by];
-            return {
-                ...show,
-                user: creator ? { full_name: creator.full_name, email: creator.email } : { full_name: 'N/A', email: '' }
-            };
-        });
-        setShows(transformedData);
-      } else {
-        setShows([]);
-      }
-
+      const transformedData = (data || []).map(show => ({
+        ...show,
+        name: show.project_name || 'Untitled Show',
+        start_date: show.project_data?.startDate || null,
+        end_date: show.project_data?.endDate || null,
+        user: {
+          full_name: show.creator_name || 'N/A',
+          email: show.creator_email || '',
+        },
+      }));
+      setShows(transformedData);
       setIsLoading(false);
     };
 
-    fetchShowsAndCreators();
+    fetchShows();
   }, [toast]);
 
   const handleDeleteShow = async () => {
     if (!showToDelete) return;
 
-    const { error } = await supabase.from('ep_shows').delete().eq('id', showToDelete.id);
+    const { error } = await supabase.from('projects').delete().eq('id', showToDelete.id);
 
     if (error) {
       toast({
@@ -165,7 +150,7 @@ const AdminShowManagementPage = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {shows.map((show) => (
+                      {paginatedShows.map((show) => (
                         <TableRow key={show.id}>
                           <TableCell className="font-medium">{show.name}</TableCell>
                           <TableCell>
@@ -178,17 +163,14 @@ const AdminShowManagementPage = () => {
                               : 'Not set'}
                           </TableCell>
                           <TableCell>
-                            <Badge variant={show.meta?.status === 'published' ? 'default' : 'secondary'}>
-                              {show.meta?.status || 'Draft'}
+                            <Badge variant={show.status === 'published' ? 'default' : 'secondary'}>
+                              {show.status || 'Draft'}
                             </Badge>
                           </TableCell>
                           <TableCell>{format(new Date(show.created_at), 'MMM d, yyyy')}</TableCell>
                           <TableCell className="text-right">
                             <Button variant="ghost" size="icon" onClick={() => navigate(`/horse-show-manager/edit/${show.id}`)}>
                               <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => navigate(`/horse-show-manager/show-dashboard/${show.id}`)}>
-                              <Eye className="h-4 w-4" />
                             </Button>
                             <Button variant="ghost" size="icon" className="text-destructive" onClick={() => setShowToDelete(show)}>
                               <Trash2 className="h-4 w-4" />
@@ -198,6 +180,36 @@ const AdminShowManagementPage = () => {
                       ))}
                     </TableBody>
                   </Table>
+                  {shows.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between border-t px-4 py-3">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, shows.length)} of {shows.length} shows
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                          disabled={currentPage === 1}
+                        >
+                          <ChevronLeft className="h-4 w-4 mr-1" />
+                          Previous
+                        </Button>
+                        <span className="text-sm text-muted-foreground">
+                          Page {currentPage} of {totalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                          disabled={currentPage === totalPages}
+                        >
+                          Next
+                          <ChevronRight className="h-4 w-4 ml-1" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>

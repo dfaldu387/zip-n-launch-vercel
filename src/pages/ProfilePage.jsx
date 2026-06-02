@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/components/ui/use-toast';
 import { fetchAssociations } from '@/lib/associationsData';
+import { supabase } from '@/lib/supabaseClient';
 
 // US States list
 const US_STATES = [
@@ -89,7 +90,8 @@ const ProfilePage = () => {
     const [mobile, setMobile] = useState('');
 
     // Exhibitor Profile
-    const [profilePicture, setProfilePicture] = useState(null);
+    const [profilePicture, setProfilePicture] = useState(null); // preview URL (existing avatar_url or new base64)
+    const [profilePictureFile, setProfilePictureFile] = useState(null); // new file to upload, null if unchanged
     const [state, setState] = useState('');
     const [primaryDisciplines, setPrimaryDisciplines] = useState([]);
     const [levelDesignations, setLevelDesignations] = useState([]);
@@ -130,7 +132,8 @@ const ProfilePage = () => {
             setMobile(meta.mobile || '');
             
             // Profile
-            // setProfilePicture(meta.profilePicture || null); // Ignoring for now as it's just base64 usually
+            setProfilePicture(meta.avatar_url || null);
+            setProfilePictureFile(null);
             setState(meta.state || '');
             setPrimaryDisciplines(meta.primaryDisciplines || []);
             setLevelDesignations(meta.levelDesignations || []);
@@ -154,12 +157,27 @@ const ProfilePage = () => {
     const handleProfilePictureChange = (e) => {
         const file = e.target.files?.[0];
         if (file) {
+            setProfilePictureFile(file);
             const reader = new FileReader();
             reader.onloadend = () => {
                 setProfilePicture(reader.result);
             };
             reader.readAsDataURL(file);
         }
+    };
+
+    // Uploads a newly chosen avatar to storage and returns its public URL.
+    // Returns undefined when no new file was selected (avatar unchanged).
+    const uploadAvatarIfNeeded = async () => {
+        if (!profilePictureFile) return undefined;
+        const fileExt = profilePictureFile.name.split('.').pop();
+        const filePath = `${user.id}/avatars/${Date.now()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage
+            .from('pattern_files')
+            .upload(filePath, profilePictureFile, { upsert: true });
+        if (uploadError) throw new Error(uploadError.message);
+        const { data: { publicUrl } } = supabase.storage.from('pattern_files').getPublicUrl(filePath);
+        return publicUrl;
     };
 
     const toggleDiscipline = (disc) => {
@@ -249,16 +267,28 @@ const ProfilePage = () => {
         }
     };
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-        
+    // Builds the metadata payload, uploading a new avatar first if one was chosen.
+    // Returns null if the avatar upload failed (caller should abort).
+    const buildMetadata = async () => {
+        let avatarUrl;
+        try {
+            avatarUrl = await uploadAvatarIfNeeded();
+        } catch (err) {
+            toast({
+                variant: 'destructive',
+                title: 'Image Upload Failed',
+                description: err.message || 'Could not upload your profile picture. Please try again.',
+            });
+            return null;
+        }
+
         const metadata = {
-            firstName: firstName,
-            lastName: lastName,
+            ...user.user_metadata,
+            firstName,
+            lastName,
             first_name: firstName,
             last_name: lastName,
-            mobile: mobile,
+            mobile,
             full_name: `${firstName} ${lastName}`.trim(),
             state,
             primaryDisciplines,
@@ -267,24 +297,42 @@ const ProfilePage = () => {
             horses: horses.filter(h => h.name)
         };
 
-        if (profilePicture) {
-            // metadata.profilePicture = profilePicture; // Optional: save if needed
+        if (avatarUrl !== undefined) {
+            metadata.avatar_url = avatarUrl; // new photo uploaded
+        } else if (profilePicture === null) {
+            metadata.avatar_url = null; // photo removed
+        }
+
+        return metadata;
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setIsSubmitting(true);
+
+        const metadata = await buildMetadata();
+        if (!metadata) {
+            setIsSubmitting(false);
+            return false;
         }
 
         await updateUserProfile(metadata);
+        setProfilePictureFile(null);
         setIsSubmitting(false);
         return true;
     };
 
     const handleSaveAndExit = async () => {
         setIsSubmitting(true);
-        const metadata = {
-            firstName, lastName, first_name: firstName, last_name: lastName,
-            mobile, full_name: `${firstName} ${lastName}`.trim(),
-            state, primaryDisciplines, levelDesignations, associationMemberships,
-            horses: horses.filter(h => h.name)
-        };
+
+        const metadata = await buildMetadata();
+        if (!metadata) {
+            setIsSubmitting(false);
+            return;
+        }
+
         await updateUserProfile(metadata);
+        setProfilePictureFile(null);
         setIsSubmitting(false);
         navigate('/');
     };
@@ -399,7 +447,7 @@ const ProfilePage = () => {
                                                             type="button" 
                                                             variant="ghost" 
                                                             size="sm"
-                                                            onClick={() => setProfilePicture(null)}
+                                                            onClick={() => { setProfilePicture(null); setProfilePictureFile(null); }}
                                                         >
                                                             Remove
                                                         </Button>

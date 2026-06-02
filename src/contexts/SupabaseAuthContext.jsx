@@ -252,10 +252,24 @@ export const AuthProvider = ({ children }) => {
         description: error.message,
       });
     } else {
+      // Keep the profiles table (canonical store, read by admin views & signup trigger) in sync.
+      const profileUpdates = {};
+      if (metadata.full_name !== undefined) profileUpdates.full_name = metadata.full_name;
+      if (metadata.avatar_url !== undefined) profileUpdates.avatar_url = metadata.avatar_url;
+      if (Object.keys(profileUpdates).length > 0) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update(profileUpdates)
+          .eq('id', data.user.id);
+        if (profileError) {
+          console.error('Error syncing profiles table:', profileError);
+        }
+      }
+
       // Also update the customers table
       const { error: customerError } = await supabase
         .from('customers')
-        .update({ 
+        .update({
           full_name: metadata.full_name,
           last_name: metadata.last_name,
         })
