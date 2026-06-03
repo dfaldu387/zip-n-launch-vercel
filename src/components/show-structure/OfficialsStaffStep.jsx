@@ -57,21 +57,24 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
         }
         
         const expenseType = expenseTypes.find(e => e.id === expenseId);
-        
+
         if (field === 'reimbursed') {
-            newExpenses[expenseId].reimbursed = value;
+            // Turning the expense off: remove it and stop. Don't fall through to the
+            // per-day/mileage recalculation below, which would read the deleted object.
             if (!value) {
                 delete newExpenses[expenseId];
-            } else {
-                if (expenseType?.hasDates || expenseType?.isPerDay) {
-                    if (member.employment_start_date) {
-                        const startDate = subDays(new Date(member.employment_start_date), 1);
-                        newExpenses[expenseId].start_date = startDate.toISOString();
-                    }
-                    if (member.employment_end_date) {
-                        const endDate = addDays(new Date(member.employment_end_date), 1);
-                        newExpenses[expenseId].end_date = endDate.toISOString();
-                    }
+                onUpdate(member.id, 'reimbursable_expenses', newExpenses);
+                return;
+            }
+            newExpenses[expenseId].reimbursed = value;
+            if (expenseType?.hasDates || expenseType?.isPerDay) {
+                if (member.employment_start_date) {
+                    const startDate = subDays(new Date(member.employment_start_date), 1);
+                    newExpenses[expenseId].start_date = startDate.toISOString();
+                }
+                if (member.employment_end_date) {
+                    const endDate = addDays(new Date(member.employment_end_date), 1);
+                    newExpenses[expenseId].end_date = endDate.toISOString();
                 }
             }
         } else {
@@ -338,7 +341,7 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                                                                     </Button>
                                                                 </PopoverTrigger>
                                                                 <PopoverContent className="w-auto p-0">
-                                                                    <CalendarComponent mode="single" selected={currentExpense?.start_date ? new Date(currentExpense.start_date) : null} onSelect={(date) => handleExpenseDateChange(expense.id, 'start_date', date)} initialFocus />
+                                                                    <CalendarComponent mode="single" selected={currentExpense?.start_date ? new Date(currentExpense.start_date) : null} onSelect={(date) => handleExpenseDateChange(expense.id, 'start_date', date)} disabled={currentExpense?.end_date ? { after: new Date(currentExpense.end_date) } : undefined} initialFocus />
                                                                 </PopoverContent>
                                                             </Popover>
                                                         </div>
@@ -352,10 +355,13 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                                                                     </Button>
                                                                 </PopoverTrigger>
                                                                 <PopoverContent className="w-auto p-0">
-                                                                    <CalendarComponent mode="single" selected={currentExpense?.end_date ? new Date(currentExpense.end_date) : null} onSelect={(date) => handleExpenseDateChange(expense.id, 'end_date', date)} initialFocus />
+                                                                    <CalendarComponent mode="single" selected={currentExpense?.end_date ? new Date(currentExpense.end_date) : null} onSelect={(date) => handleExpenseDateChange(expense.id, 'end_date', date)} disabled={currentExpense?.start_date ? { before: new Date(currentExpense.start_date) } : undefined} initialFocus />
                                                                 </PopoverContent>
                                                             </Popover>
                                                         </div>
+                                                        {currentExpense?.start_date && currentExpense?.end_date && new Date(currentExpense.start_date) > new Date(currentExpense.end_date) && (
+                                                            <p className="col-span-2 text-xs text-destructive">End date must be on or after the start date.</p>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>

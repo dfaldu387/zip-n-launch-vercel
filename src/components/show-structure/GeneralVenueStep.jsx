@@ -151,25 +151,14 @@ export const GeneralVenueStep = ({ formData, setFormData }) => {
                         <div className="space-y-4 pt-2">
                              <Label>Association Details</Label>
                             {selectedAssociations.map(assocId => (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 items-center" key={assocId}>
-                                    <div className="space-y-1.5">
-                                        <Label htmlFor={`sanctionId-${assocId}`}>{getAssociationName(assocId)} Sanction ID</Label>
-                                        <Input
-                                            id={`sanctionId-${assocId}`}
-                                            value={formData.showDetails?.general?.sanctionIds?.[assocId] || ''}
-                                            onChange={e => handleSanctionIdChange(assocId, e.target.value)}
-                                            placeholder={`Enter ${getAssociationName(assocId)} ID`}
-                                        />
-                                    </div>
-                                    <div className="space-y-1.5">
-                                        <Label>{getAssociationName(assocId)} Logo</Label>
-                                        <LogoUploader
-                                            fieldId={`association_${assocId}`}
-                                            currentLogoUrl={formData.showDetails?.general?.associationLogos?.[assocId] || ''}
-                                            onUploadComplete={(url) => handleAssociationLogoUpload(assocId, url)}
-                                            showId={showId}
-                                        />
-                                    </div>
+                                <div className="space-y-1.5" key={assocId}>
+                                    <Label htmlFor={`sanctionId-${assocId}`}>{getAssociationName(assocId)} Sanction ID</Label>
+                                    <Input
+                                        id={`sanctionId-${assocId}`}
+                                        value={formData.showDetails?.general?.sanctionIds?.[assocId] || ''}
+                                        onChange={e => handleSanctionIdChange(assocId, e.target.value)}
+                                        placeholder={`Enter ${getAssociationName(assocId)} ID`}
+                                    />
                                 </div>
                             ))}
                         </div>
@@ -205,12 +194,15 @@ export const GeneralVenueStep = ({ formData, setFormData }) => {
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-2 items-center">
                                 <Input className="md:col-span-1" value={formData.showDetails?.general?.eventHost || ''} onChange={(e) => handleDetailChange('general', 'eventHost', e.target.value)} placeholder="e.g., State QHA" />
                                 <Input className="md:col-span-1" type="email" value={formData.showDetails?.general?.eventHostEmail || ''} onChange={(e) => handleDetailChange('general', 'eventHostEmail', e.target.value)} placeholder="Host's Email" />
-                                <LogoUploader
-                                    fieldId="eventHost"
-                                    currentLogoUrl={formData.showDetails?.general?.eventHostLogo}
-                                    onUploadComplete={(url) => handleLogoUpload('general', 'eventHostLogo', url)}
-                                    showId={showId}
-                                />
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs text-muted-foreground">Event Host Logo</Label>
+                                    <LogoUploader
+                                        fieldId="eventHost"
+                                        currentLogoUrl={formData.showDetails?.general?.eventHostLogo}
+                                        onUploadComplete={(url) => handleLogoUpload('general', 'eventHostLogo', url)}
+                                        showId={showId}
+                                    />
+                                </div>
                             </div>
                         </div>
 
@@ -225,15 +217,24 @@ export const GeneralVenueStep = ({ formData, setFormData }) => {
                     <div className="space-y-4">
                         <div>
                             <Label>Venue</Label>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-2 items-center">
-                                <Input className="md:col-span-1" value={formData.showDetails?.venue?.facilityName || ''} onChange={(e) => handleDetailChange('venue', 'facilityName', e.target.value)} placeholder="Venue Name" />
-                                <Input className="md:col-span-1" type="url" value={formData.showDetails?.venue?.venueWebsite || ''} onChange={(e) => handleDetailChange('venue', 'venueWebsite', e.target.value)} placeholder="Venue Website" />
-                                <LogoUploader
-                                    fieldId="venue"
-                                    currentLogoUrl={formData.showDetails?.venue?.venueLogo}
-                                    onUploadComplete={(url) => handleLogoUpload('venue', 'venueLogo', url)}
-                                    showId={showId}
-                                />
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-2 items-end">
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs text-muted-foreground">Venue Name</Label>
+                                    <Input value={formData.showDetails?.venue?.facilityName || ''} onChange={(e) => handleDetailChange('venue', 'facilityName', e.target.value)} placeholder="Venue Name" />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs text-muted-foreground">Venue Website</Label>
+                                    <Input type="url" value={formData.showDetails?.venue?.venueWebsite || ''} onChange={(e) => handleDetailChange('venue', 'venueWebsite', e.target.value)} placeholder="Venue Website" />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs text-muted-foreground">Venue Logo</Label>
+                                    <LogoUploader
+                                        fieldId="venue"
+                                        currentLogoUrl={formData.showDetails?.venue?.venueLogo}
+                                        onUploadComplete={(url) => handleLogoUpload('venue', 'venueLogo', url)}
+                                        showId={showId}
+                                    />
+                                </div>
                             </div>
                         </div>
                         

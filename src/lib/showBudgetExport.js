@@ -16,76 +16,17 @@ const UNIT_LABELS = {
   per_person: 'Per Person',
 };
 
-const PAYMENT_TIMING_LABELS = {
-  pre_entry: 'Pre-Entry / Reservation',
-  at_check_in: 'At Check-In',
-  settlement: 'Post-Show / Settlement',
-  custom_timing: 'Custom Timing',
-};
-
-const FEE_UNIT_LABELS = {
-  flat: 'Flat Fee',
-  per_horse: 'Per Horse',
-  per_night: 'Per Night',
-  per_bag: 'Per Bag',
-  per_class: 'Per Class',
-};
-
-const getFeeUnitLabel = (fee) => {
-  if (fee.unit_type === 'custom' && fee.custom_unit_label) return fee.custom_unit_label;
-  return FEE_UNIT_LABELS[fee.unit_type] || FEE_UNIT_LABELS[fee.type] || 'Flat Fee';
-};
-
 /**
- * Export show budget (fees + expenses + profit/loss) as an Excel file.
+ * Export show expenses (categorized expenses + class awards) as an Excel file.
+ * Income/fees and profit/loss are intentionally excluded.
  */
 export const exportShowBudgetToExcel = (formData) => {
-  const fees = formData.fees || [];
   const expenses = formData.showExpenses || [];
   const showName = formData.showName || 'Untitled Show';
 
   const wb = XLSX.utils.book_new();
 
-  // --- Sheet 1: Income (Fees + Sponsorship) ---
-  const sponsorshipItems = formData.sponsorshipRevenue || [];
-
-  const emptyFeeRow = { Name: '', 'Unit Type': '', Amount: '', 'Payment Timing': '', 'Per Judge': '', Notes: '' };
-
-  const feeRows = fees.map(fee => ({
-    'Name': fee.name || '',
-    'Unit Type': getFeeUnitLabel(fee),
-    'Amount': parseFloat(fee.amount) || 0,
-    'Payment Timing': PAYMENT_TIMING_LABELS[fee.payment_timing] || fee.payment_timing || '',
-    'Per Judge': fee.apply_per_judge ? 'Yes' : 'No',
-    'Notes': fee.notes || '',
-  }));
-  const totalFeeIncome = feeRows.reduce((sum, r) => sum + r['Amount'], 0);
-  feeRows.push({ ...emptyFeeRow, Name: 'SUBTOTAL FEE REVENUE', Amount: totalFeeIncome });
-
-  feeRows.push({ ...emptyFeeRow });
-  for (const sponsor of sponsorshipItems.filter(s => s.name)) {
-    feeRows.push({
-      ...emptyFeeRow,
-      Name: sponsor.name,
-      'Unit Type': 'Sponsorship',
-      Amount: parseFloat(sponsor.amount) || 0,
-      Notes: sponsor.notes || '',
-    });
-  }
-  const totalSponsorship = sponsorshipItems.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
-  feeRows.push({ ...emptyFeeRow, Name: 'SUBTOTAL SPONSORSHIP', Amount: totalSponsorship });
-
-  const totalIncome = totalFeeIncome + totalSponsorship;
-  feeRows.push({ ...emptyFeeRow });
-  feeRows.push({ ...emptyFeeRow, Name: 'TOTAL INCOME', Amount: totalIncome });
-
-  const wsFees = XLSX.utils.json_to_sheet(feeRows);
-  wsFees['!cols'] = [
-    { wch: 28 }, { wch: 14 }, { wch: 12 }, { wch: 24 }, { wch: 10 }, { wch: 30 },
-  ];
-  XLSX.utils.book_append_sheet(wb, wsFees, 'Income');
-
-  // --- Sheet 2: Expenses (grouped by category hierarchy) ---
+  // --- Sheet 1: Expenses (grouped by category hierarchy) ---
   const awardExpenses = formData.awardExpenses || [];
   const classAwards = formData.classAwards || {};
   const expenseRows = [];
@@ -184,7 +125,7 @@ export const exportShowBudgetToExcel = (formData) => {
   ];
   XLSX.utils.book_append_sheet(wb, wsExpenses, 'Expenses');
 
-  // --- Sheet 3: Class Awards ---
+  // --- Sheet 2: Class Awards ---
   const classAwardRows = [];
   const disciplines = formData.disciplines || [];
   for (const disc of disciplines) {
@@ -216,23 +157,8 @@ export const exportShowBudgetToExcel = (formData) => {
     XLSX.utils.book_append_sheet(wb, wsClassAwards, 'Class Awards');
   }
 
-  // --- Sheet 4: Budget Summary ---
-  const summaryRows = [
-    { 'Item': 'Fee Revenue', 'Amount': totalFeeIncome },
-    { 'Item': 'Sponsorship Revenue', 'Amount': totalSponsorship },
-    { 'Item': 'Total Revenue', 'Amount': totalIncome },
-    { 'Item': '', 'Amount': '' },
-    { 'Item': 'Total Expenses', 'Amount': totalExpenses },
-    { 'Item': '', 'Amount': '' },
-    { 'Item': 'Projected Profit / Loss', 'Amount': totalIncome - totalExpenses },
-  ];
-
-  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
-  wsSummary['!cols'] = [{ wch: 32 }, { wch: 14 }];
-  XLSX.utils.book_append_sheet(wb, wsSummary, 'Budget Summary');
-
   // Download
-  const fileName = `${showName.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'Budget'} - Show Budget.xlsx`;
+  const fileName = `${showName.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'Expenses'} - Show Expenses.xlsx`;
   XLSX.writeFile(wb, fileName);
   return true;
 };
