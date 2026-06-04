@@ -49,6 +49,8 @@ import CustomerAssetLibraryPage from '@/pages/CustomerAssetLibraryPage';
 import CustomerPortalPage from '@/pages/CustomerPortalPage';
 import ArchivePatternsPage from '@/pages/ArchivePatternsPage';
 import PatternUploadLandingPage from '@/pages/PatternUploadLandingPage';
+import PatternUploadRequestPage from '@/pages/PatternUploadRequestPage';
+import PatternJudgeRequestPage from '@/pages/PatternJudgeRequestPage';
 import HorseShowManagerPage from '@/pages/HorseShowManagerPage';
 import CreateShowPage from '@/pages/CreateShowPage';
 import ShowStructurePage from '@/pages/ShowStructurePage';
@@ -160,6 +162,8 @@ function App() {
                   <Route path="/not-authorized" element={<NotAuthorizedPage />} />
                   <Route path="/book-stalls" element={<PublicShowsListPage />} />
                   <Route path="/show/:showId" element={<PublicShowPage />} />
+                  <Route path="/upload-request/:token" element={<PatternUploadRequestPage />} />
+                  <Route path="/judge-request/:token" element={<PatternJudgeRequestPage />} />
                   <Route path="/show/:showId/book" element={<PublicBookingPage />} />
                   <Route path="/booking/:bookingId" element={<BookingStatusPage />} />
                   <Route path="/find-booking" element={<FindBookingPage />} />

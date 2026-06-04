@@ -1108,10 +1108,12 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     patternId = patternSelection;
                 }
             }
-            // Only treat the class as judge-assigned (placeholder page) when
-            // there's no real pattern to render.
-            const isJudgeAssigned = rawJudgeAssigned && !patternId;
-            const hasNoPattern = !patternId && !isJudgeAssigned && !isCustomRequest;
+            // Only treat the class as judge-assigned (placeholder page) when the
+            // judge has NOT yet responded — i.e. no real pattern picked AND no
+            // file uploaded. Once they pick/upload, render the actual pattern.
+            const hasUploadedFile = !!patternSelection?.uploadedFileUrl;
+            const isJudgeAssigned = rawJudgeAssigned && !patternId && !hasUploadedFile;
+            const hasNoPattern = !patternId && !isJudgeAssigned && !isCustomRequest && !hasUploadedFile;
             console.log(`Extracted patternId for discipline ${disciplineId || discIndex}, group ${groupId || groupIndex}:`, patternSelection, '->', patternId);
             
             // Get competition date - first try divisionDates from divisions in the group, then groupDueDates, then startDate
@@ -1279,8 +1281,8 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 doc.setTextColor(150, 150, 150);
                 doc.text(`Pattern to be selected by Judge: ${patternSelection?.judgeName || 'TBD'}`, pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                 yPos = placeholderY + 40;
-            } else if (isCustomRequest) {
-                // Custom pattern: show uploaded image if available, otherwise placeholder
+            } else if (isCustomRequest || hasUploadedFile) {
+                // Custom pattern OR judge-uploaded pattern: show uploaded image if available, otherwise placeholder
                 if (patternSelection?.uploadedFileUrl && patternSelection.uploadedFileType?.startsWith('image/')) {
                     try {
                         const uploadedBase64 = await fetchImageAsBase64(patternSelection.uploadedFileUrl);
@@ -1556,8 +1558,8 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     doc.setTextColor(150, 150, 150);
                     doc.text(`Pattern to be selected by Judge: ${patternSelection?.judgeName || 'TBD'}`, pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                     yPos = placeholderY + 40;
-                } else if (isCustomRequest) {
-                    // Custom pattern: show uploaded image if available, otherwise placeholder
+                } else if (isCustomRequest || hasUploadedFile) {
+                    // Custom pattern OR judge-uploaded pattern: show uploaded image if available, otherwise placeholder
                     if (patternSelection?.uploadedFileUrl && patternSelection.uploadedFileType?.startsWith('image/')) {
                         try {
                             const uploadedBase64 = await fetchImageAsBase64(patternSelection.uploadedFileUrl);

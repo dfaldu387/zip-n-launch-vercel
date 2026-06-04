@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Calendar as CalendarIcon, User, ChevronDown, ChevronRight, Check, ChevronsUpDown, ShieldCheck, FileText, Palette, Users, UserCog, Crown, Mail, Phone, Pencil, Loader2, Save, Lock, Rocket, Download, Info, CheckCircle2, Image, Paperclip, BookOpen, Home, FolderOpen } from 'lucide-react';
+import { Calendar as CalendarIcon, User, ChevronDown, ChevronRight, Check, ChevronsUpDown, ShieldCheck, FileText, Palette, Users, UserCog, Crown, Mail, Phone, Pencil, Loader2, Save, Lock, Rocket, Download, Info, CheckCircle2, Image, Paperclip, BookOpen, Home, FolderOpen, Send, Gavel, Clock, UploadCloud } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn, parseLocalDate } from '@/lib/utils';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -21,6 +21,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
+import { getPublishReadiness } from '@/lib/patternBookReadiness';
+import { sendCustomPatternRequests, summarizeRequests } from '@/lib/customPatternEmails';
 
 const STATUS_CONFIG = {
   'In progress': { label: 'In Progress', color: 'bg-orange-100 text-orange-800 border-orange-300', dotColor: 'bg-orange-500' },
@@ -737,6 +739,10 @@ const ActionPanel = ({ currentStatus, onStatusChange, isSaving, savingAction, is
     project_data: formData,
   }), [formData]);
 
+  // Publish guardrail: only allow Publish once every group has a pattern assigned.
+  const readiness = useMemo(() => getPublishReadiness(formData), [formData]);
+  const canPublish = readiness.ready;
+
   return (
     <div className="space-y-3">
       <h3 className="text-base font-semibold mb-1">Manage Pattern Book</h3>
@@ -788,7 +794,7 @@ const ActionPanel = ({ currentStatus, onStatusChange, isSaving, savingAction, is
         size="lg"
         className="w-full justify-start text-sm h-12 bg-green-600 hover:bg-green-700 text-white"
         onClick={() => onStatusChange('Final')}
-        disabled={isSaving || isReadOnly || isFinalized}
+        disabled={isSaving || isReadOnly || isFinalized || !canPublish}
       >
         {isSavingFinal ? <Loader2 className="mr-3 h-5 w-5 animate-spin text-white" /> : <Rocket className="mr-3 h-5 w-5" />}
         <div className="text-left">
@@ -796,6 +802,24 @@ const ActionPanel = ({ currentStatus, onStatusChange, isSaving, savingAction, is
           <span className="block text-xs text-green-200">Mark as published — ready for export</span>
         </div>
       </Button>
+
+      {/* Why Publish is blocked: list the groups still missing a pattern. */}
+      {!canPublish && !isFinalized && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 text-xs">
+          <p className="font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+            <Info className="h-3.5 w-3.5" />
+            Assign all patterns before publishing ({readiness.missing.length} left)
+          </p>
+          <ul className="mt-1.5 space-y-0.5 text-amber-700 dark:text-amber-400 max-h-32 overflow-y-auto">
+            {readiness.missing.slice(0, 8).map((m, i) => (
+              <li key={i}>• {m.discipline} — {m.group} <span className="opacity-70">({m.reason})</span></li>
+            ))}
+            {readiness.missing.length > 8 && (
+              <li className="opacity-70">…and {readiness.missing.length - 8} more</li>
+            )}
+          </ul>
+        </div>
+      )}
 
       <hr className="my-2 border-border" />
 
@@ -862,6 +886,148 @@ const LicensingCard = () => (
   </div>
 );
 
+// --- Pattern Requests Panel (Send + Tracking) ---
+const REQUEST_STATUS = {
+  pending: { label: 'Not sent', cls: 'bg-gray-100 text-gray-700 border-gray-200', Icon: Clock },
+  sent:    { label: 'Sent',     cls: 'bg-blue-100 text-blue-800 border-blue-200', Icon: Send },
+  done:    { label: 'Received', cls: 'bg-green-100 text-green-800 border-green-200', Icon: CheckCircle2 },
+};
+
+const PatternRequestsPanel = ({ formData, setFormData, currentStatus }) => {
+  const { toast } = useToast();
+  const [sendingKey, setSendingKey] = useState(null); // 'ALL' | email | null
+  const { recipients, totals } = useMemo(() => summarizeRequests(formData), [formData]);
+  const isPublished = currentStatus === 'Final';
+
+  // Nothing was requested — don't show the panel at all.
+  if (totals.items === 0) return null;
+
+  const doSend = async (onlyEmail, force) => {
+    if (isPublished) return;
+    setSendingKey(onlyEmail || 'ALL');
+    try {
+      const result = await sendCustomPatternRequests(formData, {
+        ...(onlyEmail ? { onlyEmail } : {}),
+        force: !!force,
+      });
+      if (result.patternSelections !== formData.patternSelections) {
+        setFormData(prev => ({ ...prev, patternSelections: result.patternSelections }));
+      }
+      if (result.sent > 0) {
+        toast({ title: 'Requests sent', description: `${result.sent} email${result.sent > 1 ? 's' : ''} sent.` });
+      } else if (result.skipped > 0) {
+        toast({ variant: 'destructive', title: 'Missing contact', description: 'Some requests have no name or email.' });
+      } else {
+        toast({ title: 'Nothing to send', description: 'No pending requests with contact info.' });
+      }
+      if (result.failed > 0) {
+        toast({ variant: 'destructive', title: 'Some failed', description: `${result.failed} email${result.failed > 1 ? 's' : ''} could not be sent.` });
+      }
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'Send failed', description: 'Something went wrong. Please try again.' });
+    } finally {
+      setSendingKey(null);
+    }
+  };
+
+  const outstanding = totals.pending + totals.sent; // not yet completed
+
+  return (
+    <div className="space-y-4 p-4 border rounded-lg">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Send className="h-5 w-5 text-blue-600" />
+            Pattern Requests ({totals.items})
+          </h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Email judges and custom-pattern contacts, then track who has responded.
+          </p>
+        </div>
+        <Button
+          onClick={() => doSend(null, false)}
+          disabled={isPublished || sendingKey !== null || totals.pending === 0}
+          className="bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          {sendingKey === 'ALL' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+          Send All ({totals.pending})
+        </Button>
+      </div>
+
+      {/* Summary counts */}
+      <div className="flex flex-wrap gap-2">
+        <Badge className="bg-gray-100 text-gray-700 border-gray-200"><Clock className="w-3.5 h-3.5 mr-1" />{totals.pending} not sent</Badge>
+        <Badge className="bg-blue-100 text-blue-800 border-blue-200"><Send className="w-3.5 h-3.5 mr-1" />{totals.sent} awaiting</Badge>
+        <Badge className="bg-green-100 text-green-800 border-green-200"><CheckCircle2 className="w-3.5 h-3.5 mr-1" />{totals.done} received</Badge>
+      </div>
+
+      {isPublished && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
+          This book is published — requests can no longer be sent.
+        </p>
+      )}
+
+      {/* Per-recipient rows */}
+      <div className="space-y-3">
+        {recipients.map((r) => {
+          const hasJudge = r.kinds.has('judge');
+          const hasCustom = r.kinds.has('custom');
+          const KindIcon = hasJudge ? Gavel : UploadCloud;
+          const kindLabel = hasJudge && hasCustom ? 'Judge + Custom' : hasJudge ? 'Judge picks' : 'Custom upload';
+          const allDone = r.counts.done === r.counts.total;
+          const anySent = r.counts.sent > 0;
+          const isSending = sendingKey === r.email;
+          return (
+            <div key={r.key} className="border rounded-lg p-3 bg-background/50">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <KindIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="font-semibold">{r.name || 'Unnamed contact'}</span>
+                    <Badge variant="outline" className="text-[10px]">{kindLabel}</Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {r.email || <span className="text-red-500">No email — add it in Step 6</span>}
+                    {r.phone ? ` · ${r.phone}` : ''}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant={anySent ? 'outline' : 'default'}
+                  className="h-8"
+                  disabled={isPublished || !r.canSend || sendingKey !== null || allDone}
+                  onClick={() => doSend(r.email, true)}
+                >
+                  {isSending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+                  {allDone ? 'Done' : anySent ? 'Resend' : 'Send'}
+                </Button>
+              </div>
+
+              {/* Per-item status */}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {r.items.map((it) => {
+                  const cfg = REQUEST_STATUS[it.status] || REQUEST_STATUS.pending;
+                  const StatusIcon = cfg.Icon;
+                  return (
+                    <span key={`${it.disciplineId}:${it.groupId}`} className={`inline-flex items-center gap-1 text-[11px] rounded-full border px-2 py-0.5 ${cfg.cls}`}>
+                      <StatusIcon className="w-3 h-3" />
+                      {it.discipline} · {it.groupName}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Tip: save the project after sending so links stay active and statuses are kept.
+      </p>
+    </div>
+  );
+};
+
 // --- Success Confirmation Dialog ---
 const SuccessConfirmationDialog = ({ open, onClose, onGoHome, onGoToMyProjects, statusLabel }) => (
   <Dialog open={open} onOpenChange={onClose}>
@@ -927,6 +1093,20 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
 
     const handleStatusChange = useCallback(async (newStatus) => {
       if (!createOrUpdateProject) return;
+
+      // Guardrail: never publish a book that still has unassigned patterns.
+      if (newStatus === 'Final') {
+        const { ready, missing } = getPublishReadiness(formData);
+        if (!ready) {
+          toast({
+            title: 'Cannot publish yet',
+            description: `${missing.length} pattern group${missing.length !== 1 ? 's' : ''} still need a pattern assigned.`,
+            variant: 'destructive',
+          });
+          return;
+        }
+      }
+
       setIsSaving(true);
       setSavingAction(newStatus);
       try {
@@ -946,7 +1126,7 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
         setIsSaving(false);
         setSavingAction(null);
       }
-    }, [createOrUpdateProject, toast]);
+    }, [createOrUpdateProject, toast, formData]);
 
     const staffList = useMemo(() => {
         const staff = new Map();
@@ -1294,6 +1474,13 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                         <LicensingCard />
                     </div>
                 </div>
+
+                {/* 2.5 Pattern Requests — Send + Tracking (moved here from Step 6) */}
+                <PatternRequestsPanel
+                    formData={formData}
+                    setFormData={setFormData}
+                    currentStatus={currentStatus}
+                />
 
                 {/* 3. Publication Date - OPTIONAL */}
                 <div className="space-y-3 p-4 border rounded-lg">

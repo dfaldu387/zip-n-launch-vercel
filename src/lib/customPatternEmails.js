@@ -1,6 +1,31 @@
 import { supabase } from '@/lib/supabaseClient';
 
 /**
+ * Builds an opaque, URL-safe token that encodes the project + recipient EMAIL so
+ * a public page (judge-request or upload-request) can resolve every group that
+ * person was asked about — across ALL disciplines, not just one. The token IS
+ * the access capability (scoped link, no login).
+ */
+export function makeRecipientToken(projectId, email) {
+  const raw = `${projectId}:${String(email).trim().toLowerCase()}`;
+  // base64url encode (browser btoa) — strip padding, swap +/ for -_
+  return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Reverse of makeRecipientToken — returns { projectId, email } or null. */
+export function parseRecipientToken(token) {
+  try {
+    const b64 = token.replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(b64);
+    const idx = raw.indexOf(':');
+    if (idx === -1) return null;
+    return { projectId: raw.slice(0, idx), email: raw.slice(idx + 1) };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Formats a start/end date pair (YYYY-MM-DD strings) into a readable range,
  * e.g. "Jun 18 – Jun 20, 2026". Returns '' when dates are missing.
  */
@@ -25,115 +50,260 @@ function formatDateRange(startDate, endDate) {
 }
 
 /**
- * Collects custom pattern requests from patternSelections and sends notification
- * emails via the send-custom-pattern-request edge function.
+ * Walks patternSelections and collects every outstanding pattern request,
+ * grouped by RECIPIENT EMAIL so each person gets exactly one email even when
+ * they appear across multiple disciplines (the "Sissy does 3 disciplines →
+ * one email" rule).
  *
- * @param {object} formData - the builder form data
- * @param {object} [options]
- * @param {string} [options.disciplineId] - when set, only this discipline's
- *        requests are sent (used by the per-request "Send Request" button).
+ * Two kinds of request are collected:
+ *   - kind 'judge'  → discipline set to "Judge Picks Pattern" (type
+ *     'judgeAssigned') with a judgeEmail. The judge will PICK a pattern.
+ *   - kind 'custom' → discipline set to "Custom Pattern" (type 'customRequest')
+ *     with a requestedFromEmail. That person will UPLOAD a pattern.
  *
- * Returns { patternSelections, sent, failed, skipped } where patternSelections
- * is an updated copy with requestStatus set to "email_sent" for each success.
+ * @param {object} formData
+ * @param {object} [filter]
+ * @param {string} [filter.disciplineId] - only this discipline's requests
+ * @param {string} [filter.onlyEmail]    - only this recipient (case-insensitive)
+ * @param {boolean}[filter.force]         - include already-sent requests (resend)
  *
- * Never throws — email failures are logged and surfaced via the `failed` count.
+ * @returns {{ recipients: Array, skipped: number }} where each recipient is
+ *   { email, name, phone, items:[{disciplineId, groupId, discipline, groupName, judge, notes, kind}], refs:[{disciplineId,groupId}], kinds:Set<string> }
+ */
+export function collectRecipients(formData, filter = {}) {
+  const { patternSelections, disciplines } = formData;
+  const { disciplineId: onlyDisciplineId, onlyEmail, force = false } = filter;
+
+  const onlyEmailLc = onlyEmail ? onlyEmail.trim().toLowerCase() : null;
+  const disciplineMap = {};
+  (disciplines || []).forEach((d) => { disciplineMap[d.id] = d.name || d.id; });
+
+  const byEmail = new Map(); // emailLc -> recipient
+  let skipped = 0;
+
+  for (const [disciplineId, groups] of Object.entries(patternSelections || {})) {
+    if (onlyDisciplineId && disciplineId !== onlyDisciplineId) continue;
+    if (!groups || typeof groups !== 'object') continue;
+
+    const discipline = (disciplines || []).find((d) => d.id === disciplineId);
+
+    for (const [groupId, selection] of Object.entries(groups)) {
+      // Decide the request kind + recipient for this group.
+      let kind = null;
+      let email = '';
+      let name = '';
+      let phone = '';
+
+      if (selection?.type === 'judgeAssigned') {
+        kind = 'judge';
+        email = (selection.judgeEmail || '').trim();
+        name = (selection.judgeName || '').trim();
+        phone = (selection.judgePhone || '').trim();
+      } else if (selection?.type === 'customRequest' && selection.customPatternRequested) {
+        kind = 'custom';
+        email = (selection.requestedFromEmail || '').trim();
+        name = (selection.requestedFromName || '').trim();
+        phone = (selection.requestedFromPhone || '').trim();
+      } else {
+        continue; // standard pattern or unset — nothing to request
+      }
+
+      // Never re-request a COMPLETED item (judge responded / custom uploaded) —
+      // even on a forced resend, you don't ask for something already provided.
+      if (['responded', 'uploaded'].includes(selection.requestStatus)) continue;
+      // Skip already-sent (awaiting) items unless the caller forces a resend.
+      if (!force && selection.requestStatus === 'email_sent') continue;
+
+      // Incomplete request (missing name/email) — count so the caller can warn.
+      if (!email || !name) { skipped += 1; continue; }
+
+      const emailLc = email.toLowerCase();
+      if (onlyEmailLc && emailLc !== onlyEmailLc) continue;
+
+      const group = (discipline?.patternGroups || []).find((g) => g.id === groupId);
+      const groupName = group?.name || `Group ${groupId}`;
+
+      if (!byEmail.has(emailLc)) {
+        byEmail.set(emailLc, { email, name, phone, items: [], refs: [], kinds: new Set() });
+      }
+      const recipient = byEmail.get(emailLc);
+      recipient.kinds.add(kind);
+      if (!recipient.phone && phone) recipient.phone = phone;
+      recipient.items.push({
+        disciplineId,
+        groupId,
+        discipline: disciplineMap[disciplineId] || disciplineId,
+        groupName,
+        judge: kind === 'judge' ? name : (selection.judgeName || ''),
+        notes: selection.requestNotes || '',
+        kind,
+      });
+      recipient.refs.push({ disciplineId, groupId });
+    }
+  }
+
+  return { recipients: Array.from(byEmail.values()), skipped };
+}
+
+/**
+ * Builds a tracking summary of EVERY pattern request in the book (sent or not),
+ * grouped by recipient, for the "Pattern Requests" panel on the close-out step.
+ *
+ * Per-item status:
+ *   - 'done'    → judge picked a pattern / custom file uploaded
+ *   - 'sent'    → request email sent, awaiting response
+ *   - 'pending' → not requested yet
+ *
+ * @returns {{ recipients: Array, totals: {recipients, items, pending, sent, done} }}
+ */
+export function summarizeRequests(formData) {
+  const { patternSelections, disciplines } = formData;
+  const disciplineMap = {};
+  (disciplines || []).forEach((d) => { disciplineMap[d.id] = d.name || d.id; });
+
+  const byKey = new Map();
+  const totals = { recipients: 0, items: 0, pending: 0, sent: 0, done: 0 };
+
+  for (const [disciplineId, groups] of Object.entries(patternSelections || {})) {
+    if (!groups || typeof groups !== 'object') continue;
+    const discipline = (disciplines || []).find((d) => d.id === disciplineId);
+
+    for (const [groupId, sel] of Object.entries(groups)) {
+      let kind = null;
+      let email = '';
+      let name = '';
+      let phone = '';
+      let status = 'pending';
+
+      if (sel?.type === 'judgeAssigned' && sel.judgeName) {
+        kind = 'judge';
+        email = (sel.judgeEmail || '').trim();
+        name = (sel.judgeName || '').trim();
+        phone = (sel.judgePhone || '').trim();
+        if (sel.requestStatus === 'responded' || sel.patternId) status = 'done';
+        else if (sel.requestStatus === 'email_sent') status = 'sent';
+      } else if (sel?.type === 'customRequest' && sel.customPatternRequested) {
+        kind = 'custom';
+        email = (sel.requestedFromEmail || '').trim();
+        name = (sel.requestedFromName || '').trim();
+        phone = (sel.requestedFromPhone || '').trim();
+        if (sel.requestStatus === 'uploaded') status = 'done';
+        else if (sel.requestStatus === 'email_sent') status = 'sent';
+      } else {
+        continue;
+      }
+
+      const group = (discipline?.patternGroups || []).find((g) => g.id === groupId);
+      const groupName = group?.name || `Group ${groupId}`;
+      const key = email ? email.toLowerCase() : `noemail:${kind}:${name.toLowerCase()}`;
+
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key, email, name, phone, kinds: new Set(),
+          items: [], counts: { total: 0, pending: 0, sent: 0, done: 0 },
+          hasContact: !!(email && name),
+        });
+      }
+      const r = byKey.get(key);
+      r.kinds.add(kind);
+      if (!r.phone && phone) r.phone = phone;
+      r.items.push({ disciplineId, groupId, discipline: disciplineMap[disciplineId] || disciplineId, groupName, kind, status });
+      r.counts.total += 1;
+      r.counts[status] += 1;
+
+      totals.items += 1;
+      totals[status] += 1;
+    }
+  }
+
+  const recipients = Array.from(byKey.values()).map((r) => ({
+    ...r,
+    // Can send if we have a name+email and at least one item not yet completed.
+    canSend: r.hasContact && (r.counts.pending + r.counts.sent) > 0,
+  }));
+  totals.recipients = recipients.length;
+
+  return { recipients, totals };
+}
+
+/**
+ * Sends ONE consolidated request email per recipient and returns an updated
+ * copy of patternSelections with requestStatus marked 'email_sent' for every
+ * group that went out. Never throws — failures are logged and counted.
+ *
+ * Backwards compatible: callers that pass { disciplineId } still work (it now
+ * just scopes the collection). Pass { onlyEmail } to send to a single person
+ * (used by the per-recipient "Send" buttons), or nothing to send to everyone.
+ *
+ * @returns { patternSelections, sent, failed, skipped }
  */
 export async function sendCustomPatternRequests(formData, options = {}) {
-  const { patternSelections, disciplines, showName, venueName, venueAddress, startDate, endDate } = formData;
-  const { disciplineId: onlyDisciplineId } = options;
+  const { patternSelections, showName, venueName, venueAddress, startDate, endDate, id: projectId } = formData;
 
   if (!patternSelections) {
     return { patternSelections, sent: 0, failed: 0, skipped: 0 };
   }
 
-  // Build a human-readable show date range (e.g. "Jun 18 – Jun 20, 2026")
-  const showDates = formatDateRange(startDate, endDate);
-
-  // Build a discipline id → name map
-  const disciplineMap = {};
-  (disciplines || []).forEach(d => {
-    disciplineMap[d.id] = d.name || d.id;
-  });
-
-  // Collect requests to send
-  const requests = [];
-  let skipped = 0;
-  for (const [disciplineId, groups] of Object.entries(patternSelections)) {
-    if (onlyDisciplineId && disciplineId !== onlyDisciplineId) continue;
-    if (!groups || typeof groups !== 'object') continue;
-    for (const [groupId, selection] of Object.entries(groups)) {
-      if (selection?.type !== 'customRequest' || !selection.customPatternRequested) continue;
-      if (selection.requestStatus === 'email_sent') continue;
-
-      // A request that is missing name/email is incomplete — count it so the
-      // caller can warn the user instead of silently doing nothing.
-      if (!selection.requestedFromEmail?.trim() || !selection.requestedFromName?.trim()) {
-        skipped += 1;
-        continue;
-      }
-
-      // Resolve group name from the discipline's patternGroups
-      const discipline = (disciplines || []).find(d => d.id === disciplineId);
-      const group = (discipline?.patternGroups || []).find(g => g.id === groupId);
-      const groupName = group?.name || `Group ${groupId}`;
-
-      requests.push({
-        disciplineId,
-        groupId,
-        payload: {
-          recipientEmail: selection.requestedFromEmail.trim(),
-          recipientName: selection.requestedFromName.trim(),
-          showName: showName || 'Untitled Show',
-          discipline: disciplineMap[disciplineId] || disciplineId,
-          groupName,
-          notes: selection.requestNotes || '',
-          showDates: showDates || '',
-          venue: venueName || '',
-          location: venueAddress || '',
-          judge: selection.judgeName || '',
-          uploadLink: '', // placeholder — upload link will be implemented later
-        },
-      });
-    }
-  }
-
-  if (requests.length === 0) {
+  const { recipients, skipped } = collectRecipients(formData, options);
+  if (recipients.length === 0) {
     return { patternSelections, sent: 0, failed: 0, skipped };
   }
 
-  // Clone selections so we can mark statuses
+  const showDates = formatDateRange(startDate, endDate);
+
+  // Base URL for the public pages (falls back to production when no window).
+  const origin = (typeof window !== 'undefined' && window.location?.origin)
+    ? window.location.origin
+    : 'https://equipatterns.com';
+
+  // Clone selections so we can mark statuses without mutating state.
   const updatedSelections = JSON.parse(JSON.stringify(patternSelections));
 
-  // Send emails concurrently (errors logged, never thrown)
   const results = await Promise.allSettled(
-    requests.map(async ({ disciplineId, groupId, payload }) => {
+    recipients.map(async ({ email, name, phone, items, refs, kinds }) => {
+      // Scoped, no-login links keyed to this recipient (spans all disciplines).
+      const token = projectId ? makeRecipientToken(projectId, email) : '';
+      const judgeLink = token && kinds.has('judge') ? `${origin}/judge-request/${token}` : '';
+      const uploadLink = token && kinds.has('custom') ? `${origin}/upload-request/${token}` : '';
+
+      const payload = {
+        recipientEmail: email,
+        recipientName: name,
+        recipientPhone: phone || '',
+        showName: showName || 'Untitled Show',
+        showDates: showDates || '',
+        venue: venueName || '',
+        location: venueAddress || '',
+        items, // [{ discipline, groupName, judge, notes, kind }]
+        judgeLink,
+        uploadLink,
+      };
+
       const { data, error } = await supabase.functions.invoke(
         'send-custom-pattern-request',
         { body: JSON.stringify(payload) },
       );
 
       if (error || data?.error) {
-        console.error(
-          `Failed to send custom pattern email for ${payload.discipline} / ${payload.groupName}:`,
-          error?.message || data?.error,
-        );
-        return { disciplineId, groupId, success: false };
+        console.error(`Failed to send pattern request to ${email}:`, error?.message || data?.error);
+        return { refs, success: false };
       }
-
-      return { disciplineId, groupId, success: true };
+      return { refs, success: true };
     }),
   );
 
-  // Update statuses for successful sends
   let sent = 0;
   let failed = 0;
   for (const result of results) {
     if (result.status === 'fulfilled' && result.value.success) {
       sent += 1;
-      const { disciplineId, groupId } = result.value;
-      if (updatedSelections[disciplineId]?.[groupId]) {
-        updatedSelections[disciplineId][groupId].requestStatus = 'email_sent';
-        updatedSelections[disciplineId][groupId].requestSentAt = new Date().toISOString();
+      for (const { disciplineId, groupId } of result.value.refs) {
+        const grp = updatedSelections[disciplineId]?.[groupId];
+        // Never downgrade a completed item back to "sent".
+        if (grp && grp.requestStatus !== 'uploaded' && grp.requestStatus !== 'responded') {
+          grp.requestStatus = 'email_sent';
+          grp.requestSentAt = new Date().toISOString();
+        }
       }
     } else {
       failed += 1;

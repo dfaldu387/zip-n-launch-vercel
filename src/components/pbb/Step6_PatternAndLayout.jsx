@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Calendar as CalendarIcon, ChevronDown, MapPin, Building, CheckCircle2, AlertCircle, Trophy, Eye, X, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronRight, UploadCloud, FileText, Image as ImageIcon, Trash2, ListPlus } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronDown, MapPin, Building, CheckCircle2, AlertCircle, Trophy, Eye, X, ZoomIn, ZoomOut, RotateCcw, Loader2, ChevronRight, UploadCloud, FileText, Image as ImageIcon, Trash2, ListPlus, Mail, Phone } from 'lucide-react';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { cn, parseLocalDate } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -23,80 +23,136 @@ import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { v4 as uuidv4 } from 'uuid';
-import { sendCustomPatternRequests } from '@/lib/customPatternEmails';
 
 // Judge Assignment Field — select from existing judges or type custom
-const JudgeAssignmentField = ({ disciplineName, currentValue, onValueChange, formData, isReadOnly }) => {
-  const [isCustom, setIsCustom] = useState(false);
-
-  const judges = new Map();
+// Scans every place a judge can live (Officials & Staff: associationJudges,
+// showDetails.officials.JUDGE, showDetails.judges) and returns a
+// name -> { name, email, phone } map. Used so picking a judge in pattern
+// selection can carry their contact info across automatically.
+const buildJudgeContactMap = (formData) => {
+  const judgeContacts = new Map();
+  const addJudge = (j) => {
+    if (!j?.name) return;
+    const existing = judgeContacts.get(j.name) || { name: j.name };
+    // Keep the first non-empty email/phone we find for this name.
+    judgeContacts.set(j.name, {
+      name: j.name,
+      email: existing.email || j.email || '',
+      phone: existing.phone || j.phone || '',
+    });
+  };
   Object.values(formData.associationJudges || {})
     .flatMap(assocData => (assocData.judges || []))
-    .filter(j => j?.name)
-    .forEach(j => judges.set(j.name, j.name));
+    .forEach(addJudge);
   Object.values(formData.showDetails?.officials || {})
     .flatMap(assocRoles => assocRoles?.JUDGE || [])
-    .filter(j => j?.name)
-    .forEach(j => judges.set(j.name, j.name));
+    .forEach(addJudge);
   Object.values(formData.showDetails?.judges || {})
     .flat()
-    .filter(j => j?.name)
-    .forEach(j => judges.set(j.name, j.name));
-  const judgeNames = [...judges.values()];
+    .forEach(addJudge);
+  return judgeContacts;
+};
+
+const JudgeAssignmentField = ({ disciplineName, currentValue, currentEmail, currentPhone, onSelectJudge, onFieldChange, formData, isReadOnly }) => {
+  const [isCustom, setIsCustom] = useState(false);
+
+  const judgeContacts = buildJudgeContactMap(formData);
+  const judgeNames = [...judgeContacts.keys()];
 
   // If current value is custom (not in the list), show input
   const isCustomValue = currentValue && !judgeNames.includes(currentValue);
 
+  // The judge's on-file contact (shown as a placeholder hint even before it has
+  // been saved onto this selection).
+  const matched = currentValue ? judgeContacts.get(currentValue) : null;
+
   return (
-    <div className="p-3 border-2 border-dashed border-amber-300 rounded-lg bg-amber-50/50 dark:bg-amber-950/20">
-      <Label className="text-xs text-muted-foreground mb-1 block">Assigned Judge for {disciplineName}</Label>
-      {judgeNames.length > 0 && !isCustom && !isCustomValue ? (
-        <div className="space-y-2">
-          <Select
-            value={currentValue}
-            onValueChange={onValueChange}
-            disabled={isReadOnly}
-          >
-            <SelectTrigger className="bg-background">
-              <SelectValue placeholder="Select a judge..." />
-            </SelectTrigger>
-            <SelectContent>
-              {judgeNames.map((name, idx) => (
-                <SelectItem key={idx} value={name}>{name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <button
-            type="button"
-            className="text-xs text-amber-700 dark:text-amber-400 hover:underline"
-            onClick={() => setIsCustom(true)}
-            disabled={isReadOnly}
-          >
-            + Enter custom judge name
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <Input
-            placeholder="Type judge name..."
-            value={currentValue}
-            onChange={(e) => onValueChange(e.target.value)}
-            disabled={isReadOnly}
-            className="bg-background"
-          />
-          {judgeNames.length > 0 && (
+    <div className="p-3 border-2 border-dashed border-amber-300 rounded-lg bg-amber-50/50 dark:bg-amber-950/20 space-y-3">
+      <div>
+        <Label className="text-xs text-muted-foreground mb-1 block">Assigned Judge for {disciplineName}</Label>
+        {judgeNames.length > 0 && !isCustom && !isCustomValue ? (
+          <div className="space-y-2">
+            <Select
+              value={currentValue}
+              onValueChange={(name) => onSelectJudge(judgeContacts.get(name) || { name, email: '', phone: '' })}
+              disabled={isReadOnly}
+            >
+              <SelectTrigger className="bg-background">
+                <SelectValue placeholder="Select a judge..." />
+              </SelectTrigger>
+              <SelectContent>
+                {judgeNames.map((name, idx) => (
+                  <SelectItem key={idx} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <button
               type="button"
               className="text-xs text-amber-700 dark:text-amber-400 hover:underline"
-              onClick={() => { setIsCustom(false); onValueChange(''); }}
+              onClick={() => setIsCustom(true)}
               disabled={isReadOnly}
             >
-              Select from existing judges
+              + Enter custom judge name
             </button>
-          )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Input
+              placeholder="Type judge name..."
+              value={currentValue}
+              onChange={(e) => onFieldChange('judgeName', e.target.value)}
+              disabled={isReadOnly}
+              className="bg-background"
+            />
+            {judgeNames.length > 0 && (
+              <button
+                type="button"
+                className="text-xs text-amber-700 dark:text-amber-400 hover:underline"
+                onClick={() => { setIsCustom(false); onFieldChange('judgeName', ''); }}
+                disabled={isReadOnly}
+              >
+                Select from existing judges
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Judge contact — carried across from Officials & Staff, editable here too
+          (this is the "second place they could fill it in"). */}
+      {currentValue && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div>
+            <Label className="text-xs text-muted-foreground mb-1 block">Judge Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="email"
+                placeholder={matched?.email || 'name@example.com'}
+                className="pl-9 bg-background"
+                value={currentEmail || ''}
+                onChange={(e) => onFieldChange('judgeEmail', e.target.value)}
+                disabled={isReadOnly}
+              />
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground mb-1 block">Judge Phone</Label>
+            <div className="relative">
+              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder={matched?.phone || '(555) 123-4567'}
+                className="pl-9 bg-background"
+                value={currentPhone || ''}
+                onChange={(e) => onFieldChange('judgePhone', e.target.value)}
+                disabled={isReadOnly}
+              />
+            </div>
+          </div>
         </div>
       )}
-      <p className="text-xs text-amber-700 dark:text-amber-400 mt-2">
+
+      <p className="text-xs text-amber-700 dark:text-amber-400">
         Pattern will be selected by the assigned judge for all classes in this discipline.
       </p>
     </div>
@@ -357,42 +413,6 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
   const [previewDiscipline, setPreviewDiscipline] = useState(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [uploadingCustomPattern, setUploadingCustomPattern] = useState(null); // track which group is uploading
-  const [sendingRequestId, setSendingRequestId] = useState(null); // track which discipline's custom-pattern request is being sent
-
-  // Send the custom-pattern request for a single discipline (per-request "Send Request" button)
-  const handleSendCustomPatternRequest = async (discipline) => {
-    if (isReadOnly || sendingRequestId) return;
-    setSendingRequestId(discipline.id);
-    try {
-      const result = await sendCustomPatternRequests(formData, { disciplineId: discipline.id });
-      if (result.patternSelections !== formData.patternSelections) {
-        setFormData(prev => ({ ...prev, patternSelections: result.patternSelections }));
-      }
-      if (result.sent > 0) {
-        toast({
-          title: 'Request Sent',
-          description: `Custom pattern request emailed for ${discipline.name.replace(' at Halter', '')}.`,
-        });
-      } else if (result.skipped > 0) {
-        toast({
-          variant: 'destructive',
-          title: 'Missing Details',
-          description: 'Enter the request name and email before sending.',
-        });
-      } else if (result.failed > 0) {
-        toast({
-          variant: 'destructive',
-          title: 'Send Failed',
-          description: 'Could not send the request email. Please try again.',
-        });
-      }
-    } catch (err) {
-      console.error('Failed to send custom pattern request:', err);
-      toast({ variant: 'destructive', title: 'Send Failed', description: 'Something went wrong. Please try again.' });
-    } finally {
-      setSendingRequestId(null);
-    }
-  };
 
   // Database-driven pattern state
   const [dbPatterns, setDbPatterns] = useState({});
@@ -1050,10 +1070,12 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
       return groups.every(group => group.divisions && group.divisions.length > 0);
     }
 
-    // Check if any pattern is assigned to any group
+    // Check if any pattern is assigned to any group — a group counts as having a
+    // pattern when it has a selected patternId OR an uploaded file (custom upload
+    // OR a judge who uploaded their own pattern instead of picking from the list).
     const hasPatternAssigned = groups.some(group => {
       const selection = getPatternSelection(discipline.id, group.id);
-      return selection?.patternId;
+      return selection?.patternId || selection?.uploadedFileUrl;
     });
 
     // Also check that all custom request groups have valid name/email
@@ -1502,13 +1524,17 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                         newSelections[discipline.id][group.id] = {
                           ...rest,
                           type,
-                          ...(type === 'judgeAssigned' && { judgeName: existing.judgeName || firstGroupSelection?.judgeName || '' }),
+                          ...(type === 'judgeAssigned' && {
+                            judgeName: existing.judgeName || firstGroupSelection?.judgeName || '',
+                            judgeEmail: existing.judgeEmail || firstGroupSelection?.judgeEmail || '',
+                            judgePhone: existing.judgePhone || firstGroupSelection?.judgePhone || '',
+                          }),
                           ...(type === 'customRequest' && { customPatternRequested: true, requestedFromName: existing.requestedFromName || '', requestedFromEmail: existing.requestedFromEmail || '', requestNotes: existing.requestNotes || '', requestStatus: existing.requestStatus || 'requested' }),
                           ...extraData
                         };
                       } else {
                         // Remove the type but preserve existing pattern selection
-                        const { type: _removedType, judgeName: _j, customPatternRequested: _c, requestedFromName: _rn, requestedFromEmail: _re, requestNotes: _rno, requestStatus: _rs, ...preserved } = existing;
+                        const { type: _removedType, judgeName: _j, judgeEmail: _je, judgePhone: _jp, customPatternRequested: _c, requestedFromName: _rn, requestedFromEmail: _re, requestNotes: _rno, requestStatus: _rs, ...preserved } = existing;
                         newSelections[discipline.id][group.id] = preserved;
                       }
                     });
@@ -1518,6 +1544,12 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
 
                 // Helper: update a field on ALL groups for this discipline
                 const updateDisciplineAssignField = (field, value) => {
+                  updateDisciplineAssignFields({ [field]: value });
+                };
+
+                // Helper: merge several fields onto ALL groups at once (used when
+                // selecting a judge so name + email + phone carry across together).
+                const updateDisciplineAssignFields = (fields) => {
                   if (isReadOnly) return;
                   setFormData(prev => {
                     const newSelections = { ...(prev.patternSelections || {}) };
@@ -1526,7 +1558,7 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                       if (newSelections[discipline.id][group.id]) {
                         newSelections[discipline.id][group.id] = {
                           ...newSelections[discipline.id][group.id],
-                          [field]: value
+                          ...fields,
                         };
                       }
                     });
@@ -1849,7 +1881,14 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                               <JudgeAssignmentField
                                 disciplineName={discipline.name.replace(' at Halter', '')}
                                 currentValue={firstGroupSelection?.judgeName || ''}
-                                onValueChange={(judgeName) => updateDisciplineAssignField('judgeName', judgeName)}
+                                currentEmail={firstGroupSelection?.judgeEmail || ''}
+                                currentPhone={firstGroupSelection?.judgePhone || ''}
+                                onSelectJudge={(judge) => updateDisciplineAssignFields({
+                                  judgeName: judge.name,
+                                  judgeEmail: judge.email || '',
+                                  judgePhone: judge.phone || '',
+                                })}
+                                onFieldChange={updateDisciplineAssignField}
                                 formData={formData}
                                 isReadOnly={isReadOnly}
                               />
@@ -1893,48 +1932,26 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                                   />
                                 </div>
 
-                                {/* Send Request action + status */}
-                                {(() => {
-                                  const reqStatus = firstGroupSelection?.requestStatus;
-                                  const isSent = reqStatus === 'email_sent';
-                                  const sentAt = firstGroupSelection?.requestSentAt;
-                                  const canSend = !!firstGroupSelection?.requestedFromName?.trim() && !!firstGroupSelection?.requestedFromEmail?.trim();
-                                  const isSending = sendingRequestId === discipline.id;
-                                  return (
-                                    <div className="flex items-center gap-3 flex-wrap pt-1">
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        className="h-8 bg-purple-600 hover:bg-purple-700 text-white"
-                                        disabled={isReadOnly || isSending || !canSend}
-                                        onClick={() => handleSendCustomPatternRequest(discipline)}
-                                      >
-                                        {isSending ? (
-                                          <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Sending…</>
-                                        ) : isSent ? (
-                                          <><CheckCircle2 className="w-4 h-4 mr-1.5" /> Resend Request</>
-                                        ) : (
-                                          'Send Request'
-                                        )}
-                                      </Button>
-                                      {isSent ? (
-                                        <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
-                                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                                          Request Sent{sentAt ? ` · ${format(new Date(sentAt), 'MMM d, h:mm a')}` : ''}
-                                        </Badge>
-                                      ) : !canSend ? (
-                                        <span className="text-xs text-muted-foreground">Enter name & email above to send.</span>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">Not yet sent.</span>
-                                      )}
-                                    </div>
-                                  );
-                                })()}
-
-                                {/* Custom patterns are uploaded per group below — see each group's upload box */}
-                                <p className="text-xs text-purple-700 dark:text-purple-400">
-                                  Upload a custom pattern for each group below. A custom pattern will be assigned per group — no standard pattern will be selected.
-                                </p>
+                                {/* Requests are now SENT from the final "Save & Manage" step
+                                    (Pattern Requests panel) — one email per person, with
+                                    tracking. Here you only enter who to request from. */}
+                                {firstGroupSelection?.requestStatus === 'email_sent' && (
+                                  <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
+                                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                                    Request Sent{firstGroupSelection?.requestSentAt ? ` · ${format(new Date(firstGroupSelection.requestSentAt), 'MMM d, h:mm a')}` : ''}
+                                  </Badge>
+                                )}
+                                {/* Two ways to fill a custom group — clarifies the
+                                    inline-upload vs. email-request confusion. */}
+                                <div className="rounded-md border border-purple-200 bg-white/60 dark:bg-purple-950/30 p-2.5 text-xs space-y-1">
+                                  <p className="font-semibold text-purple-800 dark:text-purple-300">Two ways to add the custom pattern:</p>
+                                  <p className="text-purple-700 dark:text-purple-400">
+                                    <strong>Have the file?</strong> Upload it per group below — done, no email needed.
+                                  </p>
+                                  <p className="text-purple-700 dark:text-purple-400">
+                                    <strong>Don't have it?</strong> Leave it empty and <strong>Send a request</strong> from the final <strong>Save &amp; Manage</strong> step — the contact above uploads it via a link.
+                                  </p>
+                                </div>
                               </div>
                             )}
                           </div>
@@ -2023,9 +2040,29 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                                       )}
                                       {/* Show pattern badge, judge-assigned badge, or custom-request badge */}
                                       {!isScoresheetOnly && currentSelection?.type === 'judgeAssigned' && (
-                                        <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">
-                                          Judge: {currentSelection.judgeName || 'TBD'}
-                                        </Badge>
+                                        // Once the judge has responded (picked a library pattern or
+                                        // uploaded their own), show that — not just the judge name.
+                                        currentSelection?.patternId && currentSelection?.patternName ? (
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
+                                              <CheckCircle2 className="w-3 h-3 mr-1" /> Judge picked
+                                            </Badge>
+                                            <PatternBadgeWithHover
+                                              patternId={currentSelection.patternId}
+                                              displayText={(currentSelection.patternName || '').replace(/\.(pdf|PDF)$/, '')}
+                                              formData={formData}
+                                              scoresheetData={currentSelection.scoresheetData}
+                                            />
+                                          </div>
+                                        ) : currentSelection?.uploadedFileUrl ? (
+                                          <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
+                                            <CheckCircle2 className="w-3 h-3 mr-1" /> Judge uploaded: {currentSelection.uploadedFileName || 'file'}
+                                          </Badge>
+                                        ) : (
+                                          <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">
+                                            Judge: {currentSelection.judgeName || 'TBD'} · awaiting pick
+                                          </Badge>
+                                        )
                                       )}
                                       {!isScoresheetOnly && currentSelection?.type === 'customRequest' && (
                                         <Badge className="bg-purple-100 text-purple-800 border-purple-200 text-xs">
