@@ -286,8 +286,13 @@ export default function PatternJudgeRequestPage() {
                             : null;
                           return (
                             <div key={it.groupId} className="border-t pt-3 first:border-t-0 first:pt-0">
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-sm">{it.groupName}</span>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <span className="text-sm font-medium">{it.groupName}</span>
+                                  {Array.isArray(it.classes) && it.classes.length > 0 && (
+                                    <p className="text-xs text-muted-foreground mt-0.5">{it.classes.join(' • ')}</p>
+                                  )}
+                                </div>
                                 {uploaded ? (
                                   <span className="inline-flex items-center text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
                                     <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Uploaded

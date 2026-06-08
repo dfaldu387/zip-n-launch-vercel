@@ -50,6 +50,23 @@ function formatDateRange(startDate, endDate) {
 }
 
 /**
+ * The show classes that make up a pattern group, formatted like the builder
+ * (custom- prefix stripped, Go 1/Go 2 suffix). Used so request emails and the
+ * close-out tracking panel can show which classes each group covers.
+ */
+export function groupClassNames(group) {
+  return ((group?.divisions) || [])
+    .map((d) => {
+      let name = String(d?.customTitle || d?.division || '').trim();
+      if (name.startsWith('custom-')) name = name.slice(7);
+      if (d?.goNumber === 2) name += ' (Go 2)';
+      else if (d?.goNumber === 1 && d?.hasGo2) name += ' (Go 1)';
+      return name;
+    })
+    .filter(Boolean);
+}
+
+/**
  * Walks patternSelections and collects every outstanding pattern request,
  * grouped by RECIPIENT EMAIL so each person gets exactly one email even when
  * they appear across multiple disciplines (the "Sissy does 3 disciplines →
@@ -134,6 +151,7 @@ export function collectRecipients(formData, filter = {}) {
         groupId,
         discipline: disciplineMap[disciplineId] || disciplineId,
         groupName,
+        classes: groupClassNames(group),
         judge: kind === 'judge' ? name : (selection.judgeName || ''),
         notes: selection.requestNotes || '',
         kind,
@@ -195,6 +213,7 @@ export function summarizeRequests(formData) {
 
       const group = (discipline?.patternGroups || []).find((g) => g.id === groupId);
       const groupName = group?.name || `Group ${groupId}`;
+      const classes = groupClassNames(group);
       const key = email ? email.toLowerCase() : `noemail:${kind}:${name.toLowerCase()}`;
 
       if (!byKey.has(key)) {
@@ -207,7 +226,7 @@ export function summarizeRequests(formData) {
       const r = byKey.get(key);
       r.kinds.add(kind);
       if (!r.phone && phone) r.phone = phone;
-      r.items.push({ disciplineId, groupId, discipline: disciplineMap[disciplineId] || disciplineId, groupName, kind, status });
+      r.items.push({ disciplineId, groupId, discipline: disciplineMap[disciplineId] || disciplineId, groupName, classes, kind, status });
       r.counts.total += 1;
       r.counts[status] += 1;
 
@@ -274,7 +293,7 @@ export async function sendCustomPatternRequests(formData, options = {}) {
         showDates: showDates || '',
         venue: venueName || '',
         location: venueAddress || '',
-        items, // [{ discipline, groupName, judge, notes, kind }]
+        items, // [{ discipline, groupName, classes, judge, notes, kind }]
         judgeLink,
         uploadLink,
       };

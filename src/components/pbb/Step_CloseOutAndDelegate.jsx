@@ -893,7 +893,7 @@ const REQUEST_STATUS = {
   done:    { label: 'Received', cls: 'bg-green-100 text-green-800 border-green-200', Icon: CheckCircle2 },
 };
 
-const PatternRequestsPanel = ({ formData, setFormData, currentStatus }) => {
+const PatternRequestsPanel = ({ formData, setFormData, currentStatus, createOrUpdateProject }) => {
   const { toast } = useToast();
   const [sendingKey, setSendingKey] = useState(null); // 'ALL' | email | null
   const { recipients, totals } = useMemo(() => summarizeRequests(formData), [formData]);
@@ -906,6 +906,17 @@ const PatternRequestsPanel = ({ formData, setFormData, currentStatus }) => {
     if (isPublished) return;
     setSendingKey(onlyEmail || 'ALL');
     try {
+      // Persist the book first so the send always runs against the latest edits
+      // (e.g. a judge email just typed in). This removes the old "save first,
+      // then resend" dance that was needed to avoid "some requests have no email".
+      if (createOrUpdateProject) {
+        const savedId = await createOrUpdateProject();
+        if (!savedId) {
+          toast({ variant: 'destructive', title: 'Save failed', description: 'Could not save before sending. Please try again.' });
+          return;
+        }
+      }
+
       const result = await sendCustomPatternRequests(formData, {
         ...(onlyEmail ? { onlyEmail } : {}),
         force: !!force,
@@ -916,7 +927,16 @@ const PatternRequestsPanel = ({ formData, setFormData, currentStatus }) => {
       if (result.sent > 0) {
         toast({ title: 'Requests sent', description: `${result.sent} email${result.sent > 1 ? 's' : ''} sent.` });
       } else if (result.skipped > 0) {
-        toast({ variant: 'destructive', title: 'Missing contact', description: 'Some requests have no name or email.' });
+        // Name exactly who is missing contact info so the user knows where to fix it.
+        const missing = recipients
+          .filter(r => !r.hasContact)
+          .map(r => r.name || 'Unnamed recipient');
+        const who = missing.length ? `: ${missing.join(', ')}` : '';
+        toast({
+          variant: 'destructive',
+          title: 'Missing contact',
+          description: `Add a name and email${who ? ` for${who}` : ''} (Step 6) before sending.`,
+        });
       } else {
         toast({ title: 'Nothing to send', description: 'No pending requests with contact info.' });
       }
@@ -1009,7 +1029,11 @@ const PatternRequestsPanel = ({ formData, setFormData, currentStatus }) => {
                   const cfg = REQUEST_STATUS[it.status] || REQUEST_STATUS.pending;
                   const StatusIcon = cfg.Icon;
                   return (
-                    <span key={`${it.disciplineId}:${it.groupId}`} className={`inline-flex items-center gap-1 text-[11px] rounded-full border px-2 py-0.5 ${cfg.cls}`}>
+                    <span
+                      key={`${it.disciplineId}:${it.groupId}`}
+                      title={it.classes?.length ? `Classes: ${it.classes.join(', ')}` : undefined}
+                      className={`inline-flex items-center gap-1 text-[11px] rounded-full border px-2 py-0.5 ${cfg.cls}`}
+                    >
                       <StatusIcon className="w-3 h-3" />
                       {it.discipline} · {it.groupName}
                     </span>
@@ -1480,6 +1504,7 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                     formData={formData}
                     setFormData={setFormData}
                     currentStatus={currentStatus}
+                    createOrUpdateProject={createOrUpdateProject}
                 />
 
                 {/* 3. Publication Date - OPTIONAL */}

@@ -106,6 +106,15 @@ export const usePatternBookBuilder = (projectId) => {
   const [isLoading, setIsLoading] = useState(true);
   // Track when project was just created locally to skip reload resetting the step
   const justCreatedRef = useRef(false);
+  // Synchronous record of the row this builder session is bound to. Both
+  // sanitizedProjectId (URL) and formData.id (state) update asynchronously, so a
+  // second save firing in the same tick would otherwise see no id and INSERT a
+  // duplicate row. This ref is set the instant a row is created/updated so
+  // concurrent saves target the same row.
+  const boundProjectIdRef = useRef(null);
+  // Serializes saves so two concurrent createOrUpdateProject calls can't both
+  // run the INSERT path and create duplicate pattern books.
+  const saveLockRef = useRef(Promise.resolve());
   const [disciplineLibrary, setDisciplineLibrary] = useState([]);
   const [associationsData, setAssociationsData] = useState([]);
   const [divisionsData, setDivisionsData] = useState({});
@@ -179,6 +188,8 @@ export const usePatternBookBuilder = (projectId) => {
         if (projectsRes.data) setExistingProjects(projectsRes.data);
 
         if (sanitizedProjectId) {
+          // Bind this session to the loaded row so saves update it, never INSERT.
+          boundProjectIdRef.current = sanitizedProjectId;
           // Skip reloading from DB if we just created this project in the same session.
           // The URL changed (added projectId) but step/formData are already correct in state.
           if (justCreatedRef.current) {
@@ -209,6 +220,8 @@ export const usePatternBookBuilder = (projectId) => {
             }
           }
         } else {
+          // Brand-new builder session — not bound to any row yet.
+          boundProjectIdRef.current = null;
           setFormData(initialFormData);
           setStep(1);
           setCompletedSteps(new Set());
@@ -459,7 +472,7 @@ export const usePatternBookBuilder = (projectId) => {
     }
   };
 
-  const createOrUpdateProject = useCallback(async (explicitStatus) => {
+  const performCreateOrUpdateProject = useCallback(async (explicitStatus) => {
     if (!user) {
       toast({ title: 'Authentication Error', description: 'You must be logged in to save a project.', variant: 'destructive' });
       return null;
@@ -525,11 +538,14 @@ export const usePatternBookBuilder = (projectId) => {
       user_id: user.id,
     };
 
-    // Never use linkedProjectId as save target — it's a read-only reference to another project
-    let currentProjectId = sanitizedProjectId || formData.id;
+    // Never use linkedProjectId as save target — it's a read-only reference to another project.
+    // boundProjectIdRef is the synchronous fallback: if an earlier save in this
+    // session already created the row, its id is here before state/URL catch up.
+    let currentProjectId = sanitizedProjectId || formData.id || boundProjectIdRef.current;
 
     // If no project ID yet, check if a project with this name already exists for this user
-    // and reuse it instead of creating a duplicate
+    // and reuse it instead of creating a duplicate. Pick the most recent match so
+    // any pre-existing duplicates collapse onto a single row going forward.
     if (!currentProjectId && trimmedName !== 'Untitled Pattern Book') {
       const { data: existingProject } = await supabase
         .from('projects')
@@ -537,8 +553,9 @@ export const usePatternBookBuilder = (projectId) => {
         .eq('project_type', 'pattern_book')
         .eq('user_id', user.id)
         .ilike('project_name', trimmedName)
+        .order('created_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       if (existingProject) {
         currentProjectId = existingProject.id;
@@ -555,6 +572,8 @@ export const usePatternBookBuilder = (projectId) => {
         toast({ title: 'Error saving project', description: error.message, variant: 'destructive' });
         return null;
       }
+      // Bind this session to the row so any later save updates it, never INSERTs.
+      boundProjectIdRef.current = currentProjectId;
       // Silent save — no popup during normal editing
       // Auto-lock Step 1 and structure after save
       setFormData(prev => ({
@@ -585,6 +604,9 @@ export const usePatternBookBuilder = (projectId) => {
       }
 
       const newProjectId = data.id;
+      // Record the new id synchronously so a save firing before state/URL update
+      // reuses this row instead of inserting another duplicate.
+      boundProjectIdRef.current = newProjectId;
       setFormData(prev => ({
         ...prev,
         id: newProjectId,
@@ -596,6 +618,17 @@ export const usePatternBookBuilder = (projectId) => {
       return newProjectId;
     }
   }, [formData, step, completedSteps, setCompletedSteps, sanitizedProjectId, toast, navigate, user, getNextShowNumber]);
+
+  // Public save entrypoint. Chains every call onto the previous one so a second
+  // save waits for the first to finish (and record its row id) before running —
+  // this is what stops two near-simultaneous saves from both INSERTing and
+  // creating duplicate "In progress" + "Draft" books for the same show.
+  const createOrUpdateProject = useCallback((explicitStatus) => {
+    const result = saveLockRef.current.then(() => performCreateOrUpdateProject(explicitStatus));
+    // Keep the lock chain alive even if a save rejects, so it never deadlocks.
+    saveLockRef.current = result.catch(() => {});
+    return result;
+  }, [performCreateOrUpdateProject]);
 
   const nextStep = () => setStep(prev => Math.min(prev + 1, 10));
   const prevStep = () => setStep(prev => Math.max(prev - 1, 1));

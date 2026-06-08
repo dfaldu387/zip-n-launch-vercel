@@ -143,6 +143,9 @@ export default function PatternUploadRequestPage() {
                             <p className="text-xs text-muted-foreground">{group.disciplineName}</p>
                           )}
                           <h3 className="font-semibold">{group.groupName}</h3>
+                          {Array.isArray(group.classes) && group.classes.length > 0 && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{group.classes.join(' • ')}</p>
+                          )}
                         </div>
                         {isUploaded && (
                           <span className="inline-flex items-center text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
