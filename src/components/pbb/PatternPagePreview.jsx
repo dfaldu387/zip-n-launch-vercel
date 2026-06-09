@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { parseLocalDate } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
+import { fetchImageAsBase64, cropPatternImageSmart } from '@/lib/pdfHelpers';
 
 const PatternPagePreview = ({ isOpen, onClose, discipline, associationsData }) => {
   const [currentPage, setCurrentPage] = React.useState(0);
@@ -13,6 +14,9 @@ const PatternPagePreview = ({ isOpen, onClose, discipline, associationsData }) =
   const [patternMedia, setPatternMedia] = React.useState(null);
   const [scoresheetData, setScoresheetData] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
+  // Smart-cropped pattern image (header/footer whitespace removed), so the
+  // preview matches what the generated book actually renders.
+  const [croppedImageUrl, setCroppedImageUrl] = React.useState(null);
   
   // Check if this is a scoresheet-only discipline
   const isScoresheetOnly = discipline?.pattern_type === 'scoresheet_only' || (!discipline?.pattern && discipline?.scoresheet);
@@ -193,6 +197,42 @@ const PatternPagePreview = ({ isOpen, onClose, discipline, associationsData }) =
       fetchPatternDetails();
   }, [currentGroup?.selectedPatternId, isScoresheetOnly, discipline, associationsData]);
 
+  // Smart-crop the pattern image (same as the book generator) so the preview
+  // strips baked-in header/footer whitespace instead of leaving a large empty
+  // gap above the diagram.
+  React.useEffect(() => {
+      let cancelled = false;
+
+      if (isScoresheetOnly) {
+          setCroppedImageUrl(null);
+          return;
+      }
+
+      const mediaUrl = patternMedia?.image_url || patternMedia?.media_url || patternMedia?.graphic_url;
+      const patternUrl = patternData?.image_url || patternData?.url;
+      const sourceUrl = mediaUrl || patternUrl;
+
+      if (!sourceUrl) {
+          setCroppedImageUrl(null);
+          return;
+      }
+
+      // Reset while we crop so we don't show the previous group's image.
+      setCroppedImageUrl(null);
+
+      (async () => {
+          try {
+              const base64 = await fetchImageAsBase64(sourceUrl);
+              const cropped = base64 ? await cropPatternImageSmart(base64) : null;
+              if (!cancelled) setCroppedImageUrl(cropped || sourceUrl);
+          } catch {
+              if (!cancelled) setCroppedImageUrl(sourceUrl);
+          }
+      })();
+
+      return () => { cancelled = true; };
+  }, [patternMedia, patternData, isScoresheetOnly]);
+
   // Early return logic - AFTER all hooks have been called
   if (!discipline) return null;
 
@@ -324,17 +364,20 @@ const PatternPagePreview = ({ isOpen, onClose, discipline, associationsData }) =
                     const mediaUrl = patternMedia?.image_url || patternMedia?.media_url || patternMedia?.graphic_url;
                     const patternUrl = patternData?.image_url || patternData?.url;
                     const imageUrl = mediaUrl || patternUrl;
+                    // Prefer the smart-cropped version (header/footer whitespace removed).
+                    const displayUrl = croppedImageUrl || imageUrl;
 
-                    if (imageUrl) {
+                    if (imageUrl && !croppedImageUrl) {
+                        return <div className="text-muted-foreground">Loading pattern...</div>;
+                    }
+
+                    if (displayUrl) {
                         return (
-                            <div className="overflow-hidden" style={{ maxHeight: '500px' }}>
-                                <img
-                                  src={imageUrl}
-                                  alt="Pattern Diagram"
-                                  className="max-w-full h-auto rounded-lg"
-                                  style={{ clipPath: 'inset(0 0 12% 0)' }}
-                                />
-                            </div>
+                            <img
+                              src={displayUrl}
+                              alt="Pattern Diagram"
+                              className="max-w-full h-auto rounded-lg max-h-[500px] object-contain"
+                            />
                         );
                     } else {
                         return (

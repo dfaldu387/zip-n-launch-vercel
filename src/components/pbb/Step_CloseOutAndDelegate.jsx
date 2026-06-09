@@ -1587,8 +1587,13 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                         </ReviewItem>
 
                         <ReviewItem icon={<BookOpen className="w-5 h-5" />} title="Pattern Book Layout">
-                            <p><strong>Book Layout:</strong> {formData.layoutSelection || 'N/A'}</p>
-                            <p><strong>Cover Page:</strong> {formData.coverPageOption || 'N/A'}</p>
+                            <p><strong>Book Layout:</strong> {(formData.layoutSelection || 'layout-a') === 'layout-b' ? 'By Discipline' : 'By Date'}</p>
+                            <p><strong>Cover Page:</strong> {(() => {
+                                const opt = formData.coverPageOption || 'generate';
+                                if (opt === 'upload') return 'Custom Upload';
+                                if (opt === 'none') return 'None';
+                                return 'Auto-Generated';
+                            })()}</p>
                         </ReviewItem>
 
                         <ReviewItem icon={<Users className="w-5 h-5" />} title="Personnel">

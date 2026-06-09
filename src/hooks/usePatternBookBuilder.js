@@ -42,6 +42,12 @@ const initialFormData = {
   disciplineDueDates: {},
   lockedSections: { step1: false, structure: false },
   showClassNumbers: false,
+  // Pattern book layout defaults — must match the Step "Preview" UI defaults
+  // (RadioGroup shows layout-a selected by default; Layout A includes an
+  // auto-generated cover page). Persisting them here ensures the close-out
+  // summary and book generator see the same values the user sees selected.
+  layoutSelection: 'layout-a',
+  coverPageOption: 'generate',
 };
 
 // Migration function: Convert old Prelims/Finals format to new Go 1/Go 2 format
