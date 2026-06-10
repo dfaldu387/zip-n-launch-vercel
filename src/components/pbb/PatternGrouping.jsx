@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { parseDivisionId } from '@/lib/showBillUtils';
-import { PlusCircle, Move, Info, Undo2, Sparkles, Check, Copy } from 'lucide-react';
+import { PlusCircle, Move, Info, Undo2, Sparkles, Check, Copy, Calendar as CalendarIcon } from 'lucide-react';
+import { format } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -11,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DndContext, closestCenter, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useToast } from '@/components/ui/use-toast';
-import { isWalkTrotDivision, cn } from '@/lib/utils';
+import { isWalkTrotDivision, cn, parseLocalDate } from '@/lib/utils';
 import DraggableDivision from './DraggableDivision';
 import DropZoneGroup from './DropZoneGroup';
 
@@ -19,6 +20,7 @@ const UNGROUPED_ID = 'ungrouped-list';
 
 export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, formData, associationsData, divisionsData, onAutoGroupComplete }) => {
     const [selectedForBulkMove, setSelectedForBulkMove] = useState([]);
+    const [selectedDateFilter, setSelectedDateFilter] = useState(null);
     const [isDuplicateGroupsDialogOpen, setIsDuplicateGroupsDialogOpen] = useState(false);
     const [selectedSourceDisciplineId, setSelectedSourceDisciplineId] = useState(null);
     const { toast } = useToast();
@@ -652,6 +654,15 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
         hasGo2: d.hasGo2
     });
 
+    // Build an Auto-Group name that includes the group's date (e.g. "Group 1 — Jun 19").
+    // Falls back to plain "Group N" when no division in the group has a date.
+    const formatGroupName = (num, divisions) => {
+        const dated = (divisions || []).find(d => d.date);
+        return dated?.date
+            ? `Group ${num} — ${format(parseLocalDate(dated.date), 'MMM d')}`
+            : `Group ${num}`;
+    };
+
     const handleAutoGroup = () => {
         if (ungroupedDivisions.length === 0) {
             toast({ title: 'Nothing to group!', description: 'There are no ungrouped divisions.' });
@@ -695,7 +706,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                             if (nonWtDivisions.length > 0) {
                                 newPatternGroups.push({
                                     id: `pattern-group-${Date.now()}-${assocId}-nonwt${suffix}`,
-                                    name: `Group ${nextPatternNum++}`,
+                                    name: formatGroupName(nextPatternNum++, nonWtDivisions),
                                     divisions: nonWtDivisions.map(mapDivisionToGroupObject),
                                     rulebookPatternId: '',
                                 });
@@ -704,7 +715,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                             if (wtDivisions.length > 0) {
                                 newPatternGroups.push({
                                     id: `pattern-group-${Date.now()}-${assocId}-wt${suffix}`,
-                                    name: `Group ${nextPatternNum++}`,
+                                    name: formatGroupName(nextPatternNum++, wtDivisions),
                                     divisions: wtDivisions.map(mapDivisionToGroupObject),
                                     rulebookPatternId: '',
                                 });
@@ -743,7 +754,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                         if (regularDivisions.length > 0) {
                             newPatternGroups.push({
                                 id: `pattern-group-${Date.now()}${suffix}`,
-                                name: `Group ${nextPatternNum++}`,
+                                name: formatGroupName(nextPatternNum++, regularDivisions),
                                 divisions: regularDivisions.map(mapDivisionToGroupObject),
                                 rulebookPatternId: '',
                             });
@@ -753,7 +764,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                         if (level1Divisions.length > 0) {
                             newPatternGroups.push({
                                 id: `pattern-group-${Date.now() + 1}${suffix}`,
-                                name: `Group ${nextPatternNum++}`,
+                                name: formatGroupName(nextPatternNum++, level1Divisions),
                                 divisions: level1Divisions.map(mapDivisionToGroupObject),
                                 rulebookPatternId: '',
                             });
@@ -763,7 +774,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                         if (greenHorseNoviceDivisions.length > 0) {
                             newPatternGroups.push({
                                 id: `pattern-group-${Date.now() + 2}${suffix}`,
-                                name: `Group ${nextPatternNum++}`,
+                                name: formatGroupName(nextPatternNum++, greenHorseNoviceDivisions),
                                 divisions: greenHorseNoviceDivisions.map(mapDivisionToGroupObject),
                                 rulebookPatternId: '',
                             });
@@ -773,7 +784,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                         if (wtSmallFryDivisions.length > 0) {
                             newPatternGroups.push({
                                 id: `pattern-group-${Date.now() + 3}${suffix}`,
-                                name: `Group ${nextPatternNum++}`,
+                                name: formatGroupName(nextPatternNum++, wtSmallFryDivisions),
                                 divisions: wtSmallFryDivisions.map(mapDivisionToGroupObject),
                                 rulebookPatternId: '',
                             });
@@ -845,9 +856,39 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
 
     const groupedDivisionsSet = new Set((pbbDiscipline?.patternGroups || []).flatMap(g => g.divisions.map(d => d.id)));
 
-    const ungroupedDivisions = useMemo(() => {
+    // Distinct Go dates across all divisions — drives the by-date filter tabs in
+    // the Ungrouped list. Only shown when 2+ dates exist (i.e. two-go shows).
+    const dateFilterOptions = useMemo(() => {
+        const dates = new Set();
+        allDivisions.forEach(d => { if (d.date) dates.add(d.date); });
+        return Array.from(dates).sort();
+    }, [allDivisions]);
+
+    // Default the filter to the earliest date for two-go shows so the user
+    // organizes one day at a time (like the Schedule Builder). Single-date shows
+    // fall back to 'all' and the filter UI stays hidden.
+    useEffect(() => {
+        if (selectedDateFilter === null) {
+            setSelectedDateFilter(dateFilterOptions.length >= 2 ? dateFilterOptions[0] : 'all');
+        }
+    }, [dateFilterOptions, selectedDateFilter]);
+
+    const handleDateFilterChange = (value) => {
+        setSelectedDateFilter(value);
+        setSelectedForBulkMove([]);
+    };
+
+    // All ungrouped divisions across every date (drives panel visibility/layout).
+    const ungroupedAll = useMemo(() => {
         return allDivisions.filter(d => !groupedDivisionsSet.has(d.id));
     }, [allDivisions, groupedDivisionsSet]);
+
+    // Ungrouped divisions for the currently selected date (drives the list, the
+    // Select All checkbox, and Auto-Group so the user works one date at a time).
+    const ungroupedDivisions = useMemo(() => {
+        if (!selectedDateFilter || selectedDateFilter === 'all') return ungroupedAll;
+        return ungroupedAll.filter(d => d.date === selectedDateFilter);
+    }, [ungroupedAll, selectedDateFilter]);
 
     const hierarchyInfoText = "Group divisions that will share the same same pattern. The order of groups determines the pattern order in your book. You can also re-order divisions within a group to set their display order in the pattern's title block.";
 
@@ -876,7 +917,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                 </Popover>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {ungroupedDivisions.length > 0 && (
+                {ungroupedAll.length > 0 && (
                     <div ref={setUngroupedNodeRef} className={cn('lg:col-span-1 p-4 border rounded-xl bg-muted/20 transition-colors', isOverUngrouped ? 'border-primary bg-primary/10' : 'border-dashed')}>
                         <div className="flex justify-between items-center mb-3">
                             <div>
@@ -903,6 +944,33 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                                 </Button>
                             </div>
                         </div>
+
+                        {/* By-date filter: organize one Go date at a time, like the Schedule Builder */}
+                        {dateFilterOptions.length >= 2 && (
+                            <div className="flex items-center gap-1.5 flex-wrap mb-3">
+                                <span className="text-xs font-medium text-muted-foreground mr-1">Date:</span>
+                                <Button
+                                    variant={(!selectedDateFilter || selectedDateFilter === 'all') ? 'default' : 'outline'}
+                                    size="sm"
+                                    className="h-7 text-xs px-2"
+                                    onClick={() => handleDateFilterChange('all')}
+                                >
+                                    All
+                                </Button>
+                                {dateFilterOptions.map(date => (
+                                    <Button
+                                        key={date}
+                                        variant={selectedDateFilter === date ? 'default' : 'outline'}
+                                        size="sm"
+                                        className="h-7 text-xs px-2"
+                                        onClick={() => handleDateFilterChange(date)}
+                                    >
+                                        <CalendarIcon className="h-3 w-3 mr-1" />
+                                        {format(parseLocalDate(date), 'EEE, MMM d')}
+                                    </Button>
+                                ))}
+                            </div>
+                        )}
 
                         <div className="flex items-center justify-between bg-background p-2 rounded-md mb-3">
                             <div className="flex items-center gap-2">
@@ -960,13 +1028,17 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                             {ungroupedDivisions.length === 0 && (
                                 <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-10">
                                     <Check className="h-8 w-8 text-green-500 mb-2" />
-                                    <p className="font-semibold">All divisions are grouped!</p>
+                                    <p className="font-semibold">
+                                        {selectedDateFilter && selectedDateFilter !== 'all'
+                                            ? 'All classes for this date are grouped!'
+                                            : 'All divisions are grouped!'}
+                                    </p>
                                 </div>
                             )}
                         </div>
                     </div>
                 )}
-                <div className={cn(ungroupedDivisions.length === 0 ? 'lg:col-span-2' : 'lg:col-span-1', 'space-y-4')}>
+                <div className={cn(ungroupedAll.length === 0 ? 'lg:col-span-2' : 'lg:col-span-1', 'space-y-4')}>
                     <SortableContext items={patternGroups.map(g => g.id)} strategy={verticalListSortingStrategy} id="groups-container">
                         {patternGroups.map((group, index) => (
                             <DropZoneGroup
@@ -981,7 +1053,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                                 formData={formData}
                                 associationsData={associationsData}
                                 divisionsData={divisionsData}
-                                hasUngroupedDivisions={ungroupedDivisions.length > 0}
+                                hasUngroupedDivisions={ungroupedAll.length > 0}
                             />
                         ))}
                     </SortableContext>
