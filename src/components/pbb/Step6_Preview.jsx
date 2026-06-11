@@ -325,7 +325,23 @@ export const Step6_Preview = ({ formData, setFormData, isEducationMode, stepNumb
   const patternDisciplines = useMemo(() => {
     return allDisciplines.filter(d => d.hasPattern);
   }, [allDisciplines]);
-  
+
+  // Page where the first pattern page lands in the By-Discipline book.
+  // Mirrors bookGenerator.js: cover is unnumbered, the TOC takes pages 1..T,
+  // so the first pattern page is T + 1. The TOC height heuristic must match the
+  // generator exactly (pageHeight 792, margin 36 -> 720pt usable;
+  // base 80 + per-discipline(30 heading + 30 table head + rows*25 + 25 gap)).
+  const byDisciplineContentStart = useMemo(() => {
+    const usableHeight = 792 - 36 * 2; // 720pt
+    let estimatedHeight = 80;
+    patternDisciplines.forEach(d => {
+      const rows = (d.patternGroups || []).length;
+      estimatedHeight += 85 + rows * 25;
+    });
+    const tocPages = Math.max(1, Math.ceil(estimatedHeight / usableHeight));
+    return tocPages + 1;
+  }, [patternDisciplines]);
+
   const scoresheetDisciplines = useMemo(() => {
     return allDisciplines.filter(d => d.hasScoresheet);
   }, [allDisciplines]);
@@ -1008,12 +1024,8 @@ export const Step6_Preview = ({ formData, setFormData, isEducationMode, stepNumb
                       <p className="font-bold text-sm font-serif text-center mb-2 border-b pb-1">
                         Table of Contents
                       </p>
-                      <div className="flex justify-between px-2">
-                        <span className="font-semibold">{purposeName ? `${purposeName}` : 'Show Structure'}</span>
-                        <span>1</span>
-                      </div>
                       {patternDisciplines.slice(0, 4).map((disc, idx) => {
-                        let cumulativePage = 2;
+                        let cumulativePage = byDisciplineContentStart;
                         for (let i = 0; i < idx; i++) {
                           const prevDisc = patternDisciplines[i];
                           const prevGroupCount = (prevDisc.patternGroups || []).length;

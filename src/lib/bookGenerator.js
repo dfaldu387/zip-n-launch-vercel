@@ -189,6 +189,29 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         return baseName;
     };
 
+    // If every division in a group shares the same go (a "Go 1" group or a
+    // "Go 2" group — they are always split into separate groups), return that
+    // go number so the label can be shown ONCE per class instead of repeated on
+    // each division. Returns null for single-go classes or mixed groups, which
+    // keeps the original per-division formatting.
+    const groupGoNumber = (divisions) => {
+        if (!divisions || !divisions.length) return null;
+        const gos = divisions.map(d => d.goNumber);
+        if (!gos.every(n => n === 1 || n === 2)) return null;
+        return gos.every(n => n === gos[0]) ? gos[0] : null;
+    };
+
+    // Division list for a group: when the whole group is one go, drop the
+    // per-division "(Go N)" and return a single trailing "— Go N" instead.
+    const formatGroupDivisions = (group, separator = '/') => {
+        const go = groupGoNumber(group.divisions);
+        if (go) {
+            const names = group.divisions.map(d => removeFirstWord(d.division || '')).join(separator);
+            return { text: names, goSuffix: ` — Go ${go}` };
+        }
+        return { text: (group.divisions || []).map(d => formatDivisionWithGo(d)).join(separator), goSuffix: '' };
+    };
+
     const addImageToPage = async (base64, x, y, width, height) => {
         if (!base64) return;
         try {
@@ -1202,9 +1225,17 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 // Add to TOC with sequential numbering
                 sequentialClassNumber++;
                 const tocLabel = group.customLabel ? ` (${group.customLabel})` : '';
-                const className = `${discipline.name}${tocLabel} - ${group.divisions.map(d => formatDivisionWithGo(d)).join('/')}`;
+                // Show the Go label once per class (e.g. "… — Go 1") for two-go
+                // classes, instead of "(Go 1)" on every division.
+                const { text: divisionsText, goSuffix } = formatGroupDivisions(group, '/');
+                const className = `${discipline.name}${tocLabel} - ${divisionsText}${goSuffix}`;
+                // classDetail = the part shown under a discipline heading in the
+                // By-Discipline TOC (no leading discipline name, to avoid repeating it).
+                const classDetail = `${group.customLabel ? group.customLabel + ' - ' : ''}${divisionsText}${goSuffix}` || className;
                 toc.push({
                     title: className,
+                    discipline: discipline.name,
+                    classDetail,
                     page: doc.internal.getNumberOfPages() - 1,
                     date: competitionDate,
                     dates: groupDates,
@@ -1815,31 +1846,61 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     const tocStartPage = 2;
     let tocPagesNeeded = 1; // Start with 1 page for TOC
 
-    // Unified TOC layout (Layout A structure) — Layout B uses the same flow,
-    // only switching to an italic font family.
-    {
-        const tocByDate = {};
+    // Build the ordered TOC groups for the selected layout.
+    //   Layout A (By Date):       group classes under each show day; the row
+    //                             label is the full class name. A class that
+    //                             runs on multiple days is listed under each day.
+    //   Layout B (By Discipline): bundle every class of the same discipline
+    //                             together (date is irrelevant), in the order the
+    //                             disciplines appear in the book; the heading is
+    //                             the discipline and the row label is the class
+    //                             detail (divisions/levels) without repeating it.
+    const buildTocGroups = () => {
+        if (selectedLayout === 'layout-b') {
+            const byDisc = {};
+            const order = [];
+            toc.forEach(item => {
+                const key = item.discipline || item.title || '';
+                if (!byDisc[key]) { byDisc[key] = []; order.push(key); }
+                byDisc[key].push(item);
+            });
+            return order.map(key => ({
+                heading: key,
+                items: byDisc[key],
+                rowLabel: (item) => item.classDetail || item.title || '',
+            }));
+        }
+        // Layout A — by date
+        const byDate = {};
         toc.forEach(item => {
-            // List a class under every day its divisions run (multi-date groups).
             const itemDates = (item.dates && item.dates.length) ? item.dates : (item.date ? [item.date] : []);
             itemDates.forEach(d => {
-                if (!tocByDate[d]) tocByDate[d] = [];
-                tocByDate[d].push(item);
+                if (!byDate[d]) byDate[d] = [];
+                byDate[d].push(item);
             });
         });
+        return Object.keys(byDate).sort().map(d => ({
+            heading: format(parseLocalDate(d), 'EEEE, MMMM d, yyyy'),
+            items: byDate[d],
+            rowLabel: (item) => item.title || '',
+        }));
+    };
 
+    const tocGroups = buildTocGroups();
+
+    // Estimate how many pages the TOC needs (heading + table head + rows + gap).
+    {
         let estimatedHeight = 80;
-        Object.keys(tocByDate).forEach(dateStr => {
-            estimatedHeight += 30;
-            estimatedHeight += 30;
-            estimatedHeight += tocByDate[dateStr].length * 25;
-            estimatedHeight += 25;
+        tocGroups.forEach(group => {
+            estimatedHeight += 30;                       // group heading
+            estimatedHeight += 30;                       // table head row
+            estimatedHeight += group.items.length * 25;  // class rows
+            estimatedHeight += 25;                       // spacing after table
         });
-
         const availableHeightPerPage = pageHeight - margin * 2;
         tocPagesNeeded = Math.ceil(estimatedHeight / availableHeightPerPage);
     }
-    
+
     // If TOC spans multiple pages we must *insert* pages after page 2,
     // otherwise we would end up drawing TOC page 2 over the first content page.
     const tocPageOffset = Math.max(0, tocPagesNeeded - 1); // extra pages beyond the first TOC page
@@ -1861,10 +1922,10 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
 
     // Now render the TOC
     doc.setPage(tocStartPage);
-    
+
     {
-        // Unified TOC Population (Layout A structure).
-        // Layout B switches to an italic font family; everything else is identical.
+        // Layout B switches to an italic serif font family; the layout structure
+        // (heading + table) is shared, only the grouping differs (built above).
         const tocFontFamily = selectedLayout === 'layout-b' ? 'times' : 'helvetica';
         const tocHeaderStyle = selectedLayout === 'layout-b' ? 'bolditalic' : 'bold';
         const tocRowStyle = selectedLayout === 'layout-b' ? 'italic' : 'normal';
@@ -1886,26 +1947,12 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         doc.setFontSize(tocTitleFit.size);
         doc.text(tocTitleFit.lines, pageWidth / 2, yPos, { align: 'center' });
         yPos += 30 + (tocTitleFit.lines.length - 1) * (tocTitleFit.size + 4);
-    
-        const tocByDate = {};
-        toc.forEach(item => {
-            // List a class under every day its divisions run (multi-date groups),
-            // so no scheduled day looks empty in the By-Date table of contents.
-            const itemDates = (item.dates && item.dates.length) ? item.dates : (item.date ? [item.date] : []);
-            itemDates.forEach(d => {
-                if (!tocByDate[d]) tocByDate[d] = [];
-                tocByDate[d].push(item);
-            });
-        });
 
-        const sortedDates = Object.keys(tocByDate).sort();
         let tocCurrentPage = tocStartPage;
-        
-        sortedDates.forEach(dateStr => {
+
+        tocGroups.forEach(group => {
             // Check if we need a new page - if so, track it
             if (yPos > pageHeight - 150) {
-                // Insert a new page after the current TOC page
-                const currentPageCount = doc.internal.getNumberOfPages();
                 if (tocCurrentPage < tocStartPage + tocPagesNeeded - 1) {
                     // We're still within estimated TOC pages, just move to next page
                     tocCurrentPage++;
@@ -1913,18 +1960,17 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     yPos = margin + 30;
                 }
             }
-            
+
             doc.setFont(tocFontFamily, tocHeaderStyle);
             doc.setFontSize(14);
             doc.setTextColor(60, 60, 60);
-            const dateFormatted = format(parseLocalDate(dateStr), 'EEEE, MMMM d, yyyy');
-            doc.text(dateFormatted, margin, yPos);
+            doc.text(group.heading, margin, yPos);
             yPos += 30;
-    
-            const hasAnyClassNumbers = tocByDate[dateStr].some(item => item.classNumber);
+
+            const hasAnyClassNumbers = group.items.some(item => item.classNumber);
             const tableData = hasAnyClassNumbers
-                ? tocByDate[dateStr].map(item => [item.classNumber || '', item.title || '', item.page.toString()])
-                : tocByDate[dateStr].map(item => [item.title || '', item.page.toString()]);
+                ? group.items.map(item => [item.classNumber || '', group.rowLabel(item), item.page.toString()])
+                : group.items.map(item => [group.rowLabel(item), item.page.toString()]);
 
             doc.autoTable({
                 startY: yPos,
