@@ -982,7 +982,10 @@ export const Step6_Preview = ({ formData, setFormData, isEducationMode, stepNumb
                     <div className="w-full space-y-1">
                       <p className="text-xs font-semibold text-muted-foreground">Patterns:</p>
                       {patternDisciplines.slice(0, 3).map((disc, idx) => {
-                        let cumulativePage = 2;
+                        // Both layouts list the same classes, so the TOC length —
+                        // and the first pattern page — is the same. Start from the
+                        // real content page instead of a hard-coded 2.
+                        let cumulativePage = byDisciplineContentStart;
                         for (let i = 0; i < idx; i++) {
                           const prevDisc = patternDisciplines[i];
                           const prevGroupCount = (prevDisc.patternGroups || []).length;
