@@ -1044,11 +1044,40 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     }
     } // end if (!skipCoverAndToc)
 
+    // A class that has a Go 1 / Go 2 version can leave a stale "plain" copy of
+    // itself behind in a group — e.g. it was already grouped before Go 2 was
+    // added, so the group still holds the original "Amateur" alongside the new
+    // "Amateur (Go 1)". That shows up as a duplicate in the same class row.
+    // Collect every baseId that has a Go version anywhere in the book, so the
+    // plain leftover copy can be dropped (the Go versions are the real entries).
+    const goBaseIds = new Set();
+    (pbbData.disciplines || []).forEach(disc => {
+        (disc.patternGroups || []).forEach(g => {
+            (g.divisions || []).forEach(d => {
+                if (d && (d.goNumber === 1 || d.goNumber === 2)) {
+                    goBaseIds.add(d.baseId || d.id);
+                }
+            });
+        });
+    });
+    const dropStaleBaseDivisions = (divisions) => {
+        if (!Array.isArray(divisions) || goBaseIds.size === 0) return divisions;
+        return divisions.filter(d => {
+            // Always keep the Go 1 / Go 2 entries.
+            if (d && (d.goNumber === 1 || d.goNumber === 2)) return true;
+            // Drop a plain copy only when a Go version of the same class exists.
+            return !goBaseIds.has(d && (d.baseId || d.id));
+        });
+    };
+
     // --- Pattern Pages ---
     let sequentialClassNumber = 10000;
     for (const [discIndex, discipline] of (pbbData.disciplines || []).entries()) {
         if (!isPatternDiscipline(discipline)) continue;
         for (const [groupIndex, group] of (discipline.patternGroups || []).entries()) {
+            // Strip any stale plain copy of a class that now has Go 1 / Go 2,
+            // before anything (page count, TOC, headers) reads the divisions.
+            if (group.divisions) group.divisions = dropStaleBaseDivisions(group.divisions);
             // Skip empty groups (no divisions assigned) — prevents phantom pages in downloads
             const hasDivisions = group.divisions && group.divisions.length > 0;
             if (!hasDivisions && !skipCoverAndToc) continue;
