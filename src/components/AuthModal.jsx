@@ -987,7 +987,7 @@ const AuthModal = () => {
                                         size="lg"
                                         onClick={() => {
                                             closeAuthModal();
-                                            navigate('/choose-a-pattern');
+                                            navigate('/pattern-hub');
                                         }}
                                     >
                                         <Sparkles className="mr-2 h-4 w-4" />

@@ -159,7 +159,7 @@ const StorePage = () => {
           <div className="flex flex-col gap-2 w-full">
             {product.id === 'breed-show-package' ? (
               <Button asChild className="w-full bg-primary text-primary-foreground hover:bg-primary/90">
-                <Link to="/easy-pattern-book-builder">
+                <Link to="/pattern-book-builder">
                   <Download className="h-4 w-4 mr-2" /> Start Building
                 </Link>
               </Button>

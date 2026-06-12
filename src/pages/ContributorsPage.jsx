@@ -74,7 +74,7 @@ const ContributorsPage = () => {
                     <div className="flex items-center gap-1.5"><Award className="h-4 w-4" /> Pro Designer</div>
                   </div>
                   <Button asChild variant="outline" className="w-full">
-                    <Link to="/patterns">View Patterns</Link>
+                    <Link to="/library/patterns">View Patterns</Link>
                   </Button>
                 </CardFooter>
               </Card>

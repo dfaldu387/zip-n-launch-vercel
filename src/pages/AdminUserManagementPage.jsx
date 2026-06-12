@@ -8,7 +8,7 @@ import {
   Mail,
   Calendar,
   Loader2,
-  LogIn
+  Eye
 } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -34,15 +34,12 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Button } from '@/components/ui/button';
 import AdminBackButton from '@/components/admin/AdminBackButton';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const PAGE_SIZE = 10;
 
@@ -54,9 +51,9 @@ const AdminUserManagementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const { hasPermission, user: adminUser } = useAuth();
-  const [impersonatingUser, setImpersonatingUser] = useState(null);
-  const [isImpersonateDialogOpen, setIsImpersonateDialogOpen] = useState(false);
+  const { hasPermission } = useAuth();
+  const [viewingUser, setViewingUser] = useState(null);
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -150,47 +147,9 @@ const AdminUserManagementPage = () => {
     }
   };
 
-  const openImpersonateDialog = (user) => {
-    setImpersonatingUser(user);
-    setIsImpersonateDialogOpen(true);
-  };
-
-  const handleImpersonate = async () => {
-    if (!impersonatingUser) return;
-
-    try {
-      const { data, error } = await supabase.functions.invoke('impersonate-user', {
-        body: { user_id: impersonatingUser.id },
-      });
-
-      if (error) throw error;
-
-      const { session, error: sessionError } = await supabase.auth.setSession({
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-      });
-
-      if (sessionError) throw sessionError;
-      
-      localStorage.setItem('impersonator', JSON.stringify({ id: adminUser.id, email: adminUser.email }));
-
-      toast({
-        title: 'Impersonation Successful',
-        description: `You are now logged in as ${impersonatingUser.full_name}.`,
-      });
-
-      window.location.href = '/dashboard';
-
-    } catch (error) {
-      toast({
-        title: 'Impersonation Failed',
-        description: error.message,
-        variant: 'destructive',
-      });
-    } finally {
-      setIsImpersonateDialogOpen(false);
-      setImpersonatingUser(null);
-    }
+  const openViewDialog = (user) => {
+    setViewingUser(user);
+    setIsViewDialogOpen(true);
   };
 
   const filteredUsers = users.filter(user => {
@@ -333,12 +292,15 @@ const AdminUserManagementPage = () => {
                               </div>
                             </TableCell>
                             <TableCell className="text-right">
-                              {adminUser?.id !== user.id && (
-                                <Button variant="ghost" size="sm" onClick={() => openImpersonateDialog(user)} disabled={!hasPermission('users:impersonate')}>
-                                  <LogIn className="h-4 w-4 mr-2" />
-                                  Impersonate
-                                </Button>
-                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title="View details"
+                                onClick={() => openViewDialog(user)}
+                              >
+                                <Eye className="h-4 w-4" />
+                                <span className="sr-only">View details</span>
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -387,20 +349,59 @@ const AdminUserManagementPage = () => {
           </motion.div>
         </main>
       </div>
-      <AlertDialog open={isImpersonateDialogOpen} onOpenChange={setIsImpersonateDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Impersonate User</AlertDialogTitle>
-            <AlertDialogDescription>
-              You are about to impersonate {impersonatingUser?.full_name}. Continue?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setImpersonatingUser(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleImpersonate}>Continue</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>User Details</DialogTitle>
+            <DialogDescription>
+              Account information for this user.
+            </DialogDescription>
+          </DialogHeader>
+          {viewingUser && (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-start gap-2">
+                <User className="h-4 w-4 text-muted-foreground mt-0.5" />
+                <div>
+                  <p className="text-muted-foreground">Name</p>
+                  <p className="font-medium">{viewingUser.full_name || 'Unknown User'}</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Mail className="h-4 w-4 text-muted-foreground mt-0.5" />
+                <div>
+                  <p className="text-muted-foreground">Email</p>
+                  <p className="font-medium break-all">{viewingUser.email || 'No email'}</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Users className="h-4 w-4 text-muted-foreground mt-0.5" />
+                <div>
+                  <p className="text-muted-foreground">Role</p>
+                  <p className="font-medium">
+                    {roles.find(r => r.role_code === viewingUser.role)?.name || viewingUser.role || 'Customer'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
+                <div>
+                  <p className="text-muted-foreground">Joined</p>
+                  <p className="font-medium">
+                    {viewingUser.created_at ? new Date(viewingUser.created_at).toLocaleDateString() : 'Unknown'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <User className="h-4 w-4 text-muted-foreground mt-0.5" />
+                <div>
+                  <p className="text-muted-foreground">User ID</p>
+                  <p className="font-medium break-all">{viewingUser.id}</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

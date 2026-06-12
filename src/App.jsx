@@ -1,6 +1,7 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from '@/components/ui/toaster';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import HomePage from '@/pages/HomePage';
 import CustomizePage from '@/pages/CustomizePage';
 import ContributorPortalPage from '@/pages/ContributorPortalPage';
@@ -135,6 +136,7 @@ function App() {
           <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
             <AnalyticsProvider>
               <div className="min-h-screen">
+                <ErrorBoundary>
                 <Routes>
                   <Route path="/" element={<HomePage />} />
                   <Route path="/update-password" element={<UpdatePasswordPage />} />
@@ -279,7 +281,10 @@ function App() {
                   <Route path="/score-sheet-generator" element={<ScoreSheetGeneratorPage />} />
                   <Route path="/s/:id" element={<ScoreSheetQRDownloadPage />} />
                   <Route path="/s/:id/results" element={<ScoreSheetResultsPage />} />
+                  {/* Catch-all: any unknown URL redirects to home instead of a blank page */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
+                </ErrorBoundary>
                 <Toaster />
                 <AuthModal />
                 <SupportWidget />
