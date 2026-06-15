@@ -192,6 +192,16 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
             return group ? group.id : null;
         };
 
+        // Helper: resolve a division's show date. Ungrouped rows carry `date`
+        // directly; grouped rows only store baseId/goNumber, so look the date up
+        // in divisionGos (go2Date for Go 2, go1Date otherwise).
+        const resolveDivisionDate = (d) => {
+            if (d?.date) return d.date;
+            const baseId = d?.baseId || d?.id;
+            const goInfo = pbbDiscipline.divisionGos?.[baseId] || {};
+            return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
+        };
+
         const sourceGroupId =
             activeContainerId && activeContainerId !== UNGROUPED_ID
                 ? activeContainerId
@@ -258,6 +268,24 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                             variant: 'destructive',
                             title: 'Invalid Grouping',
                             description: 'Go 1 and Go 2 of the same class cannot be in the same pattern group.',
+                        });
+                        return;
+                    }
+                }
+
+                // Date Separation: a pattern group must contain a single show date.
+                // Group divisions don't store their own date, so resolve it from divisionGos.
+                const movingDate = resolveDivisionDate(divisionToMove);
+                if (movingDate) {
+                    const hasDifferentDate = targetGroup.divisions.some(d => {
+                        const groupDate = resolveDivisionDate(d);
+                        return groupDate && groupDate !== movingDate;
+                    });
+                    if (hasDifferentDate) {
+                        toast({
+                            variant: 'destructive',
+                            title: 'Invalid Grouping',
+                            description: 'Divisions from different dates cannot be grouped together. Keep each date in its own group.',
                         });
                         return;
                     }
@@ -417,6 +445,27 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                     variant: 'destructive',
                     title: 'Invalid Grouping',
                     description: 'Go 1 and Go 2 of the same class cannot be in the same pattern group.',
+                });
+                return;
+            }
+
+            // Date Separation: a bulk move cannot mix dates into one group.
+            const resolveDivisionDate = (d) => {
+                if (d?.date) return d.date;
+                const baseId = d?.baseId || d?.id;
+                const goInfo = pbbDiscipline.divisionGos?.[baseId] || {};
+                return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
+            };
+            const combinedDates = new Set(
+                [...divisionsToMove, ...targetGroup.divisions]
+                    .map(resolveDivisionDate)
+                    .filter(Boolean)
+            );
+            if (combinedDates.size > 1) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Invalid Grouping',
+                    description: 'Divisions from different dates cannot be grouped together. Keep each date in its own group.',
                 });
                 return;
             }
@@ -674,10 +723,6 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
         const hasMultipleAssociations = ungroupedAssocIds.length >= 2;
         const isWtAffected = AFFECTED_CLASSES_FOR_WT_RULE.includes(pbbDiscipline.name);
 
-        // Separate Go 1 and Go 2 divisions
-        const go1Divisions = ungroupedDivisions.filter(d => d.goNumber === 1 || d.goNumber === null);
-        const go2Divisions = ungroupedDivisions.filter(d => d.goNumber === 2);
-
         setFormData(prev => {
             const newDisciplines = prev.disciplines.map(disc => {
                 if (disc.id !== pbbDiscipline.id) return disc;
@@ -792,11 +837,26 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                     }
                 };
 
-                // First, group Go 1 divisions (and single-go divisions)
-                createGroupsFromDivisions(go1Divisions, '-go1');
+                // Partition by show date FIRST so each date forms its own groups,
+                // in chronological order (earliest date first, undated last). This
+                // keeps "everything on the 29th" separate from "everything on Jul 1".
+                // Within each date, Go 1 and Go 2 still get separate groups so a
+                // class's two gos never share a group.
+                const datesInUngrouped = [...new Set(ungroupedDivisions.map(d => d.date || ''))]
+                    .sort((a, b) => {
+                        if (!a) return 1;   // undated sorts last
+                        if (!b) return -1;
+                        return a.localeCompare(b);
+                    });
 
-                // Then, group Go 2 divisions separately
-                createGroupsFromDivisions(go2Divisions, '-go2');
+                datesInUngrouped.forEach(dateVal => {
+                    const dateDivisions = ungroupedDivisions.filter(d => (d.date || '') === dateVal);
+                    const go1ForDate = dateDivisions.filter(d => d.goNumber === 1 || d.goNumber === null);
+                    const go2ForDate = dateDivisions.filter(d => d.goNumber === 2);
+                    const dateSuffix = dateVal ? `-${dateVal}` : '-nodate';
+                    createGroupsFromDivisions(go1ForDate, `${dateSuffix}-go1`);
+                    createGroupsFromDivisions(go2ForDate, `${dateSuffix}-go2`);
+                });
 
                 return { ...disc, patternGroups: newPatternGroups };
             });

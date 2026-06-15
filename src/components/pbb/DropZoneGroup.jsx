@@ -5,7 +5,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { GripVertical, Trash2, Edit, Calendar as CalendarIcon, X, Save, Sparkles, AlertCircle, Eye, Check, ChevronsUpDown, ZoomIn, ZoomOut, RotateCcw, Loader2 } from 'lucide-react';
+import { GripVertical, Trash2, Edit, Calendar as CalendarIcon, X, Save, Sparkles, AlertCircle, Eye, Check, ChevronsUpDown, ZoomIn, ZoomOut, RotateCcw, Loader2, Undo2 } from 'lucide-react';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
@@ -329,6 +329,28 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
         }));
     };
 
+    // Remove this class entirely from the group → it returns to the Ungrouped
+    // list (it's simply no longer in any group). The date is kept. This is the
+    // clear "take it out" action, distinct from the date × which only clears the date.
+    const handleRemoveFromGroup = (e) => {
+        e.stopPropagation();
+        setFormData(prev => ({
+            ...prev,
+            disciplines: prev.disciplines.map(disc => {
+                if (disc.id === pbbDiscipline.id) {
+                    const updatedGroups = (disc.patternGroups || []).map(g => {
+                        if (g.id === groupId) {
+                            return { ...g, divisions: g.divisions.filter(d => d.id !== division.id) };
+                        }
+                        return g;
+                    });
+                    return { ...disc, patternGroups: updatedGroups };
+                }
+                return disc;
+            })
+        }));
+    };
+
     // Use already parsed divisionCategory for divisionTag
     const divisionTag = divisionCategory;
     const cleanedName = dashIndex > -1 ? originalDivisionName.substring(dashIndex + 3).trim() : originalDivisionName;
@@ -469,6 +491,8 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
                             </PopoverTrigger>
                             <button
                                 type="button"
+                                title="Remove date"
+                                aria-label="Remove date"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     handleRemoveDate(e);
@@ -506,6 +530,16 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
                     </PopoverContent>
                 </Popover>
                 {getAssociationBadges()}
+                {/* Send this class back to the Ungrouped list (removes it from this group) */}
+                <button
+                    type="button"
+                    onClick={handleRemoveFromGroup}
+                    title="Remove from group (back to Ungrouped)"
+                    aria-label="Remove from group"
+                    className="ml-1 shrink-0 rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                >
+                    <Undo2 className="h-3.5 w-3.5" />
+                </button>
             </div>
         </div>
     );
