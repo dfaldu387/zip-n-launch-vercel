@@ -950,6 +950,116 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
         return ungroupedAll.filter(d => d.date === selectedDateFilter);
     }, [ungroupedAll, selectedDateFilter]);
 
+    // Resolve a division's show date. Ungrouped rows carry `date` directly;
+    // grouped rows only store baseId/goNumber, so look the date up in divisionGos
+    // (go2Date for Go 2, go1Date otherwise).
+    const resolveGroupDivisionDate = (d) => {
+        if (d?.date) return d.date;
+        const baseId = d?.baseId || d?.id;
+        const goInfo = pbbDiscipline?.divisionGos?.[baseId] || {};
+        return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
+    };
+
+    // A pattern group holds a single show date (enforced by the drag rules), so
+    // its date is the first dated division it contains. Empty/undated groups
+    // return null and stay visible under every date filter.
+    const getGroupDate = (group) => {
+        for (const d of (group?.divisions || [])) {
+            const dt = resolveGroupDivisionDate(d);
+            if (dt) return dt;
+        }
+        return null;
+    };
+
+    // Groups shown in the right panel, filtered to the selected date so each Go
+    // (date) shows only its own groups — selecting Jul 1 no longer shows the
+    // Jun 29 groups. Empty/undated groups always show so a freshly added group
+    // stays visible until divisions are dropped into it.
+    const visiblePatternGroups = useMemo(() => {
+        const groups = pbbDiscipline?.patternGroups || [];
+        if (!selectedDateFilter || selectedDateFilter === 'all') return groups;
+        return groups.filter(g => {
+            const gd = getGroupDate(g);
+            return !gd || gd === selectedDateFilter;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pbbDiscipline, selectedDateFilter]);
+
+    // Dates that already have at least one pattern group.
+    const datesWithGroups = useMemo(() => {
+        const set = new Set();
+        (pbbDiscipline?.patternGroups || []).forEach(g => {
+            const d = getGroupDate(g);
+            if (d) set.add(d);
+        });
+        return set;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pbbDiscipline]);
+
+    // When a specific date is selected and it has no groups yet, offer to copy
+    // the group layout from another date (e.g. build Go 2 from Go 1). Returns
+    // the earliest other date that has groups, or null when copying doesn't apply.
+    const copyableSourceDate = useMemo(() => {
+        if (!selectedDateFilter || selectedDateFilter === 'all') return null;
+        if (datesWithGroups.has(selectedDateFilter)) return null; // current date already built
+        const others = dateFilterOptions.filter(d => d !== selectedDateFilter && datesWithGroups.has(d));
+        return others[0] || null; // dateFilterOptions is sorted, so this is the earliest (Go 1)
+    }, [selectedDateFilter, dateFilterOptions, datesWithGroups]);
+
+    // Copy the group layout from `sourceDate` onto the currently selected date,
+    // swapping each class to its entry for the target date (Go 1 → Go 2). Classes
+    // that don't run on the target date, or are already grouped there, are skipped.
+    const handleDuplicateGroupsFromDate = (sourceDate) => {
+        const targetDate = selectedDateFilter;
+        if (!sourceDate || !targetDate || targetDate === 'all') return;
+
+        // Target-date entry per class (keyed by baseId) from the full division list.
+        const targetByBase = new Map();
+        allDivisions.forEach(d => { if (d.date === targetDate) targetByBase.set(d.baseId, d); });
+
+        // Classes already grouped anywhere (skip to avoid duplicates on the target date).
+        const alreadyGrouped = new Set((pbbDiscipline.patternGroups || []).flatMap(g => g.divisions.map(d => d.id)));
+
+        const sourceGroups = (pbbDiscipline.patternGroups || []).filter(g => getGroupDate(g) === sourceDate);
+        if (sourceGroups.length === 0) return;
+
+        const existingTargetCount = (pbbDiscipline.patternGroups || []).filter(g => getGroupDate(g) === targetDate).length;
+
+        const newGroups = sourceGroups.map((g, i) => {
+            const divisions = (g.divisions || [])
+                .map(d => targetByBase.get(d.baseId || d.id))
+                .filter(t => t && !alreadyGrouped.has(t.id))
+                .map(mapDivisionToGroupObject);
+            return {
+                id: `pattern-group-${Date.now()}-${i}`,
+                // Name with the target date directly — the mapped divisions don't
+                // carry a `date` field, so formatGroupName couldn't infer it.
+                name: `Group ${existingTargetCount + i + 1} — ${format(parseLocalDate(targetDate), 'MMM d')}`,
+                divisions,
+                rulebookPatternId: g.rulebookPatternId || ''
+            };
+        }).filter(g => g.divisions.length > 0);
+
+        if (newGroups.length === 0) {
+            toast({ title: 'Nothing to copy', description: 'These classes are already grouped on this date.' });
+            return;
+        }
+
+        setFormData(prev => ({
+            ...prev,
+            disciplines: prev.disciplines.map(disc =>
+                disc.id === pbbDiscipline.id
+                    ? { ...disc, patternGroups: [...(disc.patternGroups || []), ...newGroups] }
+                    : disc
+            )
+        }));
+
+        toast({
+            title: 'Groups Copied',
+            description: `Copied ${newGroups.length} group${newGroups.length > 1 ? 's' : ''} from ${format(parseLocalDate(sourceDate), 'MMM d')}.`,
+        });
+    };
+
     const hierarchyInfoText = "Group divisions that will share the same same pattern. The order of groups determines the pattern order in your book. You can also re-order divisions within a group to set their display order in the pattern's title block.";
 
     if (!pbbDiscipline) {
@@ -976,61 +1086,77 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                     <PopoverContent className="text-sm w-80">{hierarchyInfoText}</PopoverContent>
                 </Popover>
             </div>
+
+            {/* Toolbar: date navigation + group actions. Kept above the grid so it
+                stays visible even when every division is grouped — otherwise the
+                date chips would vanish with the Ungrouped panel and there'd be no
+                way to switch to another Go (date). */}
+            {(dateFilterOptions.length >= 2 || patternGroups.length > 0 || ungroupedAll.length > 0) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    {dateFilterOptions.length >= 2 ? (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-medium text-muted-foreground mr-1">Date:</span>
+                            <Button
+                                variant={(!selectedDateFilter || selectedDateFilter === 'all') ? 'default' : 'outline'}
+                                size="sm"
+                                className="h-7 text-xs px-2"
+                                onClick={() => handleDateFilterChange('all')}
+                            >
+                                All
+                            </Button>
+                            {dateFilterOptions.map(date => (
+                                <Button
+                                    key={date}
+                                    variant={selectedDateFilter === date ? 'default' : 'outline'}
+                                    size="sm"
+                                    className="h-7 text-xs px-2"
+                                    onClick={() => handleDateFilterChange(date)}
+                                >
+                                    <CalendarIcon className="h-3 w-3 mr-1" />
+                                    {format(parseLocalDate(date), 'EEE, MMM d')}
+                                </Button>
+                            ))}
+                        </div>
+                    ) : <div />}
+                    <div className="flex gap-2">
+                        {copyableSourceDate && (
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => handleDuplicateGroupsFromDate(copyableSourceDate)}
+                            >
+                                <Copy className="h-4 w-4 mr-2" />
+                                Copy from {format(parseLocalDate(copyableSourceDate), 'MMM d')}
+                            </Button>
+                        )}
+                        {getDisciplinesWithGroups.length > 0 && (!selectedDateFilter || selectedDateFilter === 'all') && (
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setIsDuplicateGroupsDialogOpen(true)}
+                            >
+                                <Copy className="h-4 w-4 mr-2" />
+                                Duplicate Groups
+                            </Button>
+                        )}
+                        <Button variant="outline" size="sm" onClick={handleAutoGroup} disabled={ungroupedDivisions.length === 0}>
+                            <Sparkles className="h-4 w-4 mr-2" />
+                            Auto-Group
+                        </Button>
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {ungroupedAll.length > 0 && (
                     <div ref={setUngroupedNodeRef} className={cn('lg:col-span-1 p-4 border rounded-xl bg-muted/20 transition-colors', isOverUngrouped ? 'border-primary bg-primary/10' : 'border-dashed')}>
-                        <div className="flex justify-between items-center mb-3">
-                            <div>
-                                <Label className="font-semibold flex items-center text-base">
-                                    <Undo2 className="h-5 w-5 mr-2 text-muted-foreground" />
-                                    Ungrouped Divisions
-                                </Label>
-                                <p className="text-xs text-muted-foreground">Drag, or select and move divisions.</p>
-                            </div>
-                            <div className="flex gap-2">
-                                {getDisciplinesWithGroups.length > 0 && (
-                                    <Button 
-                                        variant="secondary" 
-                                        size="sm" 
-                                        onClick={() => setIsDuplicateGroupsDialogOpen(true)}
-                                    >
-                                        <Copy className="h-4 w-4 mr-2" />
-                                        Duplicate Groups
-                                    </Button>
-                                )}
-                                <Button variant="outline" size="sm" onClick={handleAutoGroup} disabled={ungroupedDivisions.length === 0}>
-                                    <Sparkles className="h-4 w-4 mr-2" />
-                                    Auto-Group
-                                </Button>
-                            </div>
+                        <div className="mb-3">
+                            <Label className="font-semibold flex items-center text-base">
+                                <Undo2 className="h-5 w-5 mr-2 text-muted-foreground" />
+                                Ungrouped Divisions
+                            </Label>
+                            <p className="text-xs text-muted-foreground">Drag, or select and move divisions.</p>
                         </div>
-
-                        {/* By-date filter: organize one Go date at a time, like the Schedule Builder */}
-                        {dateFilterOptions.length >= 2 && (
-                            <div className="flex items-center gap-1.5 flex-wrap mb-3">
-                                <span className="text-xs font-medium text-muted-foreground mr-1">Date:</span>
-                                <Button
-                                    variant={(!selectedDateFilter || selectedDateFilter === 'all') ? 'default' : 'outline'}
-                                    size="sm"
-                                    className="h-7 text-xs px-2"
-                                    onClick={() => handleDateFilterChange('all')}
-                                >
-                                    All
-                                </Button>
-                                {dateFilterOptions.map(date => (
-                                    <Button
-                                        key={date}
-                                        variant={selectedDateFilter === date ? 'default' : 'outline'}
-                                        size="sm"
-                                        className="h-7 text-xs px-2"
-                                        onClick={() => handleDateFilterChange(date)}
-                                    >
-                                        <CalendarIcon className="h-3 w-3 mr-1" />
-                                        {format(parseLocalDate(date), 'EEE, MMM d')}
-                                    </Button>
-                                ))}
-                            </div>
-                        )}
 
                         <div className="flex items-center justify-between bg-background p-2 rounded-md mb-3">
                             <div className="flex items-center gap-2">
@@ -1052,7 +1178,7 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                                         </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent>
-                                        {patternGroups.map(group => (
+                                        {visiblePatternGroups.map(group => (
                                             <DropdownMenuItem key={group.id} onSelect={() => handleBulkMove(pbbDiscipline.id, group.id)}>
                                                 {group.name}
                                             </DropdownMenuItem>
@@ -1099,8 +1225,8 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                     </div>
                 )}
                 <div className={cn(ungroupedAll.length === 0 ? 'lg:col-span-2' : 'lg:col-span-1', 'space-y-4')}>
-                    <SortableContext items={patternGroups.map(g => g.id)} strategy={verticalListSortingStrategy} id="groups-container">
-                        {patternGroups.map((group, index) => (
+                    <SortableContext items={visiblePatternGroups.map(g => g.id)} strategy={verticalListSortingStrategy} id="groups-container">
+                        {visiblePatternGroups.map((group, index) => (
                             <DropZoneGroup
                                 key={group.id}
                                 group={group}
