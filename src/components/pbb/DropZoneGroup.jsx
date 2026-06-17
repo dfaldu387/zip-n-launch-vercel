@@ -81,10 +81,16 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
             }
         }
         
-        // Apply the same filtering logic as Tab 1 (from ClassTabs.jsx)
-        // Non-Pro divisions should only be shown for specific disciplines
-        const nonProAllowedDisciplines = ['Showmanship at Halter', 'Horsemanship', 'Hunt Seat Equitation'];
-        const shouldShowNonPro = nonProAllowedDisciplines.includes(pbbDiscipline.name);
+        // Apply the same filtering logic as Tab 1 (from ClassTabs.jsx).
+        // Non-Pro divisions only apply to a few disciplines. Normalize the discipline name to the
+        // core keyword that appears in its Non-Pro level names. Handles both naming styles:
+        // "Showmanship at Halter"/"Showmanship" and "Western Horsemanship"/"Horsemanship".
+        const nonProKeyword = (pbbDiscipline.name || '')
+            .replace(' at Halter', '')
+            .replace('Western ', '')
+            .trim();
+        const nonProDisciplines = ['Showmanship', 'Horsemanship', 'Hunt Seat Equitation'];
+        const shouldShowNonPro = nonProDisciplines.includes(nonProKeyword);
         
         // Associations that should only show Open, Non-Pro, Youth (hide Amateur)
         const openNonProYouthOnlyAssocs = ['SHTX', 'NRHA', 'NRCHA'];
@@ -108,11 +114,8 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
                 if (shouldShowNonPro && d.group === 'Non-Pro' && !isOpenNonProYouthOnlyAssoc) {
                     return {
                         ...d,
-                        levels: d.levels.filter(level => {
-                            // Match the level to the current discipline
-                            const disciplineKeyword = pbbDiscipline.name.replace(' at Halter', '');
-                            return level.includes(disciplineKeyword);
-                        })
+                        // Only keep Non-Pro levels that belong to THIS discipline.
+                        levels: d.levels.filter(level => level.includes(nonProKeyword))
                     };
                 }
                 return d;

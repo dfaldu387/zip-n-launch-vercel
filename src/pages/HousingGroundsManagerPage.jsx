@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import Navigation from '@/components/Navigation';
@@ -16,8 +16,8 @@ import {
     Loader2, Home, Hash, Calendar, FolderOpen,
     MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, Edit2, AlertCircle, Wand2, Moon,
-    Droplets, Wrench, Package, Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
-    ScanLine, FileText,
+    Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
+    ScanLine, FileText, ImagePlus,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -66,20 +66,87 @@ const RV_PRICING_MODELS = [
     { id: 'flat', name: 'Flat Rate (entire stay)' },
 ];
 
-const SUPPORT_SPACE_TYPES = [
-    { id: 'tack_stall', name: 'Tack Stall', icon: Home, defaultPrice: 60, color: 'text-indigo-600' },
-    { id: 'wash_rack', name: 'Wash Rack', icon: Droplets, defaultPrice: 40, color: 'text-sky-600' },
-    { id: 'feed_storage', name: 'Feed Storage', icon: Package, defaultPrice: 30, color: 'text-amber-600' },
-    { id: 'equipment_zone', name: 'Equipment Zone', icon: Wrench, defaultPrice: 50, color: 'text-slate-600' },
-];
-
 const SUPPLY_PRESETS = [
     { name: 'Hay (Grass)', unit: 'bale', defaultPrice: 15 },
     { name: 'Hay (Alfalfa)', unit: 'bale', defaultPrice: 20 },
     { name: 'Hay (Mixed)', unit: 'bale', defaultPrice: 18 },
     { name: 'Shavings', unit: 'bag', defaultPrice: 12 },
     { name: 'Stall Mat Rental', unit: 'per stall', defaultPrice: 25 },
+    // Pre-bedding: shavings delivered to the stalls before the show and paid up
+    // front (not bought at the show), so it defaults to per-stall + pre-entry.
+    { name: 'Pre-Bedding (Shavings)', unit: 'per stall', defaultPrice: 25, preBedding: true },
 ];
+
+// Fee-detail options — kept in sync with FeeStructureStep so the questions
+// (Unit Type, Payment Timing) look and read identically on both pages.
+const FEE_UNIT_TYPE_OPTIONS = [
+    { value: 'flat', label: 'Flat Fee' },
+    { value: 'per_horse', label: 'Per Horse' },
+    { value: 'per_night', label: 'Per Night' },
+    { value: 'per_stall', label: 'Per Stall' },
+    { value: 'per_bag', label: 'Per Bag' },
+    { value: 'custom', label: 'Custom Unit' },
+];
+
+const FEE_TIMING_OPTIONS = [
+    { value: 'pre_entry', label: 'Pre-Entry / Reservation' },
+    { value: 'at_check_in', label: 'At Check-In' },
+    { value: 'settlement', label: 'Post-Show / Settlement' },
+];
+
+// Shared fee-detail block (Unit Type, Payment Timing, Due Date, Late Fee) so every
+// inventory card asks the same questions as the Fee Structure page.
+const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night' }) => (
+    <div className="border-t pt-3">
+        <Label className="text-xs font-semibold flex items-center gap-1.5 text-emerald-600">
+            <DollarSign className="h-3.5 w-3.5" /> Fee Details (matches Fee Structure)
+        </Label>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+            <div className="space-y-1">
+                <Label className="text-xs">Unit Type</Label>
+                <Select value={item.unitType || unitDefault} onValueChange={(val) => onUpdate('unitType', val)}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        {FEE_UNIT_TYPE_OPTIONS.map(o => (
+                            <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <div className="space-y-1">
+                <Label className="text-xs">Payment Timing</Label>
+                <Select value={item.paymentTiming || 'pre_entry'} onValueChange={(val) => onUpdate('paymentTiming', val)}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        {FEE_TIMING_OPTIONS.map(o => (
+                            <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <div className="space-y-1">
+                <Label className="text-xs">Due Date</Label>
+                <Input
+                    type="date"
+                    value={item.dueDate || ''}
+                    onChange={(e) => onUpdate('dueDate', e.target.value)}
+                    className="h-8 text-xs"
+                />
+            </div>
+            <div className="space-y-1">
+                <Label className="text-xs">Late Fee ($)</Label>
+                <Input
+                    type="number"
+                    min={0}
+                    value={item.lateFee || ''}
+                    onChange={(e) => onUpdate('lateFee', parseFloat(e.target.value) || 0)}
+                    className="h-8 text-xs"
+                    placeholder="$0"
+                />
+            </div>
+        </div>
+    </div>
+);
 
 const BOOKING_STATUSES = ['confirmed', 'pending', 'cancelled', 'checked_in', 'checked_out'];
 const STATUS_COLORS = {
@@ -175,14 +242,163 @@ const BookingLinkCard = ({ show }) => {
     );
 };
 
+// Stall-number prefix from a barn name: "Barn A" → "A", "West Barn" → "W",
+// otherwise the first letter. Keeps labels intuitive (Barn A → A1, A2…).
+const stallPrefix = (name) => {
+    const m = (name || '').match(/^barn\s+(\w)/i);
+    if (m) return m[1].toUpperCase();
+    return (name || 'S').charAt(0).toUpperCase();
+};
+
+// ── Stall Map (visual seating-chart style grid) ──
+
+const StallMap = ({ stalls, cols }) => {
+    if (!stalls || stalls.length === 0) {
+        return (
+            <p className="text-xs text-muted-foreground italic">
+                Set Rows and Columns above to generate the stall layout.
+            </p>
+        );
+    }
+    // When a column count is set, lay the boxes out in a fixed grid (seating-chart
+    // style); otherwise fall back to a simple wrapping row.
+    const useGrid = cols > 0;
+    const gridStyle = useGrid
+        ? { display: 'grid', gridTemplateColumns: `repeat(${cols}, 2.5rem)`, gap: '0.375rem', justifyContent: 'start' }
+        : undefined;
+    return (
+        <div className="space-y-2">
+            <div className={cn('overflow-x-auto', !useGrid && 'flex flex-wrap gap-1.5')} style={gridStyle}>
+                {stalls.map(stall => {
+                    const isBooked = !!stall.bookingId;
+                    return (
+                        <div
+                            key={stall.id}
+                            title={`${stall.number}${isBooked ? ' · booked' : ' · available'}`}
+                            className={cn(
+                                'flex items-center justify-center rounded-md border text-[10px] font-mono font-semibold h-8 w-10 select-none',
+                                isBooked
+                                    ? 'bg-blue-600 text-white border-blue-700'
+                                    : 'bg-background text-muted-foreground border-dashed border-muted-foreground/40'
+                            )}
+                        >
+                            {stall.number}
+                        </div>
+                    );
+                })}
+            </div>
+            <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1">
+                    <span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked
+                </span>
+                <span className="flex items-center gap-1">
+                    <span className="inline-block h-3 w-3 rounded-sm border border-dashed border-muted-foreground/40" /> Available
+                </span>
+            </div>
+        </div>
+    );
+};
+
 // ── Barn/Area Card ──
 
-const BarnCard = ({ barn, onUpdate, onRemove }) => {
+const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
+    const { toast } = useToast();
+    const fileInputRef = useRef(null);
+    const mapRef = useRef(null);
+    const draggingId = useRef(null);
+    const [uploadingImage, setUploadingImage] = useState(false);
     const [expanded, setExpanded] = useState(true);
+    const [showLayout, setShowLayout] = useState(false);
     const totalStalls = barn.stalls?.length || 0;
     const booked = (barn.stalls || []).filter(s => s.bookingId).length;
     const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
     const TypeIcon = typeInfo.icon;
+
+    // Rows × Columns layout. For older barns with only a count, derive sensible
+    // defaults so the grid shows something until the organizer adjusts it.
+    const cols = barn.layoutCols ?? (barn.stallCount ? Math.min(barn.stallCount, 10) : 10);
+    const rows = barn.layoutRows ?? (cols ? Math.ceil((barn.stallCount || 0) / cols) : 1);
+
+    // Rebuild the stall boxes for a rows × columns grid, keeping existing bookings
+    // (matched by position) so assignments aren't lost when the layout changes.
+    const regenerateGrid = (nextRows, nextCols) => {
+        const r = Math.max(0, parseInt(nextRows) || 0);
+        const c = Math.max(0, parseInt(nextCols) || 0);
+        const count = r * c;
+        const existing = barn.stalls || [];
+        const letter = stallPrefix(barn.name);
+        const newStalls = Array.from({ length: count }, (_, i) => ({
+            id: existing[i]?.id || uuidv4(),
+            number: `${letter}${i + 1}`,
+            bookingId: existing[i]?.bookingId || null,
+        }));
+        onUpdate('layoutRows', r);
+        onUpdate('layoutCols', c);
+        onUpdate('stallCount', count);
+        onUpdate('stalls', newStalls);
+    };
+
+    // Barn floor-plan image — stored in the show_logos bucket, URL saved on the barn.
+    const handleImageUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!showId) {
+            toast({ title: 'Save the show first', description: 'A show is needed before uploading images.', variant: 'destructive' });
+            return;
+        }
+        setUploadingImage(true);
+        try {
+            const ext = file.name.split('.').pop();
+            const filePath = `${showId}/barn_${barn.id}_${uuidv4()}.${ext}`;
+            if (barn.layoutImageUrl) {
+                const oldPath = barn.layoutImageUrl.split('/show_logos/').pop();
+                if (oldPath) await supabase.storage.from('show_logos').remove([oldPath]);
+            }
+            const { error } = await supabase.storage.from('show_logos').upload(filePath, file, { cacheControl: '3600', upsert: false });
+            if (error) throw error;
+            const { data } = supabase.storage.from('show_logos').getPublicUrl(filePath);
+            onUpdate('layoutImageUrl', data.publicUrl);
+            toast({ title: 'Image uploaded', description: 'Remember to click Save All.' });
+        } catch (err) {
+            toast({ title: 'Upload failed', description: err.message, variant: 'destructive' });
+        } finally {
+            setUploadingImage(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    const handleRemoveImage = async () => {
+        if (barn.layoutImageUrl) {
+            const oldPath = barn.layoutImageUrl.split('/show_logos/').pop();
+            if (oldPath) await supabase.storage.from('show_logos').remove([oldPath]);
+        }
+        onUpdate('layoutImageUrl', '');
+    };
+
+    // Default position for a stall that hasn't been dragged yet — spread evenly
+    // across the image in a grid so they're easy to grab and place.
+    const defaultPos = (i) => {
+        const c = cols || 1;
+        const totalRows = Math.max(1, Math.ceil((barn.stalls?.length || 1) / c));
+        return { x: ((i % c) + 0.5) / c * 100, y: (Math.floor(i / c) + 0.5) / totalRows * 100 };
+    };
+
+    // Move a stall to where the pointer is (as a % of the image box) while dragging.
+    const moveStall = (id, clientX, clientY) => {
+        const rect = mapRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const x = Math.min(98, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+        const y = Math.min(96, Math.max(0, ((clientY - rect.top) / rect.height) * 100));
+        onUpdate('stalls', (barn.stalls || []).map(s => s.id === id ? { ...s, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 } : s));
+    };
+
+    // Clear all placed positions so the boxes snap back to the default grid.
+    const resetPositions = () => {
+        onUpdate('stalls', (barn.stalls || []).map(s => {
+            const { x, y, ...rest } = s;
+            return rest;
+        }));
+    };
 
     return (
         <Card className="border-l-4 border-l-primary">
@@ -230,28 +446,11 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
                             <Label className="text-xs">Unit Count</Label>
                             <Input
                                 type="number"
-                                min={0}
                                 value={barn.stallCount || 0}
-                                onChange={(e) => {
-                                    const count = parseInt(e.target.value) || 0;
-                                    onUpdate('stallCount', count);
-                                    // Auto-generate stall objects
-                                    const existing = barn.stalls || [];
-                                    if (count > existing.length) {
-                                        const newStalls = [...existing];
-                                        for (let i = existing.length; i < count; i++) {
-                                            newStalls.push({
-                                                id: uuidv4(),
-                                                number: `${barn.name?.charAt(0) || 'S'}${i + 1}`,
-                                                bookingId: null,
-                                            });
-                                        }
-                                        onUpdate('stalls', newStalls);
-                                    } else if (count < existing.length) {
-                                        onUpdate('stalls', existing.slice(0, count));
-                                    }
-                                }}
-                                className="h-8 text-xs"
+                                readOnly
+                                disabled
+                                title="Set by Rows × Columns in Barn Layout below"
+                                className="h-8 text-xs bg-muted/50"
                             />
                         </div>
                         <div className="space-y-1">
@@ -306,6 +505,112 @@ const BarnCard = ({ barn, onUpdate, onRemove }) => {
                             />
                             <Label className="text-xs">Fans</Label>
                         </div>
+                    </div>
+
+                    {/* Fee details — same questions as the Fee Structure page */}
+                    <FeeDetailsFields item={barn} onUpdate={onUpdate} unitDefault="per_night" />
+
+                    {/* Barn Layout — design the barn as a Rows × Columns grid of stalls */}
+                    <div className="border-t pt-3">
+                        <button
+                            type="button"
+                            onClick={() => setShowLayout(o => !o)}
+                            className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1"
+                        >
+                            {showLayout ? '▾' : '▸'} Barn Layout ({booked}/{totalStalls} booked)
+                        </button>
+                        {showLayout && (
+                            <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
+                                {/* Image controls */}
+                                <div className="flex gap-2">
+                                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => fileInputRef.current?.click()} disabled={uploadingImage}>
+                                        {uploadingImage ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ImagePlus className="h-3 w-3 mr-1" />}
+                                        {barn.layoutImageUrl ? 'Replace image' : 'Upload barn floor-plan image'}
+                                    </Button>
+                                    {barn.layoutImageUrl && (
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={handleRemoveImage} disabled={uploadingImage}>
+                                            <Trash2 className="h-3 w-3 mr-1" /> Remove
+                                        </Button>
+                                    )}
+                                </div>
+
+                                {/* Rows × Columns creates the stalls */}
+                                <div className="flex flex-wrap items-end gap-3">
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Rows</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={rows}
+                                            onChange={(e) => regenerateGrid(e.target.value, cols)}
+                                            className="h-8 text-xs w-20"
+                                        />
+                                    </div>
+                                    <span className="pb-2 text-muted-foreground">×</span>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Columns</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={cols}
+                                            onChange={(e) => regenerateGrid(rows, e.target.value)}
+                                            className="h-8 text-xs w-20"
+                                        />
+                                    </div>
+                                    <div className="pb-2 text-xs font-semibold text-primary">
+                                        = {rows * cols} stall{rows * cols !== 1 ? 's' : ''}
+                                    </div>
+                                </div>
+
+                                {/* Visual: drag stalls onto the barn image, or a plain grid if no image */}
+                                {barn.layoutImageUrl ? (
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <p className="text-xs text-muted-foreground">Drag each stall onto the barn image to match the real layout.</p>
+                                            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs flex-shrink-0" onClick={resetPositions}>
+                                                Reset positions
+                                            </Button>
+                                        </div>
+                                        <div ref={mapRef} className="relative inline-block max-w-full overflow-hidden rounded-md border bg-background">
+                                            <img
+                                                src={barn.layoutImageUrl}
+                                                alt="Barn layout"
+                                                draggable={false}
+                                                className="block max-w-full max-h-[28rem] select-none pointer-events-none"
+                                            />
+                                            {(barn.stalls || []).map((stall, i) => {
+                                                const isBooked = !!stall.bookingId;
+                                                const x = stall.x ?? defaultPos(i).x;
+                                                const y = stall.y ?? defaultPos(i).y;
+                                                return (
+                                                    <div
+                                                        key={stall.id}
+                                                        title={stall.number}
+                                                        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); draggingId.current = stall.id; }}
+                                                        onPointerMove={(e) => { if (draggingId.current === stall.id) moveStall(stall.id, e.clientX, e.clientY); }}
+                                                        onPointerUp={() => { draggingId.current = null; }}
+                                                        style={{ position: 'absolute', left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -50%)', touchAction: 'none' }}
+                                                        className={cn(
+                                                            'cursor-grab active:cursor-grabbing flex items-center justify-center rounded border text-[9px] font-mono font-semibold h-6 w-8 select-none shadow-sm',
+                                                            isBooked ? 'bg-blue-600 text-white border-blue-700' : 'bg-white/90 text-gray-800 border-gray-500'
+                                                        )}
+                                                    >
+                                                        {stall.number}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+                                            <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked</span>
+                                            <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-white border border-gray-500" /> Available</span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <StallMap stalls={barn.stalls} cols={cols} />
+                                )}
+                            </div>
+                        )}
                     </div>
                 </CardContent>
             )}
@@ -441,6 +746,9 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                         </div>
                     </div>
 
+                    {/* Fee details — same questions as the Fee Structure page */}
+                    <FeeDetailsFields item={rvArea} onUpdate={onUpdate} unitDefault="per_night" />
+
                     {/* Advanced settings */}
                     <div className="border-t pt-3">
                         <button
@@ -518,168 +826,77 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
     );
 };
 
-// ── Support Space Card ──
-
-const SupportSpaceCard = ({ space, onUpdate, onRemove }) => {
-    const [expanded, setExpanded] = useState(true);
-    const typeInfo = SUPPORT_SPACE_TYPES.find(t => t.id === space.spaceType) || SUPPORT_SPACE_TYPES[0];
-    const TypeIcon = typeInfo.icon;
-
-    return (
-        <Card className="border-l-4 border-l-indigo-500">
-            <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-1">
-                        <TypeIcon className={cn('h-4 w-4', typeInfo.color)} />
-                        <Input
-                            value={space.name}
-                            onChange={(e) => onUpdate('name', e.target.value)}
-                            className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs"
-                            placeholder="Space name..."
-                        />
-                        <Badge variant="outline" className="text-xs">
-                            {space.unitCount || 0} unit{(space.unitCount || 0) !== 1 ? 's' : ''}
-                        </Badge>
-                    </div>
-                    <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
-                            {expanded ? <X className="h-3.5 w-3.5" /> : <Edit2 className="h-3.5 w-3.5" />}
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
-                            <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                    </div>
-                </div>
-            </CardHeader>
-            {expanded && (
-                <CardContent className="space-y-3 pt-2">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <div className="space-y-1">
-                            <Label className="text-xs">Space Type</Label>
-                            <Select value={space.spaceType || 'tack_stall'} onValueChange={(val) => onUpdate('spaceType', val)}>
-                                <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {SUPPORT_SPACE_TYPES.map(t => (
-                                        <SelectItem key={t.id} value={t.id} className="text-xs">{t.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Unit Count</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={space.unitCount || 0}
-                                onChange={(e) => onUpdate('unitCount', parseInt(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Price / Night ($)</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={space.pricePerNight || ''}
-                                onChange={(e) => onUpdate('pricePerNight', parseFloat(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                                placeholder="$0"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Size (optional)</Label>
-                            <Input
-                                value={space.size || ''}
-                                onChange={(e) => onUpdate('size', e.target.value)}
-                                className="h-8 text-xs"
-                                placeholder="e.g., 10x10"
-                            />
-                        </div>
-                    </div>
-                    <div className="space-y-1">
-                        <Label className="text-xs">Notes</Label>
-                        <Textarea
-                            value={space.notes || ''}
-                            onChange={(e) => onUpdate('notes', e.target.value)}
-                            className="text-xs min-h-[50px]"
-                            placeholder="Location, hours, restrictions, etc."
-                        />
-                    </div>
-                    <div className="flex items-center gap-4 flex-wrap">
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={space.hasElectricity || false}
-                                onCheckedChange={(checked) => onUpdate('hasElectricity', checked)}
-                            />
-                            <Label className="text-xs">Electricity</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={space.hasWater || false}
-                                onCheckedChange={(checked) => onUpdate('hasWater', checked)}
-                            />
-                            <Label className="text-xs">Water</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={space.hasDrainage || false}
-                                onCheckedChange={(checked) => onUpdate('hasDrainage', checked)}
-                            />
-                            <Label className="text-xs">Drainage</Label>
-                        </div>
-                    </div>
-                </CardContent>
-            )}
-        </Card>
-    );
-};
-
 // ── Supply Item Card ──
 
 const SupplyItemCard = ({ item, onUpdate, onRemove }) => {
     return (
-        <div className="flex items-center gap-3 p-3 border rounded-lg bg-background border-l-4 border-l-amber-500">
-            <ShoppingCart className="h-4 w-4 text-amber-600 flex-shrink-0" />
-            <Input
-                value={item.name}
-                onChange={(e) => onUpdate('name', e.target.value)}
-                className="h-8 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 flex-1 min-w-0"
-                placeholder="Supply name..."
-            />
-            <div className="flex items-center gap-2 flex-shrink-0">
-                <div className="space-y-0">
-                    <Input
-                        type="number"
-                        min={0}
-                        value={item.price || ''}
-                        onChange={(e) => onUpdate('price', parseFloat(e.target.value) || 0)}
-                        className="h-8 text-xs w-20"
-                        placeholder="$ Price"
-                    />
+        <div className="p-3 border rounded-lg bg-background border-l-4 border-l-amber-500 space-y-3">
+            <div className="flex items-center gap-3">
+                <ShoppingCart className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                <Input
+                    value={item.name}
+                    onChange={(e) => onUpdate('name', e.target.value)}
+                    className="h-8 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 flex-1 min-w-0"
+                    placeholder="Supply name..."
+                />
+                {item.preBedding && (
+                    <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
+                )}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="space-y-0">
+                        <Input
+                            type="number"
+                            min={0}
+                            value={item.price || ''}
+                            onChange={(e) => onUpdate('price', parseFloat(e.target.value) || 0)}
+                            className="h-8 text-xs w-20"
+                            placeholder="$ Price"
+                        />
+                    </div>
+                    <div className="space-y-0">
+                        <Input
+                            value={item.unit || ''}
+                            onChange={(e) => onUpdate('unit', e.target.value)}
+                            className="h-8 text-xs w-24"
+                            placeholder="per unit"
+                        />
+                    </div>
+                    <div className="space-y-0">
+                        <Input
+                            type="number"
+                            min={0}
+                            value={item.stockQty || ''}
+                            onChange={(e) => onUpdate('stockQty', parseInt(e.target.value) || 0)}
+                            className="h-8 text-xs w-20"
+                            placeholder="Stock"
+                        />
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                 </div>
-                <div className="space-y-0">
-                    <Input
-                        value={item.unit || ''}
-                        onChange={(e) => onUpdate('unit', e.target.value)}
-                        className="h-8 text-xs w-24"
-                        placeholder="per unit"
-                    />
-                </div>
-                <div className="space-y-0">
-                    <Input
-                        type="number"
-                        min={0}
-                        value={item.stockQty || ''}
-                        onChange={(e) => onUpdate('stockQty', parseInt(e.target.value) || 0)}
-                        className="h-8 text-xs w-20"
-                        placeholder="Stock"
-                    />
-                </div>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+            </div>
+
+            {/* Fee details — same questions as the Fee Structure page */}
+            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault="per_bag" />
+
+            {/* Pre-bedding — shavings delivered to the stalls before the show, paid up front */}
+            <div className="flex items-center gap-2 border-t pt-2">
+                <Checkbox
+                    id={`prebed-${item.id}`}
+                    checked={item.preBedding || false}
+                    onCheckedChange={(checked) => {
+                        onUpdate('preBedding', !!checked);
+                        // Pre-bed is ordered ahead of the show — nudge the fee defaults to match.
+                        if (checked) {
+                            onUpdate('unitType', 'per_stall');
+                            onUpdate('paymentTiming', 'pre_entry');
+                        }
+                    }}
+                />
+                <Label htmlFor={`prebed-${item.id}`} className="text-xs font-normal cursor-pointer">
+                    Pre-bedding — delivered to stalls before the show (paid in advance, not sold at the show)
+                </Label>
             </div>
         </div>
     );
@@ -802,7 +1019,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     const [barns, setBarns] = useState(() => pd.stallingService?.barns || []);
     const [rvAreas, setRvAreas] = useState(() => pd.stallingService?.rvAreas || []);
-    const [supportSpaces, setSupportSpaces] = useState(() => pd.stallingService?.supportSpaces || []);
+    // Support Spaces are no longer offered (removed from UI). We still carry any
+    // previously-saved data through so it isn't lost, but it's never edited here.
+    const supportSpaces = pd.stallingService?.supportSpaces || [];
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
     const [searchTerm, setSearchTerm] = useState('');
@@ -905,6 +1124,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             price: p.defaultPrice,
             unit: p.unit,
             stockQty: 0,
+            preBedding: p.preBedding || false,
+            ...(p.preBedding ? { unitType: 'per_stall', paymentTiming: 'pre_entry' } : {}),
         })));
         toast({ title: 'Auto-Generated', description: '3 barns, 1 RV area, and 5 supply items created.' });
     };
@@ -934,33 +1155,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setRvAreas(prev => prev.filter(r => r.id !== rvId));
     };
 
-    // ── Support Space CRUD ──
-    const addSupportSpace = (preset = null) => {
-        const typeInfo = preset
-            ? SUPPORT_SPACE_TYPES.find(t => t.id === preset) || SUPPORT_SPACE_TYPES[0]
-            : SUPPORT_SPACE_TYPES[0];
-        setSupportSpaces(prev => [...prev, {
-            id: uuidv4(),
-            name: typeInfo.name,
-            spaceType: typeInfo.id,
-            unitCount: 1,
-            pricePerNight: typeInfo.defaultPrice,
-            size: '',
-            hasElectricity: false,
-            hasWater: typeInfo.id === 'wash_rack',
-            hasDrainage: typeInfo.id === 'wash_rack',
-            notes: '',
-        }]);
-    };
-
-    const updateSupportSpace = (spaceId, field, value) => {
-        setSupportSpaces(prev => prev.map(s => s.id === spaceId ? { ...s, [field]: value } : s));
-    };
-
-    const removeSupportSpace = (spaceId) => {
-        setSupportSpaces(prev => prev.filter(s => s.id !== spaceId));
-    };
-
     // ── Supply CRUD ──
     const addSupply = (preset = null) => {
         setSupplies(prev => [...prev, {
@@ -969,6 +1163,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             price: preset?.defaultPrice || 0,
             unit: preset?.unit || 'each',
             stockQty: 0,
+            preBedding: preset?.preBedding || false,
+            // Pre-bedding is sold ahead of the show, so the fee defaults accordingly.
+            ...(preset?.preBedding ? { unitType: 'per_stall', paymentTiming: 'pre_entry' } : {}),
         }]);
     };
 
@@ -1237,31 +1434,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         </tr>
                                     );
                                 })}
-                                {supportSpaces.map(space => {
-                                    const typeInfo = SUPPORT_SPACE_TYPES.find(t => t.id === space.spaceType) || SUPPORT_SPACE_TYPES[0];
-                                    const perUnit = (space.pricePerNight || 0) * showNights;
-                                    const maxRev = perUnit * (space.unitCount || 0);
-                                    return (
-                                        <tr key={space.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                            <td className="px-2 py-1.5 font-medium">{space.name} <span className={cn('text-xs', typeInfo.color)}>({typeInfo.name})</span></td>
-                                            <td className="px-2 py-1.5 text-right">${(space.pricePerNight || 0).toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{showNights}</td>
-                                            <td className="px-2 py-1.5 text-right font-semibold">${perUnit.toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{space.unitCount || 0}</td>
-                                            <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
-                                        </tr>
-                                    );
-                                })}
                             </tbody>
                             <tfoot>
                                 <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
                                     <td className="px-2 py-1.5" colSpan={4}>Total</td>
-                                    <td className="px-2 py-1.5 text-center">{totalUnits + supportSpaces.reduce((sum, s) => sum + (s.unitCount || 0), 0)}</td>
+                                    <td className="px-2 py-1.5 text-center">{totalUnits}</td>
                                     <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
                                         ${(
                                             barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0)
                                             + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * showNights), 0)
-                                            + supportSpaces.reduce((sum, s) => sum + ((s.unitCount || 0) * (s.pricePerNight || 0) * showNights), 0)
                                         ).toLocaleString()}
                                     </td>
                                 </tr>
@@ -1292,14 +1473,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             <TabsTrigger value="livestock">
                                 <Building2 className="h-4 w-4 mr-1.5" /> Livestock Housing
                             </TabsTrigger>
-                            <TabsTrigger value="support">
-                                <Warehouse className="h-4 w-4 mr-1.5" /> Support Spaces
-                            </TabsTrigger>
                             <TabsTrigger value="rv">
-                                <Car className="h-4 w-4 mr-1.5" /> RV & Camping
+                                <Car className="h-4 w-4 mr-1.5" /> RV & Camping Fees
                             </TabsTrigger>
                             <TabsTrigger value="supplies">
-                                <ShoppingCart className="h-4 w-4 mr-1.5" /> Supplies
+                                <ShoppingCart className="h-4 w-4 mr-1.5" /> Supply Fees
                             </TabsTrigger>
                         </TabsList>
 
@@ -1335,61 +1513,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <BarnCard
                                             key={barn.id}
                                             barn={barn}
+                                            showId={show.id}
                                             onUpdate={(field, value) => updateBarn(barn.id, field, value)}
                                             onRemove={() => removeBarn(barn.id)}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-                        </TabsContent>
-
-                        {/* — Support Spaces — */}
-                        <TabsContent value="support" className="space-y-4 mt-4">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Warehouse className="h-5 w-5 text-indigo-600" />
-                                    <h3 className="text-base font-semibold">Support Spaces</h3>
-                                    <Badge variant="outline" className="text-xs">{supportSpaces.length} space{supportSpaces.length !== 1 ? 's' : ''}</Badge>
-                                </div>
-                                <Button onClick={() => addSupportSpace()} variant="outline" size="sm">
-                                    <Plus className="h-4 w-4 mr-1.5" /> Add Space
-                                </Button>
-                            </div>
-                            <p className="text-xs text-muted-foreground -mt-2">Tack stalls, wash racks, feed storage, equipment zones.</p>
-
-                            {/* Quick-add presets */}
-                            <div className="flex flex-wrap gap-1.5">
-                                {SUPPORT_SPACE_TYPES.map(t => {
-                                    const TypeIcon = t.icon;
-                                    return (
-                                        <Button
-                                            key={t.id}
-                                            variant="outline"
-                                            size="sm"
-                                            className="h-7 text-xs"
-                                            onClick={() => addSupportSpace(t.id)}
-                                        >
-                                            <TypeIcon className={cn('h-3 w-3 mr-1', t.color)} /> {t.name}
-                                        </Button>
-                                    );
-                                })}
-                            </div>
-
-                            {supportSpaces.length === 0 ? (
-                                <Card>
-                                    <CardContent className="py-10 text-center">
-                                        <Warehouse className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                        <p className="text-sm text-muted-foreground">No support spaces yet. Use the quick-add buttons above or click "Add Space".</p>
-                                    </CardContent>
-                                </Card>
-                            ) : (
-                                <div className="space-y-4">
-                                    {supportSpaces.map(space => (
-                                        <SupportSpaceCard
-                                            key={space.id}
-                                            space={space}
-                                            onUpdate={(field, value) => updateSupportSpace(space.id, field, value)}
-                                            onRemove={() => removeSupportSpace(space.id)}
                                         />
                                     ))}
                                 </div>
@@ -1401,7 +1527,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Car className="h-5 w-5 text-cyan-600" />
-                                    <h3 className="text-base font-semibold">RV & Camping</h3>
+                                    <h3 className="text-base font-semibold">RV & Camping Fees</h3>
                                     <Badge variant="outline" className="text-xs">{rvAreas.length} area{rvAreas.length !== 1 ? 's' : ''}</Badge>
                                 </div>
                                 <Button onClick={addRvArea} variant="outline" size="sm">
@@ -1436,7 +1562,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <ShoppingCart className="h-5 w-5 text-amber-600" />
-                                    <h3 className="text-base font-semibold">Supplies / Feed Sales</h3>
+                                    <h3 className="text-base font-semibold">Supply Fees</h3>
                                     <Badge variant="outline" className="text-xs">{supplies.length} item{supplies.length !== 1 ? 's' : ''}</Badge>
                                 </div>
                                 <Button onClick={() => addSupply()} variant="outline" size="sm">
@@ -1624,7 +1750,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </CardHeader>
                         <CardContent className="space-y-6">
                             {barns.length === 0 && rvAreas.length === 0 && supportSpaces.length === 0 && supplies.length === 0 ? (
-                                <p className="text-sm text-muted-foreground text-center py-6">Add livestock housing, support spaces, RV / camping, or supplies to see pricing summary.</p>
+                                <p className="text-sm text-muted-foreground text-center py-6">Add livestock housing, RV / camping, or supplies to see pricing summary.</p>
                             ) : (
                                 <>
                                     {/* Spaces table */}
@@ -1680,35 +1806,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             </tr>
                                                         );
                                                     })}
-                                                    {supportSpaces.map(space => {
-                                                        const typeInfo = SUPPORT_SPACE_TYPES.find(t => t.id === space.spaceType) || SUPPORT_SPACE_TYPES[0];
-                                                        const maxRev = (space.unitCount || 0) * (space.pricePerNight || 0) * (showNights || 3);
-                                                        return (
-                                                            <tr key={space.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{space.name}</td>
-                                                                <td className={cn('px-3 py-2 text-center', typeInfo.color)}>{typeInfo.name}</td>
-                                                                <td className="px-3 py-2 text-center">{space.unitCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">${(space.pricePerNight || 0).toFixed(2)}</td>
-                                                                <td className="px-3 py-2 text-center">
-                                                                    <Badge variant="outline" className="text-xs">-</Badge>
-                                                                </td>
-                                                                <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
-                                                            </tr>
-                                                        );
-                                                    })}
                                                 </tbody>
                                                 <tfoot>
                                                     <tr className="bg-muted/30 font-semibold">
                                                         <td className="px-3 py-2">Total</td>
                                                         <td className="px-3 py-2" />
-                                                        <td className="px-3 py-2 text-center">{totalUnits + supportSpaces.reduce((sum, s) => sum + (s.unitCount || 0), 0)}</td>
+                                                        <td className="px-3 py-2 text-center">{totalUnits}</td>
                                                         <td className="px-3 py-2" />
                                                         <td className="px-3 py-2 text-center">{confirmedBookings}</td>
                                                         <td className="px-3 py-2 text-right">
                                                             ${(
                                                                 barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0)
                                                                 + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * (showNights || 3)), 0)
-                                                                + supportSpaces.reduce((sum, s) => sum + ((s.unitCount || 0) * (s.pricePerNight || 0) * (showNights || 3)), 0)
                                                             ).toLocaleString()}
                                                         </td>
                                                     </tr>
@@ -1878,6 +1987,40 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     );
 };
 
+// ── Fee sync (Housing & Grounds → Fee Structure) ──
+// Housing & Grounds is the source of truth for the three physical fee categories
+// (stalls, RV, supplies). On every save we regenerate matching entries for the Fee
+// Structure list. Each generated fee is tagged source:'housing' with a stable id
+// (housing-<itemId>) so we can replace them without ever touching the fees an
+// organizer typed manually on the Fee Structure page.
+function buildHousingFees({ barns = [], rvAreas = [], supplies = [] }) {
+    const make = (sourceType, item, { name, amount, unitDefault }) => ({
+        id: `housing-${item.id}`,
+        source: 'housing',
+        sourceType,
+        sourceId: item.id,
+        is_standard: true,
+        name: name || 'Fee',
+        amount: Number(amount) || 0,
+        unit_type: item.unitType || unitDefault,
+        custom_unit_label: item.unitType === 'custom' ? (item.customUnitLabel || '') : undefined,
+        payment_timing: item.paymentTiming || 'pre_entry',
+        due_date: item.dueDate || null,
+        late_fee_amount: item.lateFee || '',
+        notes: item.notes || '',
+    });
+
+    return [
+        ...barns.map(b => make('barn', b, { name: b.name, amount: b.pricePerNight, unitDefault: 'per_night' })),
+        ...rvAreas.map(r => make('rv', r, {
+            name: r.name,
+            amount: r.pricingModel === 'flat' ? r.flatRate : r.pricePerNight,
+            unitDefault: r.pricingModel === 'flat' ? 'flat' : 'per_night',
+        })),
+        ...supplies.map(s => make('supply', s, { name: s.name, amount: s.price, unitDefault: 'per_bag' })),
+    ];
+}
+
 // ── Main Page ──
 
 const HousingGroundsManagerPage = () => {
@@ -1980,9 +2123,14 @@ const HousingGroundsManagerPage = () => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
+            // Keep fees an organizer typed manually on the Fee Structure page;
+            // regenerate only the Housing-sourced ones from the latest inventory.
+            const manualFees = (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
+            const housingFees = buildHousingFees({ barns, rvAreas, supplies });
             const updatedData = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
                 stallingService: { barns, rvAreas, supportSpaces, supplies, bookings },
+                fees: [...manualFees, ...housingFees],
             }, 'housing');
             const { error } = await supabase
                 .from('projects')

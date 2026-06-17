@@ -45,6 +45,7 @@ const UNIT_TYPE_OPTIONS = [
     { value: 'flat', label: 'Flat Fee' },
     { value: 'per_horse', label: 'Per Horse' },
     { value: 'per_night', label: 'Per Night' },
+    { value: 'per_stall', label: 'Per Stall' },
     { value: 'per_bag', label: 'Per Bag' },
     { value: 'per_class', label: 'Per Class' },
     { value: 'custom', label: 'Custom Unit' },
@@ -54,6 +55,7 @@ const UNIT_TYPE_LABELS = {
     flat: 'Flat Fee',
     per_horse: 'Per Horse',
     per_night: 'Per Night',
+    per_stall: 'Per Stall',
     per_bag: 'Per Bag',
     per_class: 'Per Class',
     custom: 'Custom',
@@ -73,20 +75,29 @@ const getUnitLabel = (fee) => {
 
 const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociationsData }) => {
     const getAssociationName = (id) => allAssociationsData.find(a => a.id === id)?.name || id;
+    // Fees generated from the Housing & Grounds Manager are read-only here — they
+    // must be edited on that page (the source of truth) to avoid double-entry.
+    const managed = fee.source === 'housing';
 
     return (
         <div className="flex-grow grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 p-4 bg-background/50 rounded-b-lg">
+            {managed && (
+                <div className="md:col-span-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/60 border rounded-md px-3 py-2">
+                    <Building2 className="h-3.5 w-3.5 text-primary" />
+                    Synced from the <span className="font-medium">Housing &amp; Grounds Manager</span>. Edit the price and details there.
+                </div>
+            )}
             <div className="space-y-1.5 md:col-span-3">
                 <Label>Fee Name</Label>
-                <Input value={fee.name} onChange={(e) => onUpdate(fee.id, 'name', e.target.value)} placeholder="e.g., Office Fee" disabled={fee.is_standard}/>
+                <Input value={fee.name} onChange={(e) => onUpdate(fee.id, 'name', e.target.value)} placeholder='e.g., "Stall Fee – Per Night", "RV – 50amp"' disabled={managed}/>
             </div>
             <div className="space-y-1.5">
                 <Label>Amount ($)</Label>
-                <Input type="number" value={fee.amount} onChange={(e) => onUpdate(fee.id, 'amount', e.target.value)} placeholder="e.g., 50.00" />
+                <Input type="number" value={fee.amount} onChange={(e) => onUpdate(fee.id, 'amount', e.target.value)} placeholder="e.g., 50.00" disabled={managed} />
             </div>
             <div className="space-y-1.5">
                 <Label>Unit Type</Label>
-                <Select value={fee.unit_type || 'flat'} onValueChange={(value) => onUpdate(fee.id, 'unit_type', value)}>
+                <Select value={fee.unit_type || 'flat'} onValueChange={(value) => onUpdate(fee.id, 'unit_type', value)} disabled={managed}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                         {UNIT_TYPE_OPTIONS.map(opt => (
@@ -102,12 +113,13 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                         value={fee.custom_unit_label || ''}
                         onChange={(e) => onUpdate(fee.id, 'custom_unit_label', e.target.value)}
                         placeholder='e.g., "Per Stall", "Per Run"'
+                        disabled={managed}
                     />
                 </div>
             )}
             <div className="space-y-1.5">
                 <Label>Payment Timing</Label>
-                <Select value={fee.payment_timing} onValueChange={(value) => onUpdate(fee.id, 'payment_timing', value)}>
+                <Select value={fee.payment_timing} onValueChange={(value) => onUpdate(fee.id, 'payment_timing', value)} disabled={managed}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                         {timingCategories.map(cat => (
@@ -118,7 +130,7 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
             </div>
             <div className="space-y-1.5">
                 <Label>Association</Label>
-                <Select value={fee.association_specific || 'all'} onValueChange={(value) => onUpdate(fee.id, 'association_specific', value === 'all' ? null : value)}>
+                <Select value={fee.association_specific || 'all'} onValueChange={(value) => onUpdate(fee.id, 'association_specific', value === 'all' ? null : value)} disabled={managed}>
                     <SelectTrigger><SelectValue placeholder="Applies to..." /></SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">All Associations</SelectItem>
@@ -134,6 +146,7 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                     <PopoverTrigger asChild>
                         <Button
                             variant={"outline"}
+                            disabled={managed}
                             className={cn("w-full justify-start text-left font-normal", !fee.due_date && "text-muted-foreground")}
                         >
                             <Calendar className="mr-2 h-4 w-4" />
@@ -147,15 +160,15 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
             </div>
             <div className="space-y-1.5">
                 <Label>Late Fee ($)</Label>
-                <Input type="number" value={fee.late_fee_amount || ''} onChange={(e) => onUpdate(fee.id, 'late_fee_amount', e.target.value)} placeholder="e.g., 25.00" />
+                <Input type="number" value={fee.late_fee_amount || ''} onChange={(e) => onUpdate(fee.id, 'late_fee_amount', e.target.value)} placeholder="e.g., 25.00" disabled={managed} />
             </div>
              <div className="space-y-1.5 flex items-center pt-6">
-                <Checkbox id={`per-judge-${fee.id}`} checked={fee.apply_per_judge} onCheckedChange={(checked) => onUpdate(fee.id, 'apply_per_judge', checked)} />
+                <Checkbox id={`per-judge-${fee.id}`} checked={fee.apply_per_judge} onCheckedChange={(checked) => onUpdate(fee.id, 'apply_per_judge', checked)} disabled={managed} />
                 <Label htmlFor={`per-judge-${fee.id}`} className="text-sm font-normal cursor-pointer ml-2">Apply per judge?</Label>
             </div>
             <div className="md:col-span-3 space-y-1.5">
                 <Label>Notes</Label>
-                <Input value={fee.notes || ''} onChange={(e) => onUpdate(fee.id, 'notes', e.target.value)} placeholder="Optional notes (e.g., per day, includes 2 bags shavings)" />
+                <Input value={fee.notes || ''} onChange={(e) => onUpdate(fee.id, 'notes', e.target.value)} placeholder="Optional notes (e.g., per day, includes 2 bags shavings)" disabled={managed} />
             </div>
         </div>
     );
@@ -165,6 +178,7 @@ const SortableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: fee.id });
     const style = { transform: CSS.Transform.toString(transform), transition };
     const unitLabel = getUnitLabel(fee);
+    const managed = fee.source === 'housing';
 
     return (
         <div ref={setNodeRef} style={style} {...attributes}>
@@ -176,7 +190,14 @@ const SortableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                         </div>
                         <AccordionTrigger className="flex-grow text-left hover:no-underline py-0">
                             <div className="flex items-center justify-between w-full">
-                                <span className="font-semibold">{fee.name}</span>
+                                <span className="font-semibold flex items-center gap-2">
+                                    {fee.name}
+                                    {managed && (
+                                        <span className="text-[10px] font-medium bg-primary/10 text-primary px-1.5 py-0.5 rounded inline-flex items-center gap-1">
+                                            <Building2 className="h-3 w-3" /> Housing &amp; Grounds
+                                        </span>
+                                    )}
+                                </span>
                                 <div className="flex items-center gap-3 text-sm text-muted-foreground">
                                     <span className="text-xs bg-muted px-1.5 py-0.5 rounded">{unitLabel}</span>
                                     <span className="font-medium">${fee.amount || '0.00'}</span>
@@ -184,26 +205,28 @@ const SortableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                                 </div>
                             </div>
                         </AccordionTrigger>
-                        <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                                <Button variant="ghost" size="icon" className="ml-2 flex-shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                                <AlertDialogHeader>
-                                    <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                        {fee.is_standard 
-                                            ? `This will remove the "${fee.name}" fee and return it to the Fee Catalog.`
-                                            : `This will permanently delete the custom fee "${fee.name}". This action cannot be undone.`
-                                        }
-                                    </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => onRemove(fee.id)} className={cn(!fee.is_standard && "bg-destructive hover:bg-destructive/90 text-destructive-foreground")}>Yes, Remove</AlertDialogAction>
-                                </AlertDialogFooter>
-                            </AlertDialogContent>
-                        </AlertDialog>
+                        {!managed && (
+                            <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="ml-2 flex-shrink-0 text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            {fee.is_standard
+                                                ? `This will remove the "${fee.name}" fee from your assigned fees. You can add it again from the Fee Catalog.`
+                                                : `This will permanently delete the custom fee "${fee.name}". This action cannot be undone.`
+                                            }
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                        <AlertDialogAction onClick={() => onRemove(fee.id)} className={cn(!fee.is_standard && "bg-destructive hover:bg-destructive/90 text-destructive-foreground")}>Yes, Remove</AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
+                        )}
                     </div>
                     <AccordionContent className="p-0">
                          <EditableFeeItem fee={fee} onUpdate={onUpdate} onRemove={onRemove} associations={associations} allAssociationsData={allAssociationsData} />
@@ -211,6 +234,49 @@ const SortableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                 </AccordionItem>
             </Accordion>
         </div>
+    );
+};
+
+// Read-only section for fees mirrored in from the Housing & Grounds Manager.
+// Grouped separately (and not draggable/deletable) so it's obvious these are
+// managed on the other page and not typed here.
+const HousingSyncedFees = ({ fees, onUpdate, onRemove, associations, allAssociationsData }) => {
+    if (!fees || fees.length === 0) return null;
+    return (
+        <Card className="bg-primary/5 border-primary/30">
+            <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                    <Building2 className="h-5 w-5 text-primary" /> From Housing &amp; Grounds
+                    <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{fees.length}</span>
+                </CardTitle>
+                <CardDescription className="text-xs">
+                    Stall, RV &amp; supply fees synced from the Housing &amp; Grounds Manager. Edit the price and details on that page.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                {fees.map(fee => {
+                    const unitLabel = getUnitLabel(fee);
+                    return (
+                        <Accordion key={fee.id} type="single" collapsible className="w-full bg-card border rounded-lg shadow-sm overflow-hidden">
+                            <AccordionItem value={fee.id} className="border-none">
+                                <AccordionTrigger className="px-4 py-2 hover:no-underline">
+                                    <div className="flex items-center justify-between w-full pr-2">
+                                        <span className="font-semibold">{fee.name}</span>
+                                        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                                            <span className="text-xs bg-muted px-1.5 py-0.5 rounded">{unitLabel}</span>
+                                            <span className="font-medium">${fee.amount || '0.00'}</span>
+                                        </div>
+                                    </div>
+                                </AccordionTrigger>
+                                <AccordionContent className="p-0">
+                                    <EditableFeeItem fee={fee} onUpdate={onUpdate} onRemove={onRemove} associations={associations} allAssociationsData={allAssociationsData} />
+                                </AccordionContent>
+                            </AccordionItem>
+                        </Accordion>
+                    );
+                })}
+            </CardContent>
+        </Card>
     );
 };
 
@@ -262,19 +328,17 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
         });
     }, [selectedAssociations]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const activeFeeIds = useMemo(() => new Set(fees.map(f => f.standard_id)), [fees]);
-    
+    // Catalog items stay available after being added, so the same fee can be
+    // assigned multiple times (e.g. a Stall Fee as both Flat and Per Night, or
+    // different RV hookup tiers). Each "Add" creates an independent instance.
     const availableStandardFees = useMemo(() => {
         return standardFees.filter(sf => {
-            if (activeFeeIds.has(sf.standard_id)) {
-                return false;
-            }
             if (sf.association_specific) {
                 return selectedAssociations.includes(sf.association_specific);
             }
             return true;
         });
-    }, [activeFeeIds, selectedAssociations]);
+    }, [selectedAssociations]);
 
     const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
@@ -320,6 +384,10 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
     const customSponsors = formData.customSponsors || [];
 
     const totalFeeRevenue = useMemo(() => fees.reduce((sum, f) => sum + (parseFloat(f.amount) || 0), 0), [fees]);
+    // Fees typed here vs. fees mirrored in from the Housing & Grounds Manager — shown
+    // in separate sections so it's clear which page is the source for each.
+    const manualFees = useMemo(() => fees.filter(f => f.source !== 'housing'), [fees]);
+    const housingFees = useMemo(() => fees.filter(f => f.source === 'housing'), [fees]);
     const levelSponsorRevenue = useMemo(() => sponsors.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0), [sponsors]);
     const classSponsorRevenue = useMemo(() => classSponsors.reduce((sum, cs) => sum + (parseFloat(cs.amount) || 0), 0), [classSponsors]);
     const arenaSponsorRevenue = useMemo(() => arenaSponsors.reduce((sum, as) => sum + (parseFloat(as.amount) || 0), 0), [arenaSponsors]);
@@ -399,26 +467,38 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
                                     </CardContent>
                                 </Card>
                             ) : (
-                                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                                    <div className="space-y-4">
-                                        {timingCategories.filter(cat => cat.id !== 'custom_timing' || fees.some(f => f.payment_timing === 'custom_timing')).map(category => {
-                                            const categoryFees = fees.filter(f => f.payment_timing === category.id);
-                                            return (
-                                                <FeeCategory
-                                                    key={category.id}
-                                                    id={category.id}
-                                                    title={category.title}
-                                                    description={category.description}
-                                                    fees={categoryFees}
-                                                    onUpdate={updateFee}
-                                                    onRemove={removeFee}
-                                                    associations={selectedAssociations}
-                                                    allAssociationsData={allAssociationsData}
-                                                />
-                                            );
-                                        })}
-                                    </div>
-                                </DndContext>
+                                <div className="space-y-4">
+                                    {manualFees.length > 0 && (
+                                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                                            <div className="space-y-4">
+                                                {timingCategories.filter(cat => cat.id !== 'custom_timing' || manualFees.some(f => f.payment_timing === 'custom_timing')).map(category => {
+                                                    const categoryFees = manualFees.filter(f => f.payment_timing === category.id);
+                                                    return (
+                                                        <FeeCategory
+                                                            key={category.id}
+                                                            id={category.id}
+                                                            title={category.title}
+                                                            description={category.description}
+                                                            fees={categoryFees}
+                                                            onUpdate={updateFee}
+                                                            onRemove={removeFee}
+                                                            associations={selectedAssociations}
+                                                            allAssociationsData={allAssociationsData}
+                                                        />
+                                                    );
+                                                })}
+                                            </div>
+                                        </DndContext>
+                                    )}
+
+                                    <HousingSyncedFees
+                                        fees={housingFees}
+                                        onUpdate={updateFee}
+                                        onRemove={removeFee}
+                                        associations={selectedAssociations}
+                                        allAssociationsData={allAssociationsData}
+                                    />
+                                </div>
                             )}
                         </div>
                     </div>
