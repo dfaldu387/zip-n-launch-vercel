@@ -250,50 +250,106 @@ const stallPrefix = (name) => {
     return (name || 'S').charAt(0).toUpperCase();
 };
 
+// Number the physical stalls (stall + blocked) continuously — A1, A2, A3… —
+// skipping rooms/aisles/empty so stall numbers have no gaps.
+const renumberStalls = (arr, prefix) => {
+    let n = 0;
+    return arr.map(s => {
+        const type = s.type || 'stall';
+        if (type === 'stall' || type === 'blocked') {
+            n += 1;
+            return { ...s, number: `${prefix}${n}` };
+        }
+        return { ...s, number: '' };
+    });
+};
+
 // ── Stall Map (visual seating-chart style grid) ──
 
-const StallMap = ({ stalls, cols }) => {
+// Cell types so a barn diagram can match a real floor plan (not just stalls).
+const CELL_TYPES = [
+    { id: 'stall', label: 'Stall', cls: 'bg-background text-foreground/70 border-muted-foreground/40' },
+    { id: 'office', label: 'Office', cls: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-200' },
+    { id: 'feed', label: 'Feed', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-200' },
+    { id: 'wash', label: 'Wash', cls: 'bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-900/30 dark:text-sky-200' },
+    { id: 'tack', label: 'Tack', cls: 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/30 dark:text-purple-200' },
+    { id: 'blocked', label: 'Blocked', cls: 'bg-muted text-muted-foreground/60 border-muted-foreground/40 line-through' },
+    { id: 'aisle', label: 'Aisle', cls: 'bg-muted text-muted-foreground/50 border-dashed border-muted-foreground/30' },
+    { id: 'empty', label: 'Empty', cls: 'bg-transparent border-dashed border-muted-foreground/20 text-transparent' },
+];
+const CELL_TYPE_MAP = Object.fromEntries(CELL_TYPES.map(t => [t.id, t]));
+const ROOM_TYPES = new Set(['office', 'feed', 'wash', 'tack']);
+
+// Barn diagram: boxes in rows × columns — the visual barn itself (like a floor
+// plan / airplane seat map). Each box has a type (stall, office, feed, wash, tack,
+// aisle, empty). When onCellClick is given, clicking a box paints its type.
+const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null }) => {
+    // Drag-to-paint: hold the pointer down and sweep across boxes to paint many.
+    const paintingRef = React.useRef(false);
+    React.useEffect(() => {
+        const stop = () => { paintingRef.current = false; };
+        window.addEventListener('pointerup', stop);
+        return () => window.removeEventListener('pointerup', stop);
+    }, []);
+
     if (!stalls || stalls.length === 0) {
         return (
             <p className="text-xs text-muted-foreground italic">
-                Set Rows and Columns above to generate the stall layout.
+                Set Rows and Columns above to build the barn layout.
             </p>
         );
     }
-    // When a column count is set, lay the boxes out in a fixed grid (seating-chart
-    // style); otherwise fall back to a simple wrapping row.
-    const useGrid = cols > 0;
-    const gridStyle = useGrid
-        ? { display: 'grid', gridTemplateColumns: `repeat(${cols}, 2.5rem)`, gap: '0.375rem', justifyContent: 'start' }
-        : undefined;
+    const c = Math.max(1, cols || 1);
+    const rowCount = Math.ceil(stalls.length / c);
+    const leftCount = centerAisle ? Math.ceil(c / 2) : c;
+    const rows = Array.from({ length: rowCount }, (_, r) => stalls.slice(r * c, r * c + c));
+
     return (
         <div className="space-y-2">
-            <div className={cn('overflow-x-auto', !useGrid && 'flex flex-wrap gap-1.5')} style={gridStyle}>
-                {stalls.map(stall => {
-                    const isBooked = !!stall.bookingId;
-                    return (
-                        <div
-                            key={stall.id}
-                            title={`${stall.number}${isBooked ? ' · booked' : ' · available'}`}
-                            className={cn(
-                                'flex items-center justify-center rounded-md border text-[10px] font-mono font-semibold h-8 w-10 select-none',
-                                isBooked
-                                    ? 'bg-blue-600 text-white border-blue-700'
-                                    : 'bg-background text-muted-foreground border-dashed border-muted-foreground/40'
-                            )}
-                        >
-                            {stall.number}
+            <div className="overflow-x-auto">
+                <div className="inline-flex flex-col gap-1.5 rounded-md border bg-background/60 p-3">
+                    {rows.map((rowStalls, ri) => (
+                        <div key={ri} className="flex items-stretch gap-1.5">
+                            {rowStalls.map((stall, ci) => {
+                                const type = stall.type || 'stall';
+                                const isStall = type === 'stall';
+                                const isPhysical = isStall || type === 'blocked';
+                                const isBooked = isStall && !!stall.bookingId;
+                                const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
+                                const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
+                                return (
+                                    <React.Fragment key={stall.id}>
+                                        {centerAisle && ci === leftCount && (
+                                            <div className="w-8 flex items-center justify-center">
+                                                <span className="text-[8px] uppercase tracking-widest text-muted-foreground/60">aisle</span>
+                                            </div>
+                                        )}
+                                        <div
+                                            onPointerDown={onCellClick ? (e) => { e.preventDefault(); paintingRef.current = true; onCellClick(stall.id); } : undefined}
+                                            onPointerEnter={onCellClick ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
+                                            title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : typeInfo.label)}
+                                            className={cn(
+                                                'flex items-center justify-center rounded-md border text-[9px] font-mono font-semibold h-9 w-12 select-none',
+                                                onCellClick && 'cursor-pointer hover:ring-2 hover:ring-primary/40',
+                                                isBooked ? 'bg-blue-600 text-white border-blue-700' : typeInfo.cls
+                                            )}
+                                        >
+                                            {label}
+                                        </div>
+                                    </React.Fragment>
+                                );
+                            })}
                         </div>
-                    );
-                })}
+                    ))}
+                </div>
             </div>
-            <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
-                <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked
-                </span>
-                <span className="flex items-center gap-1">
-                    <span className="inline-block h-3 w-3 rounded-sm border border-dashed border-muted-foreground/40" /> Available
-                </span>
+            <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-muted-foreground/40 bg-background" /> Stall</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-amber-300 bg-amber-100" /> Office</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-100" /> Feed</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-sky-300 bg-sky-100" /> Wash</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-purple-300 bg-purple-100" /> Tack</span>
             </div>
         </div>
     );
@@ -301,16 +357,15 @@ const StallMap = ({ stalls, cols }) => {
 
 // ── Barn/Area Card ──
 
-const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
+const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
     const { toast } = useToast();
     const fileInputRef = useRef(null);
-    const mapRef = useRef(null);
-    const draggingId = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
+    const [paintType, setPaintType] = useState('stall');
     const [expanded, setExpanded] = useState(true);
     const [showLayout, setShowLayout] = useState(false);
-    const totalStalls = barn.stalls?.length || 0;
-    const booked = (barn.stalls || []).filter(s => s.bookingId).length;
+    const totalStalls = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length;
+    const booked = (barn.stalls || []).filter(s => s.bookingId && (s.type || 'stall') === 'stall').length;
     const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
     const TypeIcon = typeInfo.icon;
 
@@ -327,15 +382,30 @@ const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
         const count = r * c;
         const existing = barn.stalls || [];
         const letter = stallPrefix(barn.name);
-        const newStalls = Array.from({ length: count }, (_, i) => ({
+        const built = Array.from({ length: count }, (_, i) => ({
             id: existing[i]?.id || uuidv4(),
-            number: `${letter}${i + 1}`,
             bookingId: existing[i]?.bookingId || null,
+            type: existing[i]?.type || 'stall',
         }));
+        const newStalls = renumberStalls(built, letter);
         onUpdate('layoutRows', r);
         onUpdate('layoutCols', c);
-        onUpdate('stallCount', count);
+        onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
         onUpdate('stalls', newStalls);
+    };
+
+    // Paint a box's type, then renumber so stall numbers stay continuous and the
+    // stall count reflects only the boxes that are actually stalls.
+    const paintCell = (cellId) => {
+        const updated = (barn.stalls || []).map(s => {
+            if (s.id !== cellId) return s;
+            const next = { ...s, type: paintType };
+            if (paintType !== 'stall') next.bookingId = null; // rooms/blocked can't hold a booking
+            return next;
+        });
+        const newStalls = renumberStalls(updated, stallPrefix(barn.name));
+        onUpdate('stalls', newStalls);
+        onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
     };
 
     // Barn floor-plan image — stored in the show_logos bucket, URL saved on the barn.
@@ -375,30 +445,6 @@ const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
         onUpdate('layoutImageUrl', '');
     };
 
-    // Default position for a stall that hasn't been dragged yet — spread evenly
-    // across the image in a grid so they're easy to grab and place.
-    const defaultPos = (i) => {
-        const c = cols || 1;
-        const totalRows = Math.max(1, Math.ceil((barn.stalls?.length || 1) / c));
-        return { x: ((i % c) + 0.5) / c * 100, y: (Math.floor(i / c) + 0.5) / totalRows * 100 };
-    };
-
-    // Move a stall to where the pointer is (as a % of the image box) while dragging.
-    const moveStall = (id, clientX, clientY) => {
-        const rect = mapRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const x = Math.min(98, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
-        const y = Math.min(96, Math.max(0, ((clientY - rect.top) / rect.height) * 100));
-        onUpdate('stalls', (barn.stalls || []).map(s => s.id === id ? { ...s, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 } : s));
-    };
-
-    // Clear all placed positions so the boxes snap back to the default grid.
-    const resetPositions = () => {
-        onUpdate('stalls', (barn.stalls || []).map(s => {
-            const { x, y, ...rest } = s;
-            return rest;
-        }));
-    };
 
     return (
         <Card className="border-l-4 border-l-primary">
@@ -417,6 +463,9 @@ const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
                         </Badge>
                     </div>
                     <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate this barn" onClick={onDuplicate}>
+                            <Copy className="h-3.5 w-3.5" />
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
                             {expanded ? <X className="h-3.5 w-3.5" /> : <Edit2 className="h-3.5 w-3.5" />}
                         </Button>
@@ -521,21 +570,7 @@ const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
                         </button>
                         {showLayout && (
                             <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
-                                {/* Image controls */}
-                                <div className="flex gap-2">
-                                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-                                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => fileInputRef.current?.click()} disabled={uploadingImage}>
-                                        {uploadingImage ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ImagePlus className="h-3 w-3 mr-1" />}
-                                        {barn.layoutImageUrl ? 'Replace image' : 'Upload barn floor-plan image'}
-                                    </Button>
-                                    {barn.layoutImageUrl && (
-                                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={handleRemoveImage} disabled={uploadingImage}>
-                                            <Trash2 className="h-3 w-3 mr-1" /> Remove
-                                        </Button>
-                                    )}
-                                </div>
-
-                                {/* Rows × Columns creates the stalls */}
+                                {/* Build the barn: Rows × Columns (+ optional center aisle) */}
                                 <div className="flex flex-wrap items-end gap-3">
                                     <div className="space-y-1">
                                         <Label className="text-xs">Rows</Label>
@@ -558,57 +593,65 @@ const BarnCard = ({ barn, onUpdate, onRemove, showId }) => {
                                             className="h-8 text-xs w-20"
                                         />
                                     </div>
+                                    <div className="flex items-center gap-2 pb-2">
+                                        <Checkbox
+                                            id={`aisle-${barn.id}`}
+                                            checked={barn.centerAisle || false}
+                                            onCheckedChange={(checked) => onUpdate('centerAisle', !!checked)}
+                                        />
+                                        <Label htmlFor={`aisle-${barn.id}`} className="text-xs cursor-pointer">Center aisle</Label>
+                                    </div>
                                     <div className="pb-2 text-xs font-semibold text-primary">
-                                        = {rows * cols} stall{rows * cols !== 1 ? 's' : ''}
+                                        = {(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls
+                                        <span className="text-muted-foreground font-normal"> of {rows * cols} boxes</span>
                                     </div>
                                 </div>
 
-                                {/* Visual: drag stalls onto the barn image, or a plain grid if no image */}
-                                {barn.layoutImageUrl ? (
-                                    <div className="space-y-2">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <p className="text-xs text-muted-foreground">Drag each stall onto the barn image to match the real layout.</p>
-                                            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs flex-shrink-0" onClick={resetPositions}>
-                                                Reset positions
+                                {/* Paint palette — pick a type, then click boxes to set them */}
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-xs text-muted-foreground mr-1">Click a box to set it as:</span>
+                                    {CELL_TYPES.map(t => (
+                                        <Button
+                                            key={t.id}
+                                            type="button"
+                                            variant={paintType === t.id ? 'default' : 'outline'}
+                                            size="sm"
+                                            className="h-7 text-xs"
+                                            onClick={() => setPaintType(t.id)}
+                                        >
+                                            {t.label}
+                                        </Button>
+                                    ))}
+                                </div>
+
+                                {/* The barn diagram (boxes = the barn) — click to paint types */}
+                                <StallMap stalls={barn.stalls} cols={cols} centerAisle={barn.centerAisle} onCellClick={paintCell} />
+
+                                {/* Optional reference image — a separate picture to copy the layout from */}
+                                <div className="border-t pt-3 space-y-2">
+                                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                                    <div className="flex items-center gap-2">
+                                        <Label className="text-xs text-muted-foreground">Reference image (optional)</Label>
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => fileInputRef.current?.click()} disabled={uploadingImage}>
+                                            {uploadingImage ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ImagePlus className="h-3 w-3 mr-1" />}
+                                            {barn.layoutImageUrl ? 'Replace' : 'Upload'}
+                                        </Button>
+                                        {barn.layoutImageUrl && (
+                                            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={handleRemoveImage} disabled={uploadingImage}>
+                                                <Trash2 className="h-3 w-3 mr-1" /> Remove
                                             </Button>
-                                        </div>
-                                        <div ref={mapRef} className="relative inline-block max-w-full overflow-hidden rounded-md border bg-background">
+                                        )}
+                                    </div>
+                                    {barn.layoutImageUrl && (
+                                        <button type="button" onClick={() => window.open(barn.layoutImageUrl, '_blank')} title="Click to view full size">
                                             <img
                                                 src={barn.layoutImageUrl}
-                                                alt="Barn layout"
-                                                draggable={false}
-                                                className="block max-w-full max-h-[28rem] select-none pointer-events-none"
+                                                alt="Barn reference"
+                                                className="max-h-32 rounded-md border bg-background hover:opacity-90 transition"
                                             />
-                                            {(barn.stalls || []).map((stall, i) => {
-                                                const isBooked = !!stall.bookingId;
-                                                const x = stall.x ?? defaultPos(i).x;
-                                                const y = stall.y ?? defaultPos(i).y;
-                                                return (
-                                                    <div
-                                                        key={stall.id}
-                                                        title={stall.number}
-                                                        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); draggingId.current = stall.id; }}
-                                                        onPointerMove={(e) => { if (draggingId.current === stall.id) moveStall(stall.id, e.clientX, e.clientY); }}
-                                                        onPointerUp={() => { draggingId.current = null; }}
-                                                        style={{ position: 'absolute', left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -50%)', touchAction: 'none' }}
-                                                        className={cn(
-                                                            'cursor-grab active:cursor-grabbing flex items-center justify-center rounded border text-[9px] font-mono font-semibold h-6 w-8 select-none shadow-sm',
-                                                            isBooked ? 'bg-blue-600 text-white border-blue-700' : 'bg-white/90 text-gray-800 border-gray-500'
-                                                        )}
-                                                    >
-                                                        {stall.number}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                        <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
-                                            <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked</span>
-                                            <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-white border border-gray-500" /> Available</span>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <StallMap stalls={barn.stalls} cols={cols} />
-                                )}
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -909,6 +952,7 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
         const options = [];
         for (const barn of barns) {
             for (const stall of (barn.stalls || [])) {
+                if ((stall.type || 'stall') !== 'stall') continue; // skip office/feed/wash/etc.
                 options.push({ id: stall.id, label: `${barn.name} - ${stall.number}`, barnId: barn.id });
             }
         }
@@ -1071,6 +1115,25 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     const removeBarn = (barnId) => {
         setBarns(prev => prev.filter(b => b.id !== barnId));
+    };
+
+    // Duplicate a barn (layout, box types, image, fee details) right below it,
+    // with fresh ids and bookings cleared — quick way to make West Barn → Barn B.
+    const duplicateBarn = (barnId) => {
+        setBarns(prev => {
+            const idx = prev.findIndex(b => b.id === barnId);
+            if (idx === -1) return prev;
+            const src = prev[idx];
+            const copy = {
+                ...src,
+                id: uuidv4(),
+                name: `${src.name} (copy)`,
+                stalls: (src.stalls || []).map(s => ({ ...s, id: uuidv4(), bookingId: null })),
+            };
+            const next = [...prev];
+            next.splice(idx + 1, 0, copy);
+            return next;
+        });
     };
 
     const autoGenerateBarns = () => {
@@ -1516,6 +1579,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             showId={show.id}
                                             onUpdate={(field, value) => updateBarn(barn.id, field, value)}
                                             onRemove={() => removeBarn(barn.id)}
+                                            onDuplicate={() => duplicateBarn(barn.id)}
                                         />
                                     ))}
                                 </div>
@@ -2182,6 +2246,7 @@ const HousingGroundsManagerPage = () => {
                         <>
                             <BookingLinkCard show={selectedShow} />
                             <StallingDashboard
+                                key={selectedShow.id}
                                 show={selectedShow}
                                 onSave={handleSave}
                                 isSaving={isSaving}
