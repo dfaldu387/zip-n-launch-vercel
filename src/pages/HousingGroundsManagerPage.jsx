@@ -31,7 +31,7 @@ import SmartAssignDialog from '@/components/housing/SmartAssignDialog';
 import ManageStallsDialog from '@/components/housing/ManageStallsDialog';
 import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
-import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
+import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns } from '@/lib/stallAssignment';
 import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
 
 // ── Constants ──
@@ -1085,6 +1085,23 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             });
         });
     }, [remoteBookingsRef]);
+
+    // Auto-assign stalls for any unassigned bookings (e.g. online bookings that
+    // requested N stalls but had none picked). Runs once per show load, mirrors the
+    // "Smart Auto-Assign" button, and persists immediately. Organizer can still
+    // change stalls with "Manage".
+    const autoAssignedRef = useRef(false);
+    useEffect(() => {
+        if (autoAssignedRef.current) return;
+        if (!barns.length || !bookings.length) return;
+        const { plan } = planAutoAssign(bookings, barns);
+        if (plan.length > 0) {
+            autoAssignedRef.current = true;
+            const newBarns = applyPlanToBarns(barns, plan);
+            setBarns(newBarns);
+            onUpdateBarns?.(newBarns); // persist like the Smart Auto-Assign button does
+        }
+    }, [barns, bookings, onUpdateBarns]);
 
     // ── Barn CRUD ──
     const addBarn = () => {

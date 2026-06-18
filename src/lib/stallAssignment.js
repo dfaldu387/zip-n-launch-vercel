@@ -37,7 +37,9 @@ export function isFullyAssigned(booking, barns) {
 function indexAvailableStalls(barns) {
     const map = {};
     for (const barn of barns || []) {
-        map[barn.id] = (barn.stalls || []).filter(s => !s.bookingId);
+        // Only real, unbooked stalls are assignable — skip office/feed/wash/tack/
+        // aisle/empty/blocked boxes from the barn layout.
+        map[barn.id] = (barn.stalls || []).filter(s => !s.bookingId && (s.type || 'stall') === 'stall');
     }
     return map;
 }
