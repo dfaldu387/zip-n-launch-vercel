@@ -1001,14 +1001,6 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
                         {assignedStalls.length > 6 && (
                             <Badge variant="outline" className="text-[10px]">+{assignedStalls.length - 6}</Badge>
                         )}
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-[10px]"
-                            onClick={() => onManageStalls?.(booking)}
-                        >
-                            Manage
-                        </Button>
                     </div>
                 ) : (
                     <Select value={booking.stallId || '__none__'} onValueChange={(val) => onUpdate('stallId', val === '__none__' ? '' : val)}>
@@ -1302,17 +1294,30 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const occupancyRate = totalUnits > 0 ? Math.round((confirmedBookings / totalUnits) * 100) : 0;
 
     const projectedRevenue = useMemo(() => {
+        const bookingById = new Map(bookings.map(b => [b.id, b]));
         let total = 0;
+        const counted = new Set(); // stallIds already counted via stall.bookingId
+
+        // Multi-stall + any stall pinned to a booking (the modern model).
+        for (const barn of barns) {
+            for (const stall of barn.stalls || []) {
+                if (!stall.bookingId) continue;
+                const b = bookingById.get(stall.bookingId);
+                if (!b || b.status === 'cancelled') continue;
+                total += (barn.pricePerNight || 0) * (b.nights || 0);
+                counted.add(stall.id);
+            }
+        }
+
+        // Legacy single-stall bookings that only set booking.stallId.
         for (const booking of bookings) {
-            if (booking.status === 'cancelled') continue;
-            const stallId = booking.stallId;
-            if (stallId) {
-                for (const barn of barns) {
-                    const stall = (barn.stalls || []).find(s => s.id === stallId);
-                    if (stall) {
-                        total += (barn.pricePerNight || 0) * (booking.nights || 0);
-                        break;
-                    }
+            if (booking.status === 'cancelled' || !booking.stallId) continue;
+            if (counted.has(booking.stallId)) continue;
+            for (const barn of barns) {
+                const stall = (barn.stalls || []).find(s => s.id === booking.stallId);
+                if (stall) {
+                    total += (barn.pricePerNight || 0) * (booking.nights || 0);
+                    break;
                 }
             }
         }
@@ -1726,21 +1731,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </p>
                     </div>
 
-                    {/* Column headers */}
-                    {filteredBookings.length > 0 && (
-                        <div className="flex items-center gap-2 px-3 text-[10px] font-semibold text-muted-foreground uppercase">
-                            <div className="flex-1 grid grid-cols-2 md:grid-cols-6 gap-2">
-                                <span>Exhibitor</span>
-                                <span>Horse</span>
-                                <span>Trainer</span>
-                                <span>Stall</span>
-                                <span>Nights</span>
-                                <span>Status</span>
-                            </div>
-                            <div className="w-6" />
-                        </div>
-                    )}
-
                     {filteredBookings.length === 0 ? (
                         <Card>
                             <CardContent className="py-12 text-center">
@@ -1756,7 +1746,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     ) : (
                         <div className="space-y-2">
                             {filteredBookings.map(booking => (
-                                <div key={booking.id} className="flex items-stretch gap-2">
+                                <div key={booking.id} className="flex items-start gap-2">
                                     <div className="flex-1">
                                         <BookingRow
                                             booking={booking}
@@ -1781,7 +1771,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         title="Download invoice PDF"
                                         onClick={() => {
                                             const assignedStalls = getAssignedStallsForBooking(booking, barns)
-                                                .map(s => ({ barnId: s.barnId, number: s.number }));
+                                                .map(s => {
+                                                    const barn = barns.find(b => b.id === s.barnId);
+                                                    return { barnId: s.barnId, number: s.number, pricePerNight: barn?.pricePerNight || 0 };
+                                                });
                                             downloadInvoicePdf({
                                                 booking,
                                                 show: {

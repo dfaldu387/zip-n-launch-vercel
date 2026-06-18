@@ -95,7 +95,7 @@ const ManageStallsDialog = ({ booking, barns, onApply }) => {
                 title="Manage stall assignments"
             >
                 <Settings2 className="h-3 w-3 mr-1" />
-                {assigned.length}/{requested}
+                Manage {assigned.length}/{requested}
             </Button>
 
             <Dialog open={open} onOpenChange={setOpen}>
@@ -123,11 +123,11 @@ const ManageStallsDialog = ({ booking, barns, onApply }) => {
                                                 <Home className="h-4 w-4 text-primary" /> {barn.name}
                                             </p>
                                             <Badge variant="outline" className="text-xs">
-                                                Wants {qty} · {(barn.stalls || []).filter(s => !s.bookingId).length} free
+                                                Wants {qty} · {(barn.stalls || []).filter(s => !s.bookingId && (s.type || 'stall') === 'stall').length} free
                                             </Badge>
                                         </div>
                                         <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2">
-                                            {(barn.stalls || []).map(stall => {
+                                            {(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').map(stall => {
                                                 const isMine = stall.bookingId === booking.id;
                                                 const isFree = !stall.bookingId;
                                                 return (

@@ -145,18 +145,31 @@ function buildLineItems(booking, assignedStalls = []) {
     const rows = [];
 
     if (Array.isArray(booking.items) && booking.items.length > 0) {
+        const nights = booking.nights || 1;
         for (const it of booking.items) {
             let description = it.name || it.type;
 
-            // Append assigned stalls when this is the stall line and we have stall info
-            if (it.type === 'stall' && assignedStalls.length > 0) {
+            // Stalls: price computed live = stalls × price/night × nights, so editing
+            // the nights on a booking updates the invoice instead of using a stale amount.
+            if (it.type === 'stall') {
                 const stallsInThisBarn = assignedStalls.filter(s => s.barnId === it.refId);
+                const count = stallsInThisBarn.length || it.qty || 0;
+                const price = stallsInThisBarn[0]?.pricePerNight ?? it.unitPrice ?? 0;
                 if (stallsInThisBarn.length > 0) {
                     description += `\nAssigned: ${stallsInThisBarn.map(s => s.number || s.stallNumber).join(', ')}`;
                 }
+                description += `\n${count} stall${count !== 1 ? 's' : ''} × ${nights} night${nights !== 1 ? 's' : ''}`;
+                if (it.detail) description += `\n${it.detail}`;
+                rows.push({
+                    description,
+                    qty: count * nights,
+                    unitPrice: price,
+                    total: count * nights * price,
+                });
+                continue;
             }
-            if (it.detail) description += `\n${it.detail}`;
 
+            if (it.detail) description += `\n${it.detail}`;
             rows.push({
                 description,
                 qty: it.qty || 1,
