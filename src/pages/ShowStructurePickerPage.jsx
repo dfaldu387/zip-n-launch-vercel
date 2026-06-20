@@ -116,7 +116,7 @@ const ShowStructurePickerPage = () => {
                                                                 </h3>
                                                                 {pd.showNumber && (
                                                                     <Badge variant="secondary" className="text-xs flex-shrink-0">
-                                                                        <Hash className="h-3 w-3 mr-0.5" />#{pd.showNumber}
+                                                                        <Hash className="h-3 w-3 mr-0.5" />{pd.showNumber}
                                                                     </Badge>
                                                                 )}
                                                                 <Badge

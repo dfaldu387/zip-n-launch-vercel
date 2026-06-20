@@ -66,6 +66,11 @@ const CreateShowPage = () => {
 
     const CurrentStepComponent = steps.find(s => s.id === currentStep)?.component;
 
+    // Step 5 (Arenas & Dates) needs at least one named arena, otherwise Step 6
+    // (Organize Schedule) has nowhere to place classes. Block "Next" until then.
+    const hasNamedArena = (formData.arenas || []).some(a => (a.name || '').trim() !== '');
+    const isNextDisabled = currentStep === 5 && !hasNamedArena;
+
     return (
         <UsageLimitGate toolName="Horse Show Manager" isEditing={isEditMode}>
             <Helmet>
@@ -161,6 +166,7 @@ const CreateShowPage = () => {
                                         disciplineLibrary={disciplineLibrary}
                                         associationsData={associationsData}
                                         divisionsData={divisionsData}
+                                        existingProjects={existingProjects}
                                         resetDisciplines={resetDisciplines}
                                         createOrUpdateShow={createOrUpdateShow}
                                         onRefreshDisciplines={refreshDisciplineLibrary}
@@ -182,7 +188,7 @@ const CreateShowPage = () => {
                                             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                                             Save Progress
                                         </Button>
-                                        <Button onClick={handleNext}>Next <ArrowRight className="ml-2 h-4 w-4" /></Button>
+                                        <Button onClick={handleNext} disabled={isNextDisabled} title={isNextDisabled ? 'Add at least one named arena to continue' : undefined}>Next <ArrowRight className="ml-2 h-4 w-4" /></Button>
                                     </div>
                                 )}
                             </CardFooter>

@@ -17,6 +17,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { exportShowBudgetToExcel } from '@/lib/showBudgetExport';
+import { computeStructuredAwardsTotal } from '@/lib/showAwardsUtils';
 
 const STATUS_CONFIG = {
     draft:     { label: 'Draft',     color: 'bg-gray-100 text-gray-800 border-gray-300',          dotColor: 'bg-gray-500' },
@@ -472,7 +473,9 @@ export const ReviewStep = ({ formData, setFormData, setCurrentStep, variant = 'f
         if (items.length === 0 && ca.budget) return sum + (parseFloat(ca.budget) || 0);
         return sum + items.reduce((s, i) => s + ((parseFloat(i.cost) || 0) * (parseInt(i.qty) || 1)), 0);
     }, 0), [classAwards]);
-    const totalAllAwards = totalAwardExpenses + totalClassAwards;
+    // Structured awards (High Point / Circuit / Special) live under formData.structuredAwards
+    const structuredAwardsTotal = useMemo(() => computeStructuredAwardsTotal(formData).structuredTotal, [formData.structuredAwards, formData.disciplines]);
+    const totalAllAwards = totalAwardExpenses + totalClassAwards + structuredAwardsTotal;
     const totalAllExpenses = totalExpenses + totalAllAwards + totalStaffCosts;
 
     const selectedAssociations = Object.keys(associations || {}).filter(id => associations[id]);
@@ -560,10 +563,31 @@ export const ReviewStep = ({ formData, setFormData, setCurrentStep, variant = 'f
                         <ReviewField label="Host Hotel" value={details.venue?.hostHotel} />
                     </>
                 );
-            case 'Officials & Staff':
-                return (formData.staff || []).length > 0
-                    ? <p>{formData.staff.length} staff member{formData.staff.length !== 1 ? 's' : ''} configured.</p>
-                    : <p>No staff configured.</p>;
+            case 'Officials & Staff': {
+                // Staff is saved under showDetails.officials (assoc → role → members),
+                // not formData.staff. Count members with a name.
+                const officialsData = formData.showDetails?.officials || {};
+                let staffCount = 0;
+                Object.values(officialsData).forEach(roles => {
+                    Object.values(roles || {}).forEach(members => {
+                        staffCount += (members || []).filter(m => m?.name).length;
+                    });
+                });
+                if (staffCount === 0) return <p>No staff configured.</p>;
+                return (
+                    <>
+                        <p>{staffCount} staff member{staffCount !== 1 ? 's' : ''} configured.</p>
+                        {totalStaffCosts > 0 && (
+                            <div className="p-2 rounded-lg bg-red-500/5 mt-2">
+                                <div className="flex justify-between text-sm font-bold">
+                                    <span>Total Staff Cost</span>
+                                    <span className="text-red-600">${totalStaffCosts.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        )}
+                    </>
+                );
+            }
             case 'Show Expenses':
                 return (
                     <div className="space-y-3">
@@ -585,12 +609,25 @@ export const ReviewStep = ({ formData, setFormData, setCurrentStep, variant = 'f
                         ) : <p>No expenses defined.</p>}
                     </div>
                 );
-            case 'Awards':
+            case 'Awards': {
+                // Awards are saved under formData.structuredAwards (High Point / Circuit /
+                // Special) and formData.awardExpenses — not the old details.awards text fields.
+                const structuredAwards = formData.structuredAwards || {};
+                const catLabels = { highPoint: 'High Point / All-Around', circuit: 'Circuit Awards', special: 'Special Awards' };
+                const structuredItems = Object.entries(structuredAwards).flatMap(([catId, items]) =>
+                    (items || []).filter(it => it && (it.name || (it.prizes || []).length > 0)).map(it => ({ catId, name: it.name }))
+                );
+                const awardExpenseItems = (formData.awardExpenses || []).filter(a => a.name);
+                const hasAny = structuredItems.length > 0 || awardExpenseItems.length > 0 || totalAllAwards > 0;
                 return (
                     <>
-                        <ReviewField label="High Point / All-Around" value={details.awards?.highPoint} />
-                        <ReviewField label="Circuit Awards" value={details.awards?.circuitAwards} />
-                        <ReviewField label="Special Awards" value={details.awards?.specialAwards} />
+                        {structuredItems.map((it, i) => (
+                            <p key={`s-${i}`}><span className="font-semibold text-foreground">{catLabels[it.catId] || it.catId}:</span> {it.name || 'Award'}</p>
+                        ))}
+                        {awardExpenseItems.map((a, i) => (
+                            <p key={`a-${i}`}><span className="font-semibold text-foreground">Award:</span> {a.name} — ${a.amount}{a.qty > 1 ? ` x ${a.qty}` : ''}</p>
+                        ))}
+                        {!hasAny && <p>No awards defined.</p>}
                         {totalAllAwards > 0 && (
                             <div className="p-2 rounded-lg bg-red-500/5 mt-2">
                                 <div className="flex justify-between text-sm font-bold">
@@ -601,6 +638,7 @@ export const ReviewStep = ({ formData, setFormData, setCurrentStep, variant = 'f
                         )}
                     </>
                 );
+            }
             case 'General Information':
                 return (
                     <>

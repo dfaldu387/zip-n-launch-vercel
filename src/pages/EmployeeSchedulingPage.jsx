@@ -58,7 +58,7 @@ const ShowPicker = ({ shows, onSelect }) => {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <h3 className="font-semibold text-base truncate">{show.project_name || 'Untitled'}</h3>
-                                                {pd.showNumber && <Badge variant="secondary" className="text-xs"><Hash className="h-3 w-3 mr-0.5" />#{pd.showNumber}</Badge>}
+                                                {pd.showNumber && <Badge variant="secondary" className="text-xs"><Hash className="h-3 w-3 mr-0.5" />{pd.showNumber}</Badge>}
                                             </div>
                                             <div className="flex items-center gap-4 text-xs text-muted-foreground">
                                                 {pd.venueName && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{pd.venueName}</span>}

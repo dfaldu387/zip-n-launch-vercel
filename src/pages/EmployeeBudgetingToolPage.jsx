@@ -105,7 +105,7 @@ const ShowPicker = ({ shows, onSelect }) => {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <h3 className="font-semibold text-base truncate">{show.project_name || 'Untitled'}</h3>
-                                                {pd.showNumber && <Badge variant="secondary" className="text-xs"><Hash className="h-3 w-3 mr-0.5" />#{pd.showNumber}</Badge>}
+                                                {pd.showNumber && <Badge variant="secondary" className="text-xs"><Hash className="h-3 w-3 mr-0.5" />{pd.showNumber}</Badge>}
                                                 <Badge variant="outline" className={cn('text-xs', show.status === 'published' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-amber-50 text-amber-700 border-amber-300')}>{show.status || 'draft'}</Badge>
                                             </div>
                                             <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -184,7 +184,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     <h2 className="text-xl font-bold">{show.project_name}</h2>
-                    {pd.showNumber && <Badge variant="secondary"><Hash className="h-3 w-3 mr-0.5" />#{pd.showNumber}</Badge>}
+                    {pd.showNumber && <Badge variant="secondary"><Hash className="h-3 w-3 mr-0.5" />{pd.showNumber}</Badge>}
                     {!contractProject && (
                         <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300">No contract data linked</Badge>
                     )}

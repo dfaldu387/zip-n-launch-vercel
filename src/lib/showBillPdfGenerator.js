@@ -337,7 +337,15 @@ export async function generateShowBillPdf(showBill, allClassItems, associationsD
   // ============================================================
   // DAYS & ARENAS
   // ============================================================
+  // Hide arenas with no items, and days where every arena is empty/closed,
+  // so the show bill doesn't print blank day/arena headers on wasted pages.
+  const arenaHasContent = (day, arena) =>
+    !(numberedBill.closedArenas || {})[`${day.id}::${arena.id}`] && (arena.items || []).length > 0;
+  const dayHasContent = (day) => (day.arenas || []).some(arena => arenaHasContent(day, arena));
+
   for (const day of numberedBill.days || []) {
+    if (!dayHasContent(day)) continue;
+
     // --- Day Header ---
     if (ls.showDayHeaders) {
       checkPageBreak(50);
@@ -372,8 +380,8 @@ export async function generateShowBillPdf(showBill, allClassItems, associationsD
     }
 
     for (const arena of day.arenas || []) {
-      // Skip closed arenas
-      if ((numberedBill.closedArenas || {})[`${day.id}::${arena.id}`]) continue;
+      // Skip closed and empty arenas
+      if (!arenaHasContent(day, arena)) continue;
 
       // --- Arena Header ---
       if (ls.showArenaHeaders) {

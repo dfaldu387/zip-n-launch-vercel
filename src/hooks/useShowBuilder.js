@@ -200,24 +200,16 @@ export const useShowBuilder = (showId) => {
       }
     }
 
-    // Auto-advance module status when moduleKey is provided
-    // Uses stampModuleStatusOnSave: NOT_STARTED→IN_PROGRESS→DRAFT (auto)
-    // Explicit statusOverride (e.g. 'locked', 'published') from Step6_Preview is respected
-    const effectiveStatus = statusOverride || formData.showStatus || MODULE_STATUS.DRAFT;
-
-    if (!moduleKey && statusOverride && statusOverride !== formData.showStatus) {
-      setFormData(prev => ({ ...prev, showStatus: statusOverride }));
-    }
-
     // Mark current step as completed on save
     const updatedCompletedSteps = new Set(completedSteps);
     updatedCompletedSteps.add(step);
     setCompletedSteps(updatedCompletedSteps);
 
-    // If a moduleKey is provided, auto-advance its status
+    // Auto-advance module status when moduleKey is provided.
+    // Uses stampModuleStatusOnSave: NOT_STARTED→IN_PROGRESS→DRAFT (auto).
+    // Explicit locked/published (e.g. from Step 8 "Save & Manage") is respected.
     let updatedModuleStatuses = formData.moduleStatuses || {};
     if (moduleKey) {
-      // If an explicit status was given from Step6 (locked/published), use that directly
       if (moduleStatus && [MODULE_STATUS.LOCKED, MODULE_STATUS.PUBLISHED].includes(moduleStatus)) {
         updatedModuleStatuses = { ...updatedModuleStatuses, [moduleKey]: moduleStatus };
       } else {
@@ -225,6 +217,20 @@ export const useShowBuilder = (showId) => {
         const stamped = stampModuleStatusOnSave({ moduleStatuses: updatedModuleStatuses }, moduleKey);
         updatedModuleStatuses = stamped.moduleStatuses;
       }
+    }
+
+    // Resolve the top-level `status` column. The editWizard module is the main
+    // show wizard, so when it is locked/published the show's overall status must
+    // reflect that — otherwise the Horse Show Manager list (which reads the
+    // top-level `status`) shows "draft" while the editor shows "Locked".
+    const editWizardStatus = moduleKey === 'editWizard' ? updatedModuleStatuses.editWizard : null;
+    const promotedStatus = (editWizardStatus === MODULE_STATUS.LOCKED || editWizardStatus === MODULE_STATUS.PUBLISHED)
+      ? editWizardStatus
+      : null;
+    const effectiveStatus = statusOverride || promotedStatus || formData.showStatus || MODULE_STATUS.DRAFT;
+
+    if (effectiveStatus !== formData.showStatus) {
+      setFormData(prev => ({ ...prev, showStatus: effectiveStatus }));
     }
 
     const showDataToSave = {
@@ -259,12 +265,18 @@ export const useShowBuilder = (showId) => {
       // Silent save — no popup during normal editing
       return data;
     } else {
-      // Generate sequential show number
-      const { count } = await supabase
-        .from('projects')
-        .select('id', { count: 'exact', head: true })
-        .eq('project_type', 'show');
-      const showNumber = (count || 0) + 1;
+      // Preserve a user-entered show number; only auto-generate a sequential
+      // one when the field was left blank.
+      let showNumber = formData.showNumber != null && String(formData.showNumber).trim() !== ''
+        ? formData.showNumber
+        : null;
+      if (!showNumber) {
+        const { count } = await supabase
+          .from('projects')
+          .select('id', { count: 'exact', head: true })
+          .eq('project_type', 'show');
+        showNumber = (count || 0) + 1;
+      }
 
       const newId = uuidv4();
       const payloadWithNumber = {

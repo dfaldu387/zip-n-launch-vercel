@@ -216,6 +216,7 @@ const LocationsSection = ({ formData, setFormData }) => {
 export const Step3_ArenasAndDates = ({ formData, setFormData, stepNumber = 3, stepTitle = 'Arenas & Dates of Use' }) => {
     const competitionDates = getDateRange(formData.startDate, formData.endDate);
     const arenas = formData.arenas || [];
+    const hasNamedArena = arenas.some(a => (a.name || '').trim() !== '');
 
     const addArena = () => {
         setFormData(prev => ({
@@ -287,6 +288,16 @@ export const Step3_ArenasAndDates = ({ formData, setFormData, stepNumber = 3, st
                         <Badge key={d} variant="secondary">{formatShortDate(d)}</Badge>
                     ))}
                 </div>
+
+                {/* Require at least one named arena before continuing to the schedule builder */}
+                {!hasNamedArena && (
+                    <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800">
+                        <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                        <p className="text-sm text-amber-700 dark:text-amber-400">
+                            Add at least one arena <span className="font-semibold">with a name</span> before continuing — the schedule builder needs an arena to place classes into.
+                        </p>
+                    </div>
+                )}
 
                 {/* Arena cards */}
                 <div className="space-y-4">

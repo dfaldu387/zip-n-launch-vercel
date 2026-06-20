@@ -337,7 +337,7 @@ const AssociationCheckbox = ({ association, isSelected, onSelect, formData, setF
   );
 };
 
-export const AssociationSelection = ({ formData, setFormData, associationsData, onShowTypeChange, context = 'default', selectedPurposeName, isReadOnly = false, stepNumber = 1, disciplineLibrary }) => {
+export const AssociationSelection = ({ formData, setFormData, associationsData, onShowTypeChange, context = 'default', selectedPurposeName, isReadOnly = false, stepNumber = 1, disciplineLibrary, existingProjects }) => {
     
   const handleAssociationSelection = (assocId, isChecked) => {
     if (isReadOnly) return;
@@ -542,6 +542,15 @@ export const AssociationSelection = ({ formData, setFormData, associationsData, 
     .filter(a => a.position === 'right')
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
+  // Non-blocking duplicate show-number check (warn but allow).
+  const trimmedShowNumber = String(formData.showNumber || '').trim();
+  const duplicateNumberShow = trimmedShowNumber
+    ? (existingProjects || []).find(p =>
+        p.id !== formData.id &&
+        String(p.project_data?.showNumber || '').trim().toLowerCase() === trimmedShowNumber.toLowerCase()
+      )
+    : null;
+
   return (
     <motion.div key="step1" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }}>
       {context !== 'showInfo' && (
@@ -573,6 +582,12 @@ export const AssociationSelection = ({ formData, setFormData, associationsData, 
                   onChange={(e) => setFormData(prev => ({ ...prev, showNumber: e.target.value }))}
                   disabled={isReadOnly}
               />
+              {duplicateNumberShow && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  <Info className="h-3 w-3 shrink-0" />
+                  This number is already used by "{duplicateNumberShow.project_name || 'another show'}". You can still continue.
+                </p>
+              )}
             </div>
           )}
         </div>

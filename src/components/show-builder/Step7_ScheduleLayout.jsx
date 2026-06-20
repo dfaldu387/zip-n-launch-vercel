@@ -531,6 +531,12 @@ const ShowBillPreview = ({ showBill, settings, allClassItems, associationsData }
     return renumberShowBill(sb);
   }, [showBill, settings.numberingMode, settings.startClassNumber]);
 
+  // Hide empty arenas and fully-empty days so the preview matches the exported
+  // PDF (no blank day/arena headers on otherwise-empty days).
+  const arenaHasContent = (day, arena) =>
+    !(numberedBill.closedArenas || {})[`${day.id}::${arena.id}`] && (arena.items || []).length > 0;
+  const visibleDays = (numberedBill.days || []).filter(day => (day.arenas || []).some(a => arenaHasContent(day, a)));
+
   const columnCount = settings.columns || 1;
   const isLandscape = settings.pageOrientation === 'landscape';
 
@@ -641,7 +647,7 @@ const ShowBillPreview = ({ showBill, settings, allClassItems, associationsData }
 
       {/* Days - with column support */}
       <div style={columnCount > 1 ? { columnCount, columnGap: '2rem' } : undefined}>
-        {numberedBill.days?.map((day, dayIndex) => (
+        {visibleDays.map((day, dayIndex) => (
           <div key={day.id} className={dayIndex > 0 ? 'mt-4' : ''} style={columnCount > 1 ? { breakInside: 'avoid' } : undefined}>
             {settings.showDayHeaders && (
               <>
@@ -664,7 +670,7 @@ const ShowBillPreview = ({ showBill, settings, allClassItems, associationsData }
             )}
 
             {day.arenas?.map((arena, arenaIndex) => {
-              if ((numberedBill.closedArenas || {})[`${day.id}::${arena.id}`]) return null;
+              if (!arenaHasContent(day, arena)) return null;
               return (
                 <div key={arena.id} className={arenaIndex > 0 ? 'mt-3' : ''}>
                   {settings.showArenaHeaders && (() => {

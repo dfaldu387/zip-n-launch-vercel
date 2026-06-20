@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { parseDivisionId } from '@/lib/showBillUtils';
+import { computeStructuredAwardsTotal } from '@/lib/showAwardsUtils';
 
 const TIMING_LABELS = {
   before_show: 'Before Show',
@@ -29,6 +30,40 @@ export const exportShowBudgetToExcel = (formData) => {
   // --- Sheet 1: Expenses (grouped by category hierarchy) ---
   const awardExpenses = formData.awardExpenses || [];
   const classAwards = formData.classAwards || {};
+
+  // Staff & Officials costs (saved under showDetails.officials, not formData.staff)
+  const officials = formData.showDetails?.officials || {};
+  const calcStaffDays = (startDate, endDate) => {
+    if (!startDate || !endDate) return 0;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start) || isNaN(end) || start > end) return 0;
+    return Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  };
+  const staffRows = [];
+  let totalStaffCosts = 0;
+  Object.values(officials).forEach(assocRoles => {
+    Object.values(assocRoles || {}).forEach(members => {
+      (members || []).forEach(member => {
+        if (!member?.name) return;
+        const autoDays = calcStaffDays(member.employment_start_date, member.employment_end_date);
+        const days = member.days_worked != null && member.days_worked !== '' ? (parseFloat(member.days_worked) || 0) : autoDays;
+        const dayFee = (parseFloat(member.day_fee) || 0) * days;
+        const hourlyFee = (parseFloat(member.hours_worked) || 0) * (parseFloat(member.hourly_rate) || 0);
+        const overtimeFee = (parseFloat(member.overtime_hours) || 0) * (parseFloat(member.overtime_rate_per_hour) || 0);
+        let reimbursable = 0;
+        if (member.reimbursable_expenses) {
+          Object.values(member.reimbursable_expenses).forEach(exp => {
+            if (exp.reimbursed) reimbursable += parseFloat(exp.total) || parseFloat(exp.max_value) || 0;
+          });
+        }
+        const memberTotal = dayFee + hourlyFee + overtimeFee + reimbursable;
+        totalStaffCosts += memberTotal;
+        staffRows.push({ name: member.name, total: memberTotal });
+      });
+    });
+  });
+
   const expenseRows = [];
   let totalShowExpenses = 0;
 
@@ -86,6 +121,16 @@ export const exportShowBudgetToExcel = (formData) => {
 
   expenseRows.push({ ...emptyExpenseRow, Category: 'SUBTOTAL SHOW EXPENSES', 'Line Total': totalShowExpenses });
 
+  // Staff & Officials
+  if (totalStaffCosts > 0) {
+    expenseRows.push({ ...emptyExpenseRow });
+    expenseRows.push({ ...emptyExpenseRow, Category: 'Staff & Officials' });
+    for (const s of staffRows) {
+      expenseRows.push({ ...emptyExpenseRow, Category: 'Staff & Officials', Item: s.name, 'Line Total': s.total });
+    }
+    expenseRows.push({ ...emptyExpenseRow, Category: 'SUBTOTAL STAFF & OFFICIALS', 'Line Total': totalStaffCosts });
+  }
+
   // Award expenses
   expenseRows.push({ ...emptyExpenseRow });
   expenseRows.push({ ...emptyExpenseRow, Category: 'Awards' });
@@ -113,9 +158,14 @@ export const exportShowBudgetToExcel = (formData) => {
   if (totalClassAwards > 0) {
     expenseRows.push({ ...emptyExpenseRow, Item: 'Class Awards Budget', Category: 'Awards', 'Line Total': totalClassAwards });
   }
-  expenseRows.push({ ...emptyExpenseRow, Category: 'SUBTOTAL AWARD EXPENSES', 'Line Total': totalAwardExp + totalClassAwards });
+  // Structured awards (High Point / Circuit / Special)
+  const { structuredTotal: structuredAwardsTotal } = computeStructuredAwardsTotal(formData);
+  if (structuredAwardsTotal > 0) {
+    expenseRows.push({ ...emptyExpenseRow, Item: 'High Point / Circuit / Special Awards', Category: 'Awards', 'Line Total': structuredAwardsTotal });
+  }
+  expenseRows.push({ ...emptyExpenseRow, Category: 'SUBTOTAL AWARD EXPENSES', 'Line Total': totalAwardExp + totalClassAwards + structuredAwardsTotal });
 
-  const totalExpenses = totalShowExpenses + totalAwardExp + totalClassAwards;
+  const totalExpenses = totalShowExpenses + totalStaffCosts + totalAwardExp + totalClassAwards + structuredAwardsTotal;
   expenseRows.push({ ...emptyExpenseRow });
   expenseRows.push({ ...emptyExpenseRow, Category: 'TOTAL EXPENSES', 'Line Total': totalExpenses });
 
