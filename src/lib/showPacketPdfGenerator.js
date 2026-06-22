@@ -387,9 +387,15 @@ export async function generateShowPacketPdf(showData, options = {}) {
     doc.line(MARGIN, y, pageWidth - MARGIN, y);
     y += 14;
 
+    // Hide arenas with no items and days where every arena is empty/closed,
+    // so the packet doesn't print blank day/arena headers on wasted pages.
+    const arenaHasContent = (day, arena) =>
+      !(numberedBill.closedArenas || {})[`${day.id}::${arena.id}`] && (arena.items || []).length > 0;
+    const visibleDays = numberedBill.days.filter(day => (day.arenas || []).some(a => arenaHasContent(day, a)));
+
     // ── Render each day ──
-    for (let di = 0; di < numberedBill.days.length; di++) {
-      const day = numberedBill.days[di];
+    for (let di = 0; di < visibleDays.length; di++) {
+      const day = visibleDays[di];
 
       // Check if enough room for day header + at least one class (~60pt)
       checkBreak(60);
@@ -415,7 +421,7 @@ export async function generateShowPacketPdf(showData, options = {}) {
 
       // ── Arenas within this day ──
       for (const arena of day.arenas || []) {
-        if ((numberedBill.closedArenas || {})[`${day.id}::${arena.id}`]) continue;
+        if (!arenaHasContent(day, arena)) continue;
 
         // Arena header: centered bold, with line underneath
         checkBreak(36);
