@@ -73,11 +73,50 @@ const getUnitLabel = (fee) => {
     return UNIT_TYPE_LABELS[fee.unit_type] || UNIT_TYPE_LABELS[fee.type] || 'Flat Fee';
 };
 
-const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociationsData }) => {
+// Smart-hide: Association + "Apply per judge?" only matter for class/judge and
+// association-specific fees. Stall, RV, supply & flat fees hide them to stay clean.
+// (We still show them if the fee already carries those values, so nothing is lost.)
+const feeNeedsAdvanced = (fee) =>
+    fee.type === 'per_class' ||
+    fee.unit_type === 'per_class' ||
+    !!fee.association_specific ||
+    !!fee.apply_per_judge;
+
+// Robert wants the Unit Type list trimmed to what fits each fee:
+//   Stall → Flat/Per Night/Per Stall/Custom · RV → Flat/Per Night/Custom
+//   Class → Flat/Per Class/Custom · Per-horse fees → Flat/Per Horse/Custom
+//   Bedding/supplies → Flat/Per Bag/Custom · everything else → Flat/Per Night/Custom
+// The fee's current unit is always kept so its value never disappears.
+const unitOptionsForFee = (fee) => {
+    const id = (fee.standard_id || '').toLowerCase();
+    const name = (fee.name || '').toLowerCase();
+    let allowed;
+    if (fee.sourceType === 'barn' || id.includes('stall') || name.includes('stall')) allowed = ['flat', 'per_night', 'per_stall', 'custom'];
+    else if (fee.sourceType === 'rv' || id.includes('rv') || name.includes('rv') || name.includes('camp')) allowed = ['flat', 'per_night', 'custom'];
+    else if (fee.sourceType === 'supply') allowed = ['flat', 'per_bag', 'per_night', 'custom'];
+    else if (fee.type === 'per_class' || id.includes('class')) allowed = ['flat', 'per_class', 'custom'];
+    else if (fee.type === 'per_horse') allowed = ['flat', 'per_horse', 'custom'];
+    else if (fee.unit_type === 'per_bag' || id.includes('shav') || id.includes('bed')) allowed = ['flat', 'per_bag', 'custom'];
+    else allowed = ['flat', 'per_night', 'custom'];
+    const set = new Set(allowed);
+    if (fee.unit_type) set.add(fee.unit_type);
+    return UNIT_TYPE_OPTIONS.filter(o => set.has(o.value));
+};
+
+// Smart default: fall back to a sensible Unit Type based on the fee's type.
+const inferUnitType = (fee) =>
+    fee.unit_type ||
+    (fee.type === 'per_class' ? 'per_class'
+        : fee.type === 'per_horse' ? 'per_horse'
+        : fee.type === 'ancillary' ? 'per_night'
+        : 'flat');
+
+const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociationsData, editable = false }) => {
     const getAssociationName = (id) => allAssociationsData.find(a => a.id === id)?.name || id;
-    // Fees generated from the Housing & Grounds Manager are read-only here — they
-    // must be edited on that page (the source of truth) to avoid double-entry.
-    const managed = fee.source === 'housing';
+    // Housing-generated fees are normally read-only here. When `editable` is set
+    // (the "From Housing & Grounds" section), they can be edited and the changes are
+    // written back to the inventory item so both pages stay in sync.
+    const managed = fee.source === 'housing' && !editable;
 
     return (
         <div className="flex-grow grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 p-4 bg-background/50 rounded-b-lg">
@@ -97,10 +136,10 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
             </div>
             <div className="space-y-1.5">
                 <Label>Unit Type</Label>
-                <Select value={fee.unit_type || 'flat'} onValueChange={(value) => onUpdate(fee.id, 'unit_type', value)} disabled={managed}>
+                <Select value={inferUnitType(fee)} onValueChange={(value) => onUpdate(fee.id, 'unit_type', value)} disabled={managed}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                        {UNIT_TYPE_OPTIONS.map(opt => (
+                        {unitOptionsForFee(fee).map(opt => (
                             <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                         ))}
                     </SelectContent>
@@ -128,18 +167,20 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                     </SelectContent>
                 </Select>
             </div>
-            <div className="space-y-1.5">
-                <Label>Association</Label>
-                <Select value={fee.association_specific || 'all'} onValueChange={(value) => onUpdate(fee.id, 'association_specific', value === 'all' ? null : value)} disabled={managed}>
-                    <SelectTrigger><SelectValue placeholder="Applies to..." /></SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all">All Associations</SelectItem>
-                        {associations.map(assocId => (
-                            <SelectItem key={assocId} value={assocId}>{getAssociationName(assocId)}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </div>
+            {feeNeedsAdvanced(fee) && (
+                <div className="space-y-1.5">
+                    <Label>Association</Label>
+                    <Select value={fee.association_specific || 'all'} onValueChange={(value) => onUpdate(fee.id, 'association_specific', value === 'all' ? null : value)} disabled={managed}>
+                        <SelectTrigger><SelectValue placeholder="Applies to..." /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Associations</SelectItem>
+                            {associations.map(assocId => (
+                                <SelectItem key={assocId} value={assocId}>{getAssociationName(assocId)}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            )}
             <div className="space-y-1.5">
                 <Label>Due Date</Label>
                 <Popover>
@@ -162,10 +203,12 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                 <Label>Late Fee ($)</Label>
                 <Input type="number" value={fee.late_fee_amount || ''} onChange={(e) => onUpdate(fee.id, 'late_fee_amount', e.target.value)} placeholder="e.g., 25.00" disabled={managed} />
             </div>
-             <div className="space-y-1.5 flex items-center pt-6">
-                <Checkbox id={`per-judge-${fee.id}`} checked={fee.apply_per_judge} onCheckedChange={(checked) => onUpdate(fee.id, 'apply_per_judge', checked)} disabled={managed} />
-                <Label htmlFor={`per-judge-${fee.id}`} className="text-sm font-normal cursor-pointer ml-2">Apply per judge?</Label>
-            </div>
+            {feeNeedsAdvanced(fee) && (
+                <div className="space-y-1.5 flex items-center pt-6">
+                    <Checkbox id={`per-judge-${fee.id}`} checked={fee.apply_per_judge} onCheckedChange={(checked) => onUpdate(fee.id, 'apply_per_judge', checked)} disabled={managed} />
+                    <Label htmlFor={`per-judge-${fee.id}`} className="text-sm font-normal cursor-pointer ml-2">Apply per judge?</Label>
+                </div>
+            )}
             <div className="md:col-span-3 space-y-1.5">
                 <Label>Notes</Label>
                 <Input value={fee.notes || ''} onChange={(e) => onUpdate(fee.id, 'notes', e.target.value)} placeholder="Optional notes (e.g., per day, includes 2 bags shavings)" disabled={managed} />
@@ -250,7 +293,7 @@ const HousingSyncedFees = ({ fees, onUpdate, onRemove, associations, allAssociat
                     <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{fees.length}</span>
                 </CardTitle>
                 <CardDescription className="text-xs">
-                    Stall, RV &amp; supply fees synced from the Housing &amp; Grounds Manager. Edit the price and details on that page.
+                    Stall, RV &amp; supply fees synced from the Housing &amp; Grounds Manager. Edits here sync back to that page automatically.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -269,7 +312,7 @@ const HousingSyncedFees = ({ fees, onUpdate, onRemove, associations, allAssociat
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="p-0">
-                                    <EditableFeeItem fee={fee} onUpdate={onUpdate} onRemove={onRemove} associations={associations} allAssociationsData={allAssociationsData} />
+                                    <EditableFeeItem fee={fee} onUpdate={onUpdate} onRemove={onRemove} associations={associations} allAssociationsData={allAssociationsData} editable />
                                 </AccordionContent>
                             </AccordionItem>
                         </Accordion>
@@ -344,6 +387,40 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
 
     const updateFee = (id, field, value) => {
         setFormData(prev => ({ ...prev, fees: prev.fees.map(f => f.id === id ? { ...f, [field]: value } : f) }));
+    };
+
+    // Edit a Housing-generated fee here and write the change back to its inventory
+    // item (barn / RV / supply) so the Housing page stays the source of truth and
+    // the next Housing save won't overwrite it. Maps snake_case → camelCase.
+    const updateHousingFee = (id, field, value) => {
+        setFormData(prev => {
+            const fees = (prev.fees || []).map(f => f.id === id ? { ...f, [field]: value } : f);
+            const fee = (prev.fees || []).find(f => f.id === id);
+            if (!fee || fee.source !== 'housing') return { ...prev, fees };
+            const listKey = fee.sourceType === 'barn' ? 'barns' : fee.sourceType === 'rv' ? 'rvAreas' : fee.sourceType === 'supply' ? 'supplies' : null;
+            if (!listKey) return { ...prev, fees };
+            const ss = prev.stallingService || {};
+            const patchFor = (item) => {
+                switch (field) {
+                    case 'amount': {
+                        const n = parseFloat(value) || 0;
+                        if (fee.sourceType === 'supply') return { price: n };
+                        if (fee.sourceType === 'rv' && item.pricingModel === 'flat') return { flatRate: n };
+                        return { pricePerNight: n };
+                    }
+                    case 'unit_type': return { unitType: value };
+                    case 'custom_unit_label': return { customUnitLabel: value };
+                    case 'payment_timing': return { paymentTiming: value };
+                    case 'due_date': return { dueDate: value };
+                    case 'late_fee_amount': return { lateFee: parseFloat(value) || 0 };
+                    case 'name': return { name: value };
+                    case 'notes': return { notes: value };
+                    default: return {};
+                }
+            };
+            const list = (ss[listKey] || []).map(item => item.id === fee.sourceId ? { ...item, ...patchFor(item) } : item);
+            return { ...prev, fees, stallingService: { ...ss, [listKey]: list } };
+        });
     };
 
     const removeFee = (id) => {
@@ -493,7 +570,7 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
 
                                     <HousingSyncedFees
                                         fees={housingFees}
-                                        onUpdate={updateFee}
+                                        onUpdate={updateHousingFee}
                                         onRemove={removeFee}
                                         associations={selectedAssociations}
                                         allAssociationsData={allAssociationsData}

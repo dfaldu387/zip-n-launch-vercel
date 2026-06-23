@@ -17,7 +17,7 @@ import {
     MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, Edit2, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
-    ScanLine, FileText, ImagePlus,
+    ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -96,18 +96,21 @@ const FEE_TIMING_OPTIONS = [
 
 // Shared fee-detail block (Unit Type, Payment Timing, Due Date, Late Fee) so every
 // inventory card asks the same questions as the Fee Structure page.
-const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night' }) => (
-    <div className="border-t pt-3">
-        <Label className="text-xs font-semibold flex items-center gap-1.5 text-emerald-600">
-            <DollarSign className="h-3.5 w-3.5" /> Fee Details (matches Fee Structure)
-        </Label>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeader = true, leading = null, unitOptions = null }) => (
+    <div className={showHeader ? 'border-t pt-3' : ''}>
+        {showHeader && (
+            <Label className="text-xs font-semibold flex items-center gap-1.5 text-emerald-600">
+                <DollarSign className="h-3.5 w-3.5" /> Fee Details (matches Fee Structure)
+            </Label>
+        )}
+        <div className={cn('grid grid-cols-2 gap-3', showHeader && 'mt-2', leading ? 'md:grid-cols-5' : 'md:grid-cols-4')}>
+            {leading}
             <div className="space-y-1">
                 <Label className="text-xs">Unit Type</Label>
                 <Select value={item.unitType || unitDefault} onValueChange={(val) => onUpdate('unitType', val)}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                        {FEE_UNIT_TYPE_OPTIONS.map(o => (
+                        {FEE_UNIT_TYPE_OPTIONS.filter(o => (unitOptions || ['flat', 'per_night', 'custom']).includes(o.value) || o.value === (item.unitType || unitDefault)).map(o => (
                             <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
                         ))}
                     </SelectContent>
@@ -156,6 +159,16 @@ const STATUS_COLORS = {
     checked_in: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
     checked_out: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300',
 };
+
+// Lifecycle of a housing setup:
+//   draft     → organizer is still building it out (adding barns, fees, layouts)
+//   locked    → frozen; inventory & fees can't be edited (holds the setup)
+//   published → live; stalls & camping spots can be sold through it
+const PUBLISH_STATUSES = [
+    { id: 'draft', label: 'Draft', icon: Pencil, hint: 'Still building — add barns, spots & fees.', active: 'bg-amber-500 text-white', dot: 'bg-amber-500' },
+    { id: 'locked', label: 'Locked', icon: Lock, hint: 'Frozen — inventory & fees are read-only.', active: 'bg-slate-600 text-white', dot: 'bg-slate-500' },
+    { id: 'published', label: 'Published', icon: Globe, hint: 'Live — stalls & camping spots can be sold.', active: 'bg-emerald-600 text-white', dot: 'bg-emerald-500' },
+];
 
 // ── Helpers ──
 
@@ -283,7 +296,7 @@ const ROOM_TYPES = new Set(['office', 'feed', 'wash', 'tack']);
 // Barn diagram: boxes in rows × columns — the visual barn itself (like a floor
 // plan / airplane seat map). Each box has a type (stall, office, feed, wash, tack,
 // aisle, empty). When onCellClick is given, clicking a box paints its type.
-const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null }) => {
+const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null }) => {
     // Drag-to-paint: hold the pointer down and sweep across boxes to paint many.
     const paintingRef = React.useRef(false);
     React.useEffect(() => {
@@ -304,42 +317,84 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null }) => 
     const leftCount = centerAisle ? Math.ceil(c / 2) : c;
     const rows = Array.from({ length: rowCount }, (_, r) => stalls.slice(r * c, r * c + c));
 
+    // Aisle gaps are thin walkways drawn BETWEEN columns/rows — they don't consume
+    // a stall box, so the stall count is unaffected. `editing` shows faint clickable
+    // strips; view mode only renders a gap where an aisle actually exists.
+    const editing = !!onCellClick;
+    const colGap = (index) => {
+        const active = (aisleCols || []).includes(index);
+        if (!editing && !active) return null;
+        return (
+            <div
+                key={`cg-${index}`}
+                onClick={editing && onToggleAisleCol ? () => onToggleAisleCol(index) : undefined}
+                title={active ? 'Aisle — click to remove' : 'Click to add an aisle here'}
+                className={cn(
+                    'self-stretch flex-shrink-0 rounded-sm transition-colors',
+                    editing ? 'w-2.5 cursor-pointer' : 'w-2',
+                    active ? 'bg-orange-400 dark:bg-orange-500' : 'bg-muted-foreground/5 hover:bg-orange-300/50'
+                )}
+            />
+        );
+    };
+    const rowGap = (index) => {
+        const active = (aisleRows || []).includes(index);
+        if (!editing && !active) return null;
+        return (
+            <div
+                key={`rg-${index}`}
+                onClick={editing && onToggleAisleRow ? () => onToggleAisleRow(index) : undefined}
+                title={active ? 'Aisle — click to remove' : 'Click to add an aisle here'}
+                className={cn(
+                    'w-full rounded-sm transition-colors',
+                    editing ? 'h-2.5 cursor-pointer' : 'h-2',
+                    active ? 'bg-orange-400 dark:bg-orange-500' : 'bg-muted-foreground/5 hover:bg-orange-300/50'
+                )}
+            />
+        );
+    };
+
     return (
         <div className="space-y-2">
             <div className="overflow-x-auto">
                 <div className="inline-flex flex-col gap-1.5 rounded-md border bg-background/60 p-3">
                     {rows.map((rowStalls, ri) => (
-                        <div key={ri} className="flex items-stretch gap-1.5">
-                            {rowStalls.map((stall, ci) => {
-                                const type = stall.type || 'stall';
-                                const isStall = type === 'stall';
-                                const isPhysical = isStall || type === 'blocked';
-                                const isBooked = isStall && !!stall.bookingId;
-                                const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
-                                const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
-                                return (
-                                    <React.Fragment key={stall.id}>
-                                        {centerAisle && ci === leftCount && (
-                                            <div className="w-8 flex items-center justify-center">
-                                                <span className="text-[8px] uppercase tracking-widest text-muted-foreground/60">aisle</span>
-                                            </div>
-                                        )}
-                                        <div
-                                            onPointerDown={onCellClick ? (e) => { e.preventDefault(); paintingRef.current = true; onCellClick(stall.id); } : undefined}
-                                            onPointerEnter={onCellClick ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
-                                            title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : typeInfo.label)}
-                                            className={cn(
-                                                'flex items-center justify-center rounded-md border text-[9px] font-mono font-semibold h-9 w-12 select-none',
-                                                onCellClick && 'cursor-pointer hover:ring-2 hover:ring-primary/40',
-                                                isBooked ? 'bg-blue-600 text-white border-blue-700' : typeInfo.cls
+                        <React.Fragment key={ri}>
+                            {ri > 0 && rowGap(ri)}
+                            <div className="flex items-stretch gap-1.5">
+                                {rowStalls.map((stall, ci) => {
+                                    const type = stall.type || 'stall';
+                                    const isStall = type === 'stall';
+                                    const isPhysical = isStall || type === 'blocked';
+                                    const isBooked = isStall && !!stall.bookingId;
+                                    const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
+                                    const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
+                                    const showCenter = centerAisle && ci === leftCount;
+                                    return (
+                                        <React.Fragment key={stall.id}>
+                                            {ci > 0 && !showCenter && colGap(ci)}
+                                            {showCenter && (
+                                                <div className="w-8 flex items-center justify-center">
+                                                    <span className="text-[8px] uppercase tracking-widest text-muted-foreground/60">aisle</span>
+                                                </div>
                                             )}
-                                        >
-                                            {label}
-                                        </div>
-                                    </React.Fragment>
-                                );
-                            })}
-                        </div>
+                                            <div
+                                                onPointerDown={onCellClick ? (e) => { e.preventDefault(); paintingRef.current = true; onCellClick(stall.id); } : undefined}
+                                                onPointerEnter={onCellClick ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
+                                                title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : typeInfo.label)}
+                                                className={cn(
+                                                    'flex items-center justify-center rounded-md border text-[9px] font-mono font-semibold h-9 w-12 select-none',
+                                                    onCellClick && 'cursor-pointer hover:ring-2 hover:ring-primary/40',
+                                                    isBooked ? 'bg-blue-600 text-white border-blue-700' : typeInfo.cls
+                                                )}
+                                            >
+                                                {label}
+                                            </div>
+                                        </React.Fragment>
+                                    );
+                                })}
+                            </div>
+                        </React.Fragment>
                     ))}
                 </div>
             </div>
@@ -350,6 +405,7 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null }) => 
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-100" /> Feed</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-sky-300 bg-sky-100" /> Wash</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-purple-300 bg-purple-100" /> Tack</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-orange-400" /> Aisle</span>
             </div>
         </div>
     );
@@ -392,6 +448,11 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
         onUpdate('layoutCols', c);
         onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
         onUpdate('stalls', newStalls);
+        // Drop aisle lines that fall outside the new grid bounds.
+        const prunedCols = (barn.aisleCols || []).filter(i => i >= 1 && i < c);
+        const prunedRows = (barn.aisleRows || []).filter(i => i >= 1 && i < r);
+        if (prunedCols.length !== (barn.aisleCols || []).length) onUpdate('aisleCols', prunedCols);
+        if (prunedRows.length !== (barn.aisleRows || []).length) onUpdate('aisleRows', prunedRows);
     };
 
     // Paint a box's type, then renumber so stall numbers stay continuous and the
@@ -406,6 +467,13 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
         const newStalls = renumberStalls(updated, stallPrefix(barn.name));
         onUpdate('stalls', newStalls);
         onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
+    };
+
+    // Aisle walkways drawn between columns/rows — toggling never touches stalls.
+    const toggleAisle = (field, index) => {
+        const cur = barn[field] || [];
+        const next = cur.includes(index) ? cur.filter(i => i !== index) : [...cur, index].sort((a, b) => a - b);
+        onUpdate(field, next);
     };
 
     // Barn floor-plan image — stored in the show_logos bucket, URL saved on the barn.
@@ -492,7 +560,7 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                             </Select>
                         </div>
                         <div className="space-y-1">
-                            <Label className="text-xs">Unit Count</Label>
+                            <Label className="text-xs"># of Stalls</Label>
                             <Input
                                 type="number"
                                 value={barn.stallCount || 0}
@@ -500,17 +568,6 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                 disabled
                                 title="Set by Rows × Columns in Barn Layout below"
                                 className="h-8 text-xs bg-muted/50"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Price / Night ($)</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={barn.pricePerNight || ''}
-                                onChange={(e) => onUpdate('pricePerNight', parseFloat(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                                placeholder="$0"
                             />
                         </div>
                         <div className="space-y-1">
@@ -555,9 +612,6 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                             <Label className="text-xs">Fans</Label>
                         </div>
                     </div>
-
-                    {/* Fee details — same questions as the Fee Structure page */}
-                    <FeeDetailsFields item={barn} onUpdate={onUpdate} unitDefault="per_night" />
 
                     {/* Barn Layout — design the barn as a Rows × Columns grid of stalls */}
                     <div className="border-t pt-3">
@@ -624,8 +678,21 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                     ))}
                                 </div>
 
+                                <p className="text-[11px] text-muted-foreground">
+                                    Tip: click a <span className="font-medium text-orange-500">thin gap between boxes</span> to draw an aisle — stalls aren't removed.
+                                </p>
+
                                 {/* The barn diagram (boxes = the barn) — click to paint types */}
-                                <StallMap stalls={barn.stalls} cols={cols} centerAisle={barn.centerAisle} onCellClick={paintCell} />
+                                <StallMap
+                                    stalls={barn.stalls}
+                                    cols={cols}
+                                    centerAisle={barn.centerAisle}
+                                    onCellClick={paintCell}
+                                    aisleCols={barn.aisleCols || []}
+                                    aisleRows={barn.aisleRows || []}
+                                    onToggleAisleCol={(i) => toggleAisle('aisleCols', i)}
+                                    onToggleAisleRow={(i) => toggleAisle('aisleRows', i)}
+                                />
 
                                 {/* Optional reference image — a separate picture to copy the layout from */}
                                 <div className="border-t pt-3 space-y-2">
@@ -704,7 +771,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                 <CardContent className="space-y-3 pt-2">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div className="space-y-1">
-                            <Label className="text-xs">Spot Count</Label>
+                            <Label className="text-xs"># of Camping Spots</Label>
                             <Input
                                 type="number"
                                 min={0}
@@ -790,7 +857,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                     </div>
 
                     {/* Fee details — same questions as the Fee Structure page */}
-                    <FeeDetailsFields item={rvArea} onUpdate={onUpdate} unitDefault="per_night" />
+                    <FeeDetailsFields item={rvArea} onUpdate={onUpdate} unitDefault="per_night" unitOptions={['flat', 'per_night', 'custom']} />
 
                     {/* Advanced settings */}
                     <div className="border-t pt-3">
@@ -921,7 +988,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove }) => {
             </div>
 
             {/* Fee details — same questions as the Fee Structure page */}
-            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault="per_bag" />
+            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault="per_bag" unitOptions={['flat', 'per_bag', 'per_night', 'custom']} />
 
             {/* Pre-bedding — shavings delivered to the stalls before the show, paid up front */}
             <div className="flex items-center gap-2 border-t pt-2">
@@ -1061,6 +1128,60 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Two-way sync: fees typed on the Fee Structure page (source !== 'housing') are
+    // carried here so they show + can be edited from Housing too. Non-housing-category
+    // fees (entry, office, admin…) pass through untouched; only stall/RV/supply-type
+    // ones are surfaced in the Fees tab. Stored snake_case (the Fee Structure shape).
+    const [manualFees, setManualFees] = useState(() => (pd.fees || []).filter(f => f.source !== 'housing'));
+    const updateManualFee = (id, field, value) => setManualFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
+    const removeManualFee = (id) => setManualFees(prev => prev.filter(f => f.id !== id));
+    // Bridge a snake_case fee to the camelCase shape FeeDetailsFields expects, and
+    // map edits back to snake_case so the Fee Structure page reads them correctly.
+    const FEE_FIELD_MAP = { unitType: 'unit_type', paymentTiming: 'payment_timing', dueDate: 'due_date', lateFee: 'late_fee_amount', customUnitLabel: 'custom_unit_label' };
+    const asInventoryShape = (f) => ({ ...f, unitType: f.unit_type, paymentTiming: f.payment_timing, dueDate: f.due_date, lateFee: f.late_fee_amount, customUnitLabel: f.custom_unit_label });
+    const onUpdateManualFee = (id) => (field, value) => updateManualFee(id, FEE_FIELD_MAP[field] || field, value);
+    const manualFeesByCategory = (cat) => manualFees.filter(f => feeCategory(f) === cat);
+    // A fee that came from the Fee Structure page (no inventory item behind it).
+    const renderManualFee = (f, unitOptions) => (
+        <div key={f.id} className="rounded-lg border border-dashed bg-muted/10 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{f.name}</span>
+                    <Badge variant="outline" className="text-[10px]">from Fee Structure</Badge>
+                </div>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10" onClick={() => removeManualFee(f.id)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+            </div>
+            <FeeDetailsFields
+                item={asInventoryShape(f)}
+                onUpdate={onUpdateManualFee(f.id)}
+                unitDefault="per_night"
+                showHeader={false}
+                unitOptions={unitOptions}
+                leading={(
+                    <div className="space-y-1">
+                        <Label className="text-xs">Amount ($)</Label>
+                        <Input
+                            type="number"
+                            min={0}
+                            value={f.amount || ''}
+                            onChange={(e) => updateManualFee(f.id, 'amount', parseFloat(e.target.value) || 0)}
+                            className="h-8 text-xs"
+                            placeholder="$0"
+                        />
+                    </div>
+                )}
+            />
+        </div>
+    );
+
+    // Draft → Locked → Published lifecycle + floating auto-save state.
+    const [publishStatus, setPublishStatus] = useState(() => pd.stallingService?.publishStatus || 'draft');
+    const [lastSavedAt, setLastSavedAt] = useState(null);
+    const [isDirty, setIsDirty] = useState(false);
+    const isLocked = publishStatus === 'locked';
 
     // Sync from parent when DB changes externally (kiosk update, tab-focus refetch, immediate-save).
     // Merge to preserve any in-flight local edits to non-status fields.
@@ -1421,12 +1542,36 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         };
     }, [bookings, barns, rvAreas, occupancyRate, confirmedBookings, totalUnits]);
 
-    const handleSave = () => {
-        onSave({ barns, rvAreas, supportSpaces, supplies, bookings });
-    };
+    const persist = useCallback(async (opts = {}) => {
+        await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees }, opts);
+        setLastSavedAt(new Date());
+        setIsDirty(false);
+    }, [onSave, barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees]);
+
+    const handleSave = () => persist();
+
+    // Floating auto-save — quietly persists inventory & status edits as you work.
+    // Bookings have their own immediate-save paths, so they're excluded here to
+    // avoid clashing with the remote-sync effect above.
+    const autoSaveFirstRun = useRef(true);
+    useEffect(() => {
+        if (autoSaveFirstRun.current) { autoSaveFirstRun.current = false; return; }
+        setIsDirty(true);
+        const t = setTimeout(() => { persist({ silent: true }); }, 1500);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [barns, rvAreas, supplies, publishStatus, manualFees]);
 
     return (
         <div className="space-y-6">
+            {/* Locked banner */}
+            {isLocked && (
+                <div className="flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
+                    <Lock className="h-4 w-4" />
+                    This setup is <strong>Locked</strong>. Switch back to <strong>Draft</strong> to make changes.
+                </div>
+            )}
+
             {/* Conflict & capacity alerts */}
             <ConflictAlertsPanel
                 bookings={bookings}
@@ -1541,38 +1686,62 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 <div className="flex items-center justify-between flex-wrap gap-3">
                     <TabsList>
                         <TabsTrigger value="inventory">Inventory</TabsTrigger>
-                        <TabsTrigger value="bookings">Bookings ({totalBookings})</TabsTrigger>
+                        <TabsTrigger value="fees">Fees</TabsTrigger>
                         <TabsTrigger value="pricing">Pricing Summary</TabsTrigger>
+                        <TabsTrigger value="bookings">Bookings ({totalBookings})</TabsTrigger>
                         <TabsTrigger value="analytics">Analytics</TabsTrigger>
                     </TabsList>
-                    <Button onClick={handleSave} disabled={isSaving}>
-                        {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-                        {isSaving ? 'Saving...' : 'Save All'}
-                    </Button>
+
+                    {/* Lifecycle status + auto-save (Draft / Locked / Published) */}
+                    <div className="flex items-center gap-2 sm:gap-3 rounded-full border bg-background px-2.5 py-1.5 shadow-sm">
+                        <div className="flex items-center rounded-full bg-muted p-0.5">
+                            {PUBLISH_STATUSES.map(s => {
+                                const Icon = s.icon;
+                                const isActive = publishStatus === s.id;
+                                return (
+                                    <button
+                                        key={s.id}
+                                        type="button"
+                                        title={s.hint}
+                                        onClick={() => setPublishStatus(s.id)}
+                                        className={cn(
+                                            'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors',
+                                            isActive ? s.active : 'text-muted-foreground hover:text-foreground'
+                                        )}
+                                    >
+                                        <Icon className="h-3.5 w-3.5" />
+                                        <span className="hidden sm:inline">{s.label}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="h-5 w-px bg-border" />
+
+                        <Button size="sm" onClick={handleSave} disabled={isSaving} className="h-7 rounded-full px-3">
+                            {isSaving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+                            {isSaving ? 'Saving…' : 'Save All'}
+                        </Button>
+                        <span className="hidden md:inline text-[11px] text-muted-foreground whitespace-nowrap">
+                            {isSaving
+                                ? 'Saving…'
+                                : isDirty
+                                    ? 'Unsaved changes…'
+                                    : lastSavedAt
+                                        ? `Saved ${lastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                        : 'Auto-save on'}
+                        </span>
+                    </div>
                 </div>
 
-                {/* ── Inventory Tab — Categorized Sub-Tabs ── */}
+                {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
                 <TabsContent value="inventory" className="mt-4">
-                    <Tabs defaultValue="livestock" className="w-full">
-                        <TabsList className="flex-wrap h-auto">
-                            <TabsTrigger value="livestock">
-                                <Building2 className="h-4 w-4 mr-1.5" /> Livestock Housing
-                            </TabsTrigger>
-                            <TabsTrigger value="rv">
-                                <Car className="h-4 w-4 mr-1.5" /> RV & Camping Fees
-                            </TabsTrigger>
-                            <TabsTrigger value="supplies">
-                                <ShoppingCart className="h-4 w-4 mr-1.5" /> Supply Fees
-                            </TabsTrigger>
-                        </TabsList>
-
-                        {/* — Livestock Housing — */}
-                        <TabsContent value="livestock" className="space-y-4 mt-4">
+                          <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && 'opacity-70')}>
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Building2 className="h-5 w-5 text-primary" />
                                     <h3 className="text-base font-semibold">Livestock Housing</h3>
-                                    <Badge variant="outline" className="text-xs">{barns.length} area{barns.length !== 1 ? 's' : ''}</Badge>
+                                    <Badge variant="outline" className="text-xs">{barns.length} area{barns.length !== 1 ? 's' : ''} · {totalStalls} stall{totalStalls !== 1 ? 's' : ''}</Badge>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <Button onClick={addBarn} variant="outline" size="sm">
@@ -1606,101 +1775,136 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     ))}
                                 </div>
                             )}
-                        </TabsContent>
+                          </fieldset>
+                </TabsContent>
 
-                        {/* — RV & Camping — */}
-                        <TabsContent value="rv" className="space-y-4 mt-4">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Car className="h-5 w-5 text-cyan-600" />
-                                    <h3 className="text-base font-semibold">RV & Camping Fees</h3>
-                                    <Badge variant="outline" className="text-xs">{rvAreas.length} area{rvAreas.length !== 1 ? 's' : ''}</Badge>
-                                </div>
-                                <Button onClick={addRvArea} variant="outline" size="sm">
-                                    <Plus className="h-4 w-4 mr-1.5" /> Add Area
-                                </Button>
+                {/* ── Fees Tab — all area fee details consolidated in one place ── */}
+                <TabsContent value="fees" className="mt-4">
+                          <fieldset disabled={isLocked} className={cn('space-y-5', isLocked && 'opacity-70')}>
+                            <div className="flex items-center gap-2">
+                                <DollarSign className="h-5 w-5 text-emerald-600" />
+                                <h3 className="text-base font-semibold">Fees</h3>
                             </div>
-                            <p className="text-xs text-muted-foreground -mt-2">RV hookups (full / partial / dry), trailer parking, camping spots.</p>
+                            <p className="text-xs text-muted-foreground -mt-3">
+                                Set fees here — they match the Fee Structure page. Stalls are added in the Inventory tab; RV/camping & supplies are added right here.
+                            </p>
 
-                            {rvAreas.length === 0 ? (
-                                <Card>
-                                    <CardContent className="py-10 text-center">
-                                        <Car className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                        <p className="text-sm text-muted-foreground">No RV or camping areas configured. Click "Add Area" to get started.</p>
-                                    </CardContent>
-                                </Card>
-                            ) : (
-                                <div className="space-y-4">
-                                    {rvAreas.map(rv => (
-                                        <RvAreaCard
-                                            key={rv.id}
-                                            rvArea={rv}
-                                            onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
-                                            onRemove={() => removeRvArea(rv.id)}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-                        </TabsContent>
-
-                        {/* — Supplies / Feed Sales — */}
-                        <TabsContent value="supplies" className="space-y-4 mt-4">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <ShoppingCart className="h-5 w-5 text-amber-600" />
-                                    <h3 className="text-base font-semibold">Supply Fees</h3>
-                                    <Badge variant="outline" className="text-xs">{supplies.length} item{supplies.length !== 1 ? 's' : ''}</Badge>
-                                </div>
-                                <Button onClick={() => addSupply()} variant="outline" size="sm">
-                                    <Plus className="h-4 w-4 mr-1.5" /> Add Supply Item
-                                </Button>
-                            </div>
-
-                            {/* Quick-add presets */}
-                            <div className="flex flex-wrap gap-1.5">
-                                {SUPPLY_PRESETS.filter(p => !supplies.some(s => s.name === p.name)).map(preset => (
-                                    <Button
-                                        key={preset.name}
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-7 text-xs"
-                                        onClick={() => addSupply(preset)}
-                                    >
-                                        <Plus className="h-3 w-3 mr-1" /> {preset.name}
-                                    </Button>
-                                ))}
-                            </div>
-
-                            {supplies.length === 0 ? (
-                                <Card>
-                                    <CardContent className="py-10 text-center">
-                                        <ShoppingCart className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                        <p className="text-sm text-muted-foreground">No supplies added. Use the quick-add buttons above or click "Add Supply Item".</p>
-                                    </CardContent>
-                                </Card>
-                            ) : (
-                                <div className="space-y-2">
-                                    {/* Column labels */}
-                                    <div className="flex items-center gap-3 px-3 text-[10px] font-semibold text-muted-foreground uppercase">
-                                        <span className="w-4 flex-shrink-0" />
-                                        <span className="flex-1">Item Name</span>
-                                        <span className="w-20 text-right">Price</span>
-                                        <span className="w-24">Unit</span>
-                                        <span className="w-20">Stock Qty</span>
-                                        <span className="w-7" />
+                            {/* Stall Fees */}
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Building2 className="h-4 w-4 text-primary" />
+                                        <h4 className="text-sm font-semibold">Stall Fees</h4>
+                                        <Badge variant="outline" className="text-xs">{barns.length}</Badge>
                                     </div>
-                                    {supplies.map(item => (
-                                        <SupplyItemCard
-                                            key={item.id}
-                                            item={item}
-                                            onUpdate={(field, value) => updateSupply(item.id, field, value)}
-                                            onRemove={() => removeSupply(item.id)}
-                                        />
+                                    <Button onClick={addBarn} variant="outline" size="sm" className="h-7 text-xs">
+                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Stall Fee
+                                    </Button>
+                                </div>
+                                {barns.length === 0 && manualFeesByCategory('stall').length === 0 ? (
+                                    <p className="text-xs text-muted-foreground italic">No stall fees yet — add a barn in the Livestock Housing tab, or click "Add Stall Fee".</p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {barns.map(barn => (
+                                            <div key={barn.id} className="rounded-lg border bg-muted/20 p-3 space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-sm font-medium">{barn.name}</span>
+                                                    <span className="text-xs text-muted-foreground">{(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls</span>
+                                                </div>
+                                                <FeeDetailsFields
+                                                    item={barn}
+                                                    onUpdate={(field, value) => updateBarn(barn.id, field, value)}
+                                                    unitDefault="per_night"
+                                                    showHeader={false}
+                                                    unitOptions={['flat', 'per_night', 'per_stall', 'custom']}
+                                                    leading={(
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Price / Night ($)</Label>
+                                                            <Input
+                                                                type="number"
+                                                                min={0}
+                                                                value={barn.pricePerNight || ''}
+                                                                onChange={(e) => updateBarn(barn.id, 'pricePerNight', parseFloat(e.target.value) || 0)}
+                                                                className="h-8 text-xs"
+                                                                placeholder="$0"
+                                                            />
+                                                        </div>
+                                                    )}
+                                                />
+                                            </div>
+                                        ))}
+                                        {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'custom']))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* RV & Camping Fees */}
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Car className="h-4 w-4 text-cyan-600" />
+                                        <h4 className="text-sm font-semibold">RV & Camping Fees</h4>
+                                        <Badge variant="outline" className="text-xs">{rvAreas.length}</Badge>
+                                    </div>
+                                    <Button onClick={addRvArea} variant="outline" size="sm" className="h-7 text-xs">
+                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add RV Fee
+                                    </Button>
+                                </div>
+                                <p className="text-xs text-muted-foreground -mt-1">RV hookups (full / partial / dry), trailer parking, camping spots.</p>
+                                {rvAreas.length === 0 && manualFeesByCategory('rv').length === 0 ? (
+                                    <p className="text-xs text-muted-foreground italic">No RV/camping areas yet — click "Add RV Fee" to start.</p>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {rvAreas.map(rv => (
+                                            <RvAreaCard
+                                                key={rv.id}
+                                                rvArea={rv}
+                                                onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
+                                                onRemove={() => removeRvArea(rv.id)}
+                                            />
+                                        ))}
+                                        {manualFeesByCategory('rv').map(f => renderManualFee(f, ['flat', 'per_night', 'custom']))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Supply Fees */}
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <ShoppingCart className="h-4 w-4 text-amber-600" />
+                                        <h4 className="text-sm font-semibold">Supply Fees</h4>
+                                        <Badge variant="outline" className="text-xs">{supplies.length}</Badge>
+                                    </div>
+                                    <Button onClick={() => addSupply()} variant="outline" size="sm" className="h-7 text-xs">
+                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Supply Fee
+                                    </Button>
+                                </div>
+                                {/* Quick-add presets */}
+                                <div className="flex flex-wrap gap-1.5">
+                                    {SUPPLY_PRESETS.filter(p => !supplies.some(s => s.name === p.name)).map(preset => (
+                                        <Button key={preset.name} variant="outline" size="sm" className="h-7 text-xs" onClick={() => addSupply(preset)}>
+                                            <Plus className="h-3 w-3 mr-1" /> {preset.name}
+                                        </Button>
                                     ))}
                                 </div>
-                            )}
-                        </TabsContent>
-                    </Tabs>
+                                {supplies.length === 0 && manualFeesByCategory('supply').length === 0 ? (
+                                    <p className="text-xs text-muted-foreground italic">No supplies yet — use the quick-add buttons or "Add Supply Fee".</p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {supplies.map(item => (
+                                            <SupplyItemCard
+                                                key={item.id}
+                                                item={item}
+                                                onUpdate={(field, value) => updateSupply(item.id, field, value)}
+                                                onRemove={() => removeSupply(item.id)}
+                                            />
+                                        ))}
+                                        {manualFeesByCategory('supply').map(f => renderManualFee(f, ['flat', 'per_bag', 'per_night', 'custom']))}
+                                    </div>
+                                )}
+                            </div>
+                          </fieldset>
                 </TabsContent>
 
                 {/* ── Bookings Tab ── */}
@@ -2067,6 +2271,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 // Structure list. Each generated fee is tagged source:'housing' with a stable id
 // (housing-<itemId>) so we can replace them without ever touching the fees an
 // organizer typed manually on the Fee Structure page.
+// Classify a Fee Structure fee into a Housing category so a fee typed on the Fee
+// page shows in the matching Fees-tab group. Returns 'stall' | 'rv' | 'supply' | null.
+function feeCategory(f) {
+    const id = (f.standard_id || '').toLowerCase();
+    const n = (f.name || '').toLowerCase();
+    if (id.includes('stall') || n.includes('stall')) return 'stall';
+    if (id.includes('rv') || n.includes('rv') || n.includes('camp')) return 'rv';
+    if (id.includes('shav') || id.includes('bed') || n.includes('shav') || n.includes('hay') || n.includes('bedding') || f.unit_type === 'per_bag') return 'supply';
+    return null;
+}
+
 function buildHousingFees({ barns = [], rvAreas = [], supplies = [] }) {
     const make = (sourceType, item, { name, amount, unitDefault }) => ({
         id: `housing-${item.id}`,
@@ -2193,17 +2408,21 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings }) => {
+    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
-            // Keep fees an organizer typed manually on the Fee Structure page;
-            // regenerate only the Housing-sourced ones from the latest inventory.
-            const manualFees = (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
+            // Fees typed on the Fee Structure page (source !== 'housing'). Use the
+            // edited copy from the dashboard when provided (two-way sync), else fall
+            // back to whatever is on the record. Housing-sourced fees are regenerated.
+            const manualFees = editedManualFees || (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
             const housingFees = buildHousingFees({ barns, rvAreas, supplies });
             const updatedData = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
-                stallingService: { barns, rvAreas, supportSpaces, supplies, bookings },
+                stallingService: {
+                    barns, rvAreas, supportSpaces, supplies, bookings,
+                    publishStatus: publishStatus || selectedShow.project_data?.stallingService?.publishStatus || 'draft',
+                },
                 fees: [...manualFees, ...housingFees],
             }, 'housing');
             const { error } = await supabase
@@ -2213,7 +2432,7 @@ const HousingGroundsManagerPage = () => {
             if (error) throw error;
             setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
             setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
-            toast({ title: 'Housing & Grounds Saved', description: 'All housing, grounds, and booking data saved successfully.' });
+            if (!silent) toast({ title: 'Housing & Grounds Saved', description: 'All housing, grounds, and booking data saved successfully.' });
         } catch (error) {
             toast({ title: 'Error saving', description: error.message, variant: 'destructive' });
         } finally {
