@@ -25,7 +25,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
-import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
+import { stampModuleStatusOnSave, migrateLegacyStatus } from '@/lib/moduleStatusService';
 import { useToast } from '@/components/ui/use-toast';
 import SmartAssignDialog from '@/components/housing/SmartAssignDialog';
 import ManageStallsDialog from '@/components/housing/ManageStallsDialog';
@@ -1178,10 +1178,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     );
 
     // Draft → Locked → Published lifecycle + floating auto-save state.
-    const [publishStatus, setPublishStatus] = useState(() => pd.stallingService?.publishStatus || 'draft');
+    // Backed by the shared module-status system (moduleStatuses.housing) so the
+    // Show overview reflects it; falls back to the legacy field for older data.
+    const [publishStatus, setPublishStatus] = useState(() => {
+        const raw = pd.moduleStatuses?.housing || pd.stallingService?.publishStatus || 'draft';
+        const m = migrateLegacyStatus(raw);
+        return (m === 'locked' || m === 'published') ? m : 'draft';
+    });
     const [lastSavedAt, setLastSavedAt] = useState(null);
     const [isDirty, setIsDirty] = useState(false);
-    const isLocked = publishStatus === 'locked';
+    // Locked and Published are both read-only (matches the app's isModuleEditable).
+    const isLocked = publishStatus === 'locked' || publishStatus === 'published';
 
     // Sync from parent when DB changes externally (kiosk update, tab-focus refetch, immediate-save).
     // Merge to preserve any in-flight local edits to non-status fields.
@@ -1564,11 +1571,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     return (
         <div className="space-y-6">
-            {/* Locked banner */}
+            {/* Read-only banner (Locked or Published) */}
             {isLocked && (
                 <div className="flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
-                    <Lock className="h-4 w-4" />
-                    This setup is <strong>Locked</strong>. Switch back to <strong>Draft</strong> to make changes.
+                    {publishStatus === 'published' ? <Globe className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                    {publishStatus === 'published'
+                        ? <span>This setup is <strong>Published</strong> (live for booking). Switch back to <strong>Draft</strong> to make changes.</span>
+                        : <span>This setup is <strong>Locked</strong>. Switch back to <strong>Draft</strong> to make changes.</span>}
                 </div>
             )}
 
@@ -1795,7 +1804,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <div className="flex items-center gap-2">
                                         <Building2 className="h-4 w-4 text-primary" />
                                         <h4 className="text-sm font-semibold">Stall Fees</h4>
-                                        <Badge variant="outline" className="text-xs">{barns.length}</Badge>
+                                        <Badge variant="outline" className="text-xs">{barns.length + manualFeesByCategory('stall').length}</Badge>
                                     </div>
                                     <Button onClick={addBarn} variant="outline" size="sm" className="h-7 text-xs">
                                         <Plus className="h-3.5 w-3.5 mr-1" /> Add Stall Fee
@@ -1844,7 +1853,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <div className="flex items-center gap-2">
                                         <Car className="h-4 w-4 text-cyan-600" />
                                         <h4 className="text-sm font-semibold">RV & Camping Fees</h4>
-                                        <Badge variant="outline" className="text-xs">{rvAreas.length}</Badge>
+                                        <Badge variant="outline" className="text-xs">{rvAreas.length + manualFeesByCategory('rv').length}</Badge>
                                     </div>
                                     <Button onClick={addRvArea} variant="outline" size="sm" className="h-7 text-xs">
                                         <Plus className="h-3.5 w-3.5 mr-1" /> Add RV Fee
@@ -1874,7 +1883,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <div className="flex items-center gap-2">
                                         <ShoppingCart className="h-4 w-4 text-amber-600" />
                                         <h4 className="text-sm font-semibold">Supply Fees</h4>
-                                        <Badge variant="outline" className="text-xs">{supplies.length}</Badge>
+                                        <Badge variant="outline" className="text-xs">{supplies.length + manualFeesByCategory('supply').length}</Badge>
                                     </div>
                                     <Button onClick={() => addSupply()} variant="outline" size="sm" className="h-7 text-xs">
                                         <Plus className="h-3.5 w-3.5 mr-1" /> Add Supply Fee
@@ -2417,14 +2426,21 @@ const HousingGroundsManagerPage = () => {
             // back to whatever is on the record. Housing-sourced fees are regenerated.
             const manualFees = editedManualFees || (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
             const housingFees = buildHousingFees({ barns, rvAreas, supplies });
-            const updatedData = stampModuleStatusOnSave({
+            const effectiveStatus = publishStatus || selectedShow.project_data?.stallingService?.publishStatus || 'draft';
+            const stamped = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
                 stallingService: {
                     barns, rvAreas, supportSpaces, supplies, bookings,
-                    publishStatus: publishStatus || selectedShow.project_data?.stallingService?.publishStatus || 'draft',
+                    publishStatus: effectiveStatus,
                 },
                 fees: [...manualFees, ...housingFees],
             }, 'housing');
+            // The Draft/Locked/Published bar is the source of truth — write it into
+            // the shared module-status map so the Show overview reflects it.
+            const updatedData = {
+                ...stamped,
+                moduleStatuses: { ...(stamped.moduleStatuses || {}), housing: effectiveStatus },
+            };
             const { error } = await supabase
                 .from('projects')
                 .update({ project_data: updatedData })
