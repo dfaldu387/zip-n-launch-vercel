@@ -15,9 +15,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
     Loader2, Home, Hash, Calendar, FolderOpen,
     MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
-    Building2, Warehouse, Car, ShoppingCart, Edit2, AlertCircle, Wand2, Moon,
+    Building2, Warehouse, Car, ShoppingCart, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
+    ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -280,15 +281,17 @@ const renumberStalls = (arr, prefix) => {
 // ── Stall Map (visual seating-chart style grid) ──
 
 // Cell types so a barn diagram can match a real floor plan (not just stalls).
+// Order matters: this drives the paint-palette button order. Robert wants the
+// most-used types first — Stall, Aisle, Empty, Blocked — then the rooms to the right.
 const CELL_TYPES = [
     { id: 'stall', label: 'Stall', cls: 'bg-background text-foreground/70 border-muted-foreground/40' },
+    { id: 'aisle', label: 'Aisle', cls: 'bg-muted text-muted-foreground/50 border-dashed border-muted-foreground/30' },
+    { id: 'empty', label: 'Empty', cls: 'bg-transparent border-dashed border-muted-foreground/20 text-transparent' },
+    { id: 'blocked', label: 'Blocked', cls: 'bg-muted text-muted-foreground/60 border-muted-foreground/40 line-through' },
     { id: 'office', label: 'Office', cls: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-200' },
     { id: 'feed', label: 'Feed', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-200' },
     { id: 'wash', label: 'Wash', cls: 'bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-900/30 dark:text-sky-200' },
     { id: 'tack', label: 'Tack', cls: 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/30 dark:text-purple-200' },
-    { id: 'blocked', label: 'Blocked', cls: 'bg-muted text-muted-foreground/60 border-muted-foreground/40 line-through' },
-    { id: 'aisle', label: 'Aisle', cls: 'bg-muted text-muted-foreground/50 border-dashed border-muted-foreground/30' },
-    { id: 'empty', label: 'Empty', cls: 'bg-transparent border-dashed border-muted-foreground/20 text-transparent' },
 ];
 const CELL_TYPE_MAP = Object.fromEntries(CELL_TYPES.map(t => [t.id, t]));
 const ROOM_TYPES = new Set(['office', 'feed', 'wash', 'tack']);
@@ -296,7 +299,7 @@ const ROOM_TYPES = new Set(['office', 'feed', 'wash', 'tack']);
 // Barn diagram: boxes in rows × columns — the visual barn itself (like a floor
 // plan / airplane seat map). Each box has a type (stall, office, feed, wash, tack,
 // aisle, empty). When onCellClick is given, clicking a box paints its type.
-const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null }) => {
+const StallMap = ({ stalls, cols, centerAisle = false, tight = false, onCellClick = null, aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null }) => {
     // Drag-to-paint: hold the pointer down and sweep across boxes to paint many.
     const paintingRef = React.useRef(false);
     React.useEffect(() => {
@@ -314,7 +317,10 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
     }
     const c = Math.max(1, cols || 1);
     const rowCount = Math.ceil(stalls.length / c);
-    const leftCount = centerAisle ? Math.ceil(c / 2) : c;
+    // Tight mode = Robert's preferred clean layout: stalls punched up close together,
+    // no aisle walkways/lines. Center aisle and gap strips are skipped entirely.
+    const useCenterAisle = centerAisle && !tight;
+    const leftCount = useCenterAisle ? Math.ceil(c / 2) : c;
     const rows = Array.from({ length: rowCount }, (_, r) => stalls.slice(r * c, r * c + c));
 
     // Aisle gaps are thin walkways drawn BETWEEN columns/rows — they don't consume
@@ -322,6 +328,7 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
     // strips; view mode only renders a gap where an aisle actually exists.
     const editing = !!onCellClick;
     const colGap = (index) => {
+        if (tight) return null;
         const active = (aisleCols || []).includes(index);
         if (!editing && !active) return null;
         return (
@@ -338,6 +345,7 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
         );
     };
     const rowGap = (index) => {
+        if (tight) return null;
         const active = (aisleRows || []).includes(index);
         if (!editing && !active) return null;
         return (
@@ -357,11 +365,11 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
     return (
         <div className="space-y-2">
             <div className="overflow-x-auto">
-                <div className="inline-flex flex-col gap-1.5 rounded-md border bg-background/60 p-3">
+                <div className={cn('inline-flex flex-col rounded-md border bg-background/60 p-3', tight ? 'gap-0' : 'gap-1.5')}>
                     {rows.map((rowStalls, ri) => (
                         <React.Fragment key={ri}>
                             {ri > 0 && rowGap(ri)}
-                            <div className="flex items-stretch gap-1.5">
+                            <div className={cn('flex items-stretch', tight ? 'gap-0' : 'gap-1.5')}>
                                 {rowStalls.map((stall, ci) => {
                                     const type = stall.type || 'stall';
                                     const isStall = type === 'stall';
@@ -369,7 +377,7 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
                                     const isBooked = isStall && !!stall.bookingId;
                                     const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
                                     const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
-                                    const showCenter = centerAisle && ci === leftCount;
+                                    const showCenter = useCenterAisle && ci === leftCount;
                                     return (
                                         <React.Fragment key={stall.id}>
                                             {ci > 0 && !showCenter && colGap(ci)}
@@ -383,8 +391,12 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
                                                 onPointerEnter={onCellClick ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
                                                 title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : typeInfo.label)}
                                                 className={cn(
-                                                    'flex items-center justify-center rounded-md border text-[9px] font-mono font-semibold h-9 w-12 select-none',
-                                                    onCellClick && 'cursor-pointer hover:ring-2 hover:ring-primary/40',
+                                                    'flex items-center justify-center border text-[9px] font-mono font-semibold h-9 w-12 select-none',
+                                                    // Tight: square corners + overlap borders so stalls read as one clean grid (fewer lines).
+                                                    tight ? 'rounded-none' : 'rounded-md',
+                                                    tight && ci > 0 && '-ml-px',
+                                                    tight && ri > 0 && '-mt-px',
+                                                    onCellClick && 'cursor-pointer hover:ring-2 hover:ring-primary/40 hover:z-10',
                                                     isBooked ? 'bg-blue-600 text-white border-blue-700' : typeInfo.cls
                                                 )}
                                             >
@@ -401,11 +413,11 @@ const StallMap = ({ stalls, cols, centerAisle = false, onCellClick = null, aisle
             <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-muted-foreground/40 bg-background" /> Stall</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-orange-400" /> Aisle</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-amber-300 bg-amber-100" /> Office</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-100" /> Feed</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-sky-300 bg-sky-100" /> Wash</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-purple-300 bg-purple-100" /> Tack</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-orange-400" /> Aisle</span>
             </div>
         </div>
     );
@@ -429,6 +441,11 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
     // defaults so the grid shows something until the organizer adjusts it.
     const cols = barn.layoutCols ?? (barn.stallCount ? Math.min(barn.stallCount, 10) : 10);
     const rows = barn.layoutRows ?? (cols ? Math.ceil((barn.stallCount || 0) / cols) : 1);
+    // When locked the grid "holds still" — no painting, no row/col changes, no aisle edits.
+    const locked = barn.layoutLocked || false;
+    // Robert prefers the clean, tight layout (stalls punched up close, no aisle lines)
+    // by default. Turning aisles on switches to the walkway/gap view.
+    const showAisles = barn.showAisles || false;
 
     // Rebuild the stall boxes for a rows × columns grid, keeping existing bookings
     // (matched by position) so assignments aren't lost when the layout changes.
@@ -518,8 +535,17 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
         <Card className="border-l-4 border-l-primary">
             <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-1">
-                        <TypeIcon className="h-4 w-4 text-primary" />
+                    <div className="flex items-center gap-2 flex-1">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 shrink-0"
+                            title={expanded ? 'Minimize barn' : 'Open barn'}
+                            onClick={() => setExpanded(!expanded)}
+                        >
+                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </Button>
+                        <TypeIcon className="h-4 w-4 text-primary shrink-0" />
                         <Input
                             value={barn.name}
                             onChange={(e) => onUpdate('name', e.target.value)}
@@ -533,9 +559,6 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                     <div className="flex items-center gap-1">
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate this barn" onClick={onDuplicate}>
                             <Copy className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
-                            {expanded ? <X className="h-3.5 w-3.5" /> : <Edit2 className="h-3.5 w-3.5" />}
                         </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
                             <Trash2 className="h-3.5 w-3.5" />
@@ -615,13 +638,28 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
 
                     {/* Barn Layout — design the barn as a Rows × Columns grid of stalls */}
                     <div className="border-t pt-3">
-                        <button
-                            type="button"
-                            onClick={() => setShowLayout(o => !o)}
-                            className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1"
-                        >
-                            {showLayout ? '▾' : '▸'} Barn Layout ({booked}/{totalStalls} booked)
-                        </button>
+                        <div className="flex items-center justify-between gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setShowLayout(o => !o)}
+                                className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1"
+                            >
+                                {showLayout ? '▾' : '▸'} Barn Layout ({booked}/{totalStalls} booked)
+                                {locked && <Lock className="h-3 w-3 text-amber-600" />}
+                            </button>
+                            {showLayout && (
+                                <Button
+                                    type="button"
+                                    variant={locked ? 'default' : 'outline'}
+                                    size="sm"
+                                    className={cn('h-7 text-xs gap-1', locked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+                                    onClick={() => onUpdate('layoutLocked', !locked)}
+                                >
+                                    <Lock className="h-3.5 w-3.5" />
+                                    {locked ? 'Locked — click to edit' : 'Lock layout'}
+                                </Button>
+                            )}
+                        </div>
                         {showLayout && (
                             <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
                                 {/* Build the barn: Rows × Columns (+ optional center aisle) */}
@@ -632,6 +670,7 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                             type="number"
                                             min={0}
                                             value={rows}
+                                            disabled={locked}
                                             onChange={(e) => regenerateGrid(e.target.value, cols)}
                                             className="h-8 text-xs w-20"
                                         />
@@ -643,55 +682,85 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                             type="number"
                                             min={0}
                                             value={cols}
+                                            disabled={locked}
                                             onChange={(e) => regenerateGrid(rows, e.target.value)}
                                             className="h-8 text-xs w-20"
                                         />
                                     </div>
                                     <div className="flex items-center gap-2 pb-2">
                                         <Checkbox
-                                            id={`aisle-${barn.id}`}
-                                            checked={barn.centerAisle || false}
-                                            onCheckedChange={(checked) => onUpdate('centerAisle', !!checked)}
+                                            id={`showaisles-${barn.id}`}
+                                            checked={showAisles}
+                                            disabled={locked}
+                                            onCheckedChange={(checked) => onUpdate('showAisles', !!checked)}
                                         />
-                                        <Label htmlFor={`aisle-${barn.id}`} className="text-xs cursor-pointer">Center aisle</Label>
+                                        <Label htmlFor={`showaisles-${barn.id}`} className="text-xs cursor-pointer">Show aisles</Label>
                                     </div>
+                                    {showAisles && (
+                                        <div className="flex items-center gap-2 pb-2">
+                                            <Checkbox
+                                                id={`aisle-${barn.id}`}
+                                                checked={barn.centerAisle || false}
+                                                disabled={locked}
+                                                onCheckedChange={(checked) => onUpdate('centerAisle', !!checked)}
+                                            />
+                                            <Label htmlFor={`aisle-${barn.id}`} className="text-xs cursor-pointer">Center aisle</Label>
+                                        </div>
+                                    )}
                                     <div className="pb-2 text-xs font-semibold text-primary">
                                         = {(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls
                                         <span className="text-muted-foreground font-normal"> of {rows * cols} boxes</span>
                                     </div>
                                 </div>
 
-                                {/* Paint palette — pick a type, then click boxes to set them */}
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                    <span className="text-xs text-muted-foreground mr-1">Click a box to set it as:</span>
-                                    {CELL_TYPES.map(t => (
-                                        <Button
-                                            key={t.id}
-                                            type="button"
-                                            variant={paintType === t.id ? 'default' : 'outline'}
-                                            size="sm"
-                                            className="h-7 text-xs"
-                                            onClick={() => setPaintType(t.id)}
-                                        >
-                                            {t.label}
-                                        </Button>
-                                    ))}
-                                </div>
+                                {locked ? (
+                                    /* Locked — read-only notice instead of the paint palette */
+                                    <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200 dark:border-amber-700">
+                                        <Lock className="h-3.5 w-3.5 shrink-0" />
+                                        Layout is locked and held in place. Click <span className="font-semibold">"Locked — click to edit"</span> above to make changes.
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* Paint palette — pick a type, then click boxes to set them */}
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className="text-xs text-muted-foreground mr-1">Click a box to set it as:</span>
+                                            {CELL_TYPES.map(t => (
+                                                <Button
+                                                    key={t.id}
+                                                    type="button"
+                                                    variant={paintType === t.id ? 'default' : 'outline'}
+                                                    size="sm"
+                                                    className="h-7 text-xs"
+                                                    onClick={() => setPaintType(t.id)}
+                                                >
+                                                    {t.label}
+                                                </Button>
+                                            ))}
+                                        </div>
 
-                                <p className="text-[11px] text-muted-foreground">
-                                    Tip: click a <span className="font-medium text-orange-500">thin gap between boxes</span> to draw an aisle — stalls aren't removed.
-                                </p>
+                                        {showAisles ? (
+                                            <p className="text-[11px] text-muted-foreground">
+                                                Tip: click a <span className="font-medium text-orange-500">thin gap between boxes</span> to draw an aisle — stalls aren't removed.
+                                            </p>
+                                        ) : (
+                                            <p className="text-[11px] text-muted-foreground">
+                                                Clean layout — stalls packed close, no aisle lines. Tick <span className="font-medium">Show aisles</span> to add walkways.
+                                            </p>
+                                        )}
+                                    </>
+                                )}
 
-                                {/* The barn diagram (boxes = the barn) — click to paint types */}
+                                {/* The barn diagram (boxes = the barn) — click to paint types. Locked = view only. */}
                                 <StallMap
                                     stalls={barn.stalls}
                                     cols={cols}
                                     centerAisle={barn.centerAisle}
-                                    onCellClick={paintCell}
+                                    tight={!showAisles}
+                                    onCellClick={locked ? undefined : paintCell}
                                     aisleCols={barn.aisleCols || []}
                                     aisleRows={barn.aisleRows || []}
-                                    onToggleAisleCol={(i) => toggleAisle('aisleCols', i)}
-                                    onToggleAisleRow={(i) => toggleAisle('aisleRows', i)}
+                                    onToggleAisleCol={locked ? undefined : (i) => toggleAisle('aisleCols', i)}
+                                    onToggleAisleRow={locked ? undefined : (i) => toggleAisle('aisleRows', i)}
                                 />
 
                                 {/* Optional reference image — a separate picture to copy the layout from */}
@@ -739,8 +808,17 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
         <Card className={cn('border-l-4 border-l-cyan-500', rvArea.isOverflow && 'border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/10')}>
             <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-1">
-                        <Car className={cn('h-4 w-4', rvArea.isOverflow ? 'text-amber-600' : 'text-cyan-600')} />
+                    <div className="flex items-center gap-2 flex-1">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 shrink-0"
+                            title={expanded ? 'Minimize area' : 'Open area'}
+                            onClick={() => setExpanded(!expanded)}
+                        >
+                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </Button>
+                        <Car className={cn('h-4 w-4 shrink-0', rvArea.isOverflow ? 'text-amber-600' : 'text-cyan-600')} />
                         <Input
                             value={rvArea.name}
                             onChange={(e) => onUpdate('name', e.target.value)}
@@ -758,9 +836,6 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                         )}
                     </div>
                     <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
-                            {expanded ? <X className="h-3.5 w-3.5" /> : <Edit2 className="h-3.5 w-3.5" />}
-                        </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
                             <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -1128,6 +1203,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Move-in / Move-out window for the whole show. Exhibitors can only book an
+    // arrival/departure inside this window. `datesLocked` holds it still so the
+    // window isn't bumped by accident once it's set.
+    const [moveInDate, setMoveInDate] = useState(() => pd.stallingService?.moveInDate || '');
+    const [moveOutDate, setMoveOutDate] = useState(() => pd.stallingService?.moveOutDate || '');
+    const [datesLocked, setDatesLocked] = useState(() => pd.stallingService?.datesLocked || false);
 
     // Two-way sync: fees typed on the Fee Structure page (source !== 'housing') are
     // carried here so they show + can be edited from Housing too. Non-housing-category
@@ -1550,10 +1632,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [bookings, barns, rvAreas, occupancyRate, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees }, opts);
+        await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees]);
+    }, [onSave, barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked]);
 
     const handleSave = () => persist();
 
@@ -1567,7 +1649,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, rvAreas, supplies, publishStatus, manualFees]);
+    }, [barns, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked]);
 
     return (
         <div className="space-y-6">
@@ -1746,6 +1828,55 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
                 <TabsContent value="inventory" className="mt-4">
                           <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && 'opacity-70')}>
+                            {/* Move-in / Move-out window — exhibitors can only book inside these dates. */}
+                            <Card className="border-l-4 border-l-indigo-500">
+                                <CardContent className="py-4">
+                                    <div className="flex flex-wrap items-end justify-between gap-4">
+                                        <div className="flex flex-wrap items-end gap-4">
+                                            <div className="flex items-center gap-2 pb-1.5">
+                                                <Calendar className="h-4 w-4 text-indigo-500" />
+                                                <span className="text-sm font-semibold">Move-in / Move-out</span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-xs">Move-in date</Label>
+                                                <Input
+                                                    type="date"
+                                                    value={moveInDate}
+                                                    max={moveOutDate || undefined}
+                                                    disabled={datesLocked}
+                                                    onChange={(e) => setMoveInDate(e.target.value)}
+                                                    className="h-8 text-xs w-44"
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-xs">Move-out date</Label>
+                                                <Input
+                                                    type="date"
+                                                    value={moveOutDate}
+                                                    min={moveInDate || undefined}
+                                                    disabled={datesLocked}
+                                                    onChange={(e) => setMoveOutDate(e.target.value)}
+                                                    className="h-8 text-xs w-44"
+                                                />
+                                            </div>
+                                        </div>
+                                        <Button
+                                            type="button"
+                                            variant={datesLocked ? 'default' : 'outline'}
+                                            size="sm"
+                                            className={cn('h-8 text-xs gap-1', datesLocked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+                                            onClick={() => setDatesLocked(v => !v)}
+                                        >
+                                            <Lock className="h-3.5 w-3.5" />
+                                            {datesLocked ? 'Locked — click to edit' : 'Lock dates'}
+                                        </Button>
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-2">
+                                        Exhibitors can only choose arrival &amp; departure dates inside this window when booking.
+                                    </p>
+                                </CardContent>
+                            </Card>
+
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Building2 className="h-5 w-5 text-primary" />
@@ -1780,6 +1911,39 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onUpdate={(field, value) => updateBarn(barn.id, field, value)}
                                             onRemove={() => removeBarn(barn.id)}
                                             onDuplicate={() => duplicateBarn(barn.id)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* RV & Camping — adjust how many spots + hookup/power details (no map needed). */}
+                            <div className="border-t pt-4 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Car className="h-5 w-5 text-cyan-600" />
+                                    <h3 className="text-base font-semibold">RV &amp; Camping</h3>
+                                    <Badge variant="outline" className="text-xs">{rvAreas.length} area{rvAreas.length !== 1 ? 's' : ''} · {rvAreas.reduce((sum, r) => sum + (r.spotCount || 0), 0)} spot{rvAreas.reduce((sum, r) => sum + (r.spotCount || 0), 0) !== 1 ? 's' : ''}</Badge>
+                                </div>
+                                <Button onClick={addRvArea} variant="outline" size="sm">
+                                    <Plus className="h-4 w-4 mr-1.5" /> Add RV Area
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground -mt-2">Adjust the number of RV / camping spots and their hookup, power, water details.</p>
+
+                            {rvAreas.length === 0 ? (
+                                <Card>
+                                    <CardContent className="py-10 text-center">
+                                        <Car className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                        <p className="text-sm text-muted-foreground">No RV/camping areas yet. Click "Add RV Area" to set how many spots you have.</p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="space-y-4">
+                                    {rvAreas.map(rv => (
+                                        <RvAreaCard
+                                            key={rv.id}
+                                            rvArea={rv}
+                                            onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
+                                            onRemove={() => removeRvArea(rv.id)}
                                         />
                                     ))}
                                 </div>
@@ -2417,7 +2581,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
@@ -2430,8 +2594,13 @@ const HousingGroundsManagerPage = () => {
             const stamped = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
                 stallingService: {
+                    ...selectedShow.project_data?.stallingService,
                     barns, rvAreas, supportSpaces, supplies, bookings,
                     publishStatus: effectiveStatus,
+                    // Keep prior values when an auto-save payload omits them.
+                    moveInDate: moveInDate ?? selectedShow.project_data?.stallingService?.moveInDate ?? '',
+                    moveOutDate: moveOutDate ?? selectedShow.project_data?.stallingService?.moveOutDate ?? '',
+                    datesLocked: datesLocked ?? selectedShow.project_data?.stallingService?.datesLocked ?? false,
                 },
                 fees: [...manualFees, ...housingFees],
             }, 'housing');

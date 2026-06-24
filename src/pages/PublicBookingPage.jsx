@@ -6,7 +6,7 @@ import { format, differenceInCalendarDays, parseISO } from 'date-fns';
 import {
     Loader2, Home, Car, Warehouse, ShoppingCart, Calendar,
     User, Mail, Phone, MessageSquare, CheckCircle2, ArrowLeft, ArrowRight,
-    Plus, Minus, Info, PartyPopper, Copy, Hash,
+    Plus, Minus, Info, PartyPopper, Copy, Hash, Lock, CalendarClock,
 } from 'lucide-react';
 
 import Navigation from '@/components/Navigation';
@@ -316,7 +316,10 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
 
 // ───────────────────────── Step 2: Dates & Contact ─────────────────────────
 
-const Step2_Details = ({ details, setDetails, showWindow }) => {
+const Step2_Details = ({ details, setDetails, showWindow, bookWindow = {} }) => {
+    // Hard limits for what an exhibitor may pick (move-in / move-out window).
+    const minDate = bookWindow.start || showWindow.start || '';
+    const maxDate = bookWindow.end || showWindow.end || '';
     return (
         <div className="space-y-6">
             <Card>
@@ -329,6 +332,11 @@ const Step2_Details = ({ details, setDetails, showWindow }) => {
                             Show runs {format(parseISO(showWindow.start), 'MMM d')} – {showWindow.end ? format(parseISO(showWindow.end), 'MMM d, yyyy') : ''}
                         </CardDescription>
                     )}
+                    {minDate && (
+                        <CardDescription className="font-medium text-primary">
+                            Move-in {format(parseISO(minDate), 'MMM d')}{maxDate ? ` – move-out ${format(parseISO(maxDate), 'MMM d, yyyy')}` : ''} — please book within these dates.
+                        </CardDescription>
+                    )}
                 </CardHeader>
                 <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -336,8 +344,8 @@ const Step2_Details = ({ details, setDetails, showWindow }) => {
                         <Input
                             type="date"
                             value={details.arrivalDate}
-                            min={showWindow.start || undefined}
-                            max={showWindow.end || undefined}
+                            min={minDate || undefined}
+                            max={maxDate || undefined}
                             onChange={(e) => setDetails(d => ({ ...d, arrivalDate: e.target.value }))}
                         />
                     </div>
@@ -346,8 +354,8 @@ const Step2_Details = ({ details, setDetails, showWindow }) => {
                         <Input
                             type="date"
                             value={details.departureDate}
-                            min={details.arrivalDate || showWindow.start || undefined}
-                            max={showWindow.end || undefined}
+                            min={details.arrivalDate || minDate || undefined}
+                            max={maxDate || undefined}
                             onChange={(e) => setDetails(d => ({ ...d, departureDate: e.target.value }))}
                         />
                     </div>
@@ -403,13 +411,49 @@ const Step2_Details = ({ details, setDetails, showWindow }) => {
                             />
                         </div>
                     </div>
-                    <div className="md:col-span-2">
-                        <Label>Horse Names</Label>
-                        <Input
-                            value={details.horseNames}
-                            onChange={(e) => setDetails(d => ({ ...d, horseNames: e.target.value }))}
-                            placeholder="Comma-separated, e.g., Dixie, Blaze, Apollo"
-                        />
+                    <div className="md:col-span-2 space-y-3">
+                        <div className="max-w-[200px]">
+                            <Label>Number of Horses</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                max={50}
+                                value={details.horseCount}
+                                onChange={(e) => {
+                                    const n = Math.max(0, Math.min(50, parseInt(e.target.value) || 0));
+                                    setDetails(d => {
+                                        // Trim any names beyond the new count so removed lines don't linger.
+                                        const names = (d.horseNames || '').split(',').map(s => s.trim());
+                                        names.length = n;
+                                        return { ...d, horseCount: n, horseNames: names.join(', ') };
+                                    });
+                                }}
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">Stalls booked ≠ horses — tell us how many horses you're bringing.</p>
+                        </div>
+                        {details.horseCount > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {Array.from({ length: details.horseCount }).map((_, i) => {
+                                    const names = (details.horseNames || '').split(',').map(s => s.trim());
+                                    return (
+                                        <div key={i}>
+                                            <Label className="text-xs">Horse {i + 1} name</Label>
+                                            <Input
+                                                value={names[i] || ''}
+                                                onChange={(e) => setDetails(d => {
+                                                    const arr = (d.horseNames || '').split(',').map(s => s.trim());
+                                                    while (arr.length <= i) arr.push('');
+                                                    arr[i] = e.target.value;
+                                                    arr.length = Math.max(arr.length, d.horseCount);
+                                                    return { ...d, horseNames: arr.join(', ') };
+                                                })}
+                                                placeholder={`e.g., ${['Dixie', 'Blaze', 'Apollo', 'Scout', 'Willow'][i % 5]}`}
+                                            />
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 </CardContent>
             </Card>
@@ -536,6 +580,7 @@ const PublicBookingPage = () => {
         trainerName: '',
         email: '',
         phone: '',
+        horseCount: 1,
         horseNames: '',
         preferences: '',
     });
@@ -585,6 +630,25 @@ const PublicBookingPage = () => {
         const g = show?.project_data?.showDetails?.general || {};
         return { start: g.startDate || '', end: g.endDate || '' };
     }, [show]);
+
+    // Booking is only open when the organizer has set the housing module to
+    // "published". Draft = still building, Locked = closed — both block booking.
+    const housingStatus = useMemo(() => {
+        const pd = show?.project_data || {};
+        return pd.moduleStatuses?.housing || pd.stallingService?.publishStatus || 'draft';
+    }, [show]);
+    const isOpenForBooking = housingStatus === 'published';
+
+    // Hard move-in / move-out limits set by the organizer in Housing → Inventory.
+    // Exhibitors can't book arrival/departure outside this window. Falls back to the
+    // show's competition dates when the organizer hasn't set a move-in/out window.
+    const bookWindow = useMemo(() => {
+        const s = show?.project_data?.stallingService || {};
+        return {
+            start: s.moveInDate || showWindow.start || '',
+            end: s.moveOutDate || showWindow.end || '',
+        };
+    }, [show, showWindow]);
 
     const orderSummary = useMemo(() => {
         const nights = calcNights(details.arrivalDate, details.departureDate);
@@ -755,6 +819,15 @@ const PublicBookingPage = () => {
                 toast({ title: 'Departure must be after arrival', variant: 'destructive' });
                 return false;
             }
+            // Enforce the organizer's move-in / move-out window (hard limit).
+            if (bookWindow.start && details.arrivalDate < bookWindow.start) {
+                toast({ title: 'Arrival too early', description: `Move-in starts ${format(parseISO(bookWindow.start), 'MMM d, yyyy')}.`, variant: 'destructive' });
+                return false;
+            }
+            if (bookWindow.end && details.departureDate > bookWindow.end) {
+                toast({ title: 'Departure too late', description: `Move-out is by ${format(parseISO(bookWindow.end), 'MMM d, yyyy')}.`, variant: 'destructive' });
+                return false;
+            }
             if (!details.exhibitorName || !details.email || !details.phone) {
                 toast({ title: 'Please complete required fields', variant: 'destructive' });
                 return false;
@@ -780,6 +853,7 @@ const PublicBookingPage = () => {
                 trainerName: details.trainerName || '',
                 horseName: horseList[0] || '',
                 horseNames: horseList,
+                horseCount: details.horseCount || horseList.length,
                 arrivalDate: details.arrivalDate,
                 departureDate: details.departureDate,
                 nights: orderSummary.nights,
@@ -947,6 +1021,39 @@ const PublicBookingPage = () => {
         );
     }
 
+    // Booking is gated by the organizer's housing status. Only "published" is open;
+    // Draft = not open yet, Locked = closed. (The confirmation screen above still
+    // shows for anyone who already submitted while it was open.)
+    if (!isOpenForBooking) {
+        const isLockedClosed = housingStatus === 'locked';
+        const Icon = isLockedClosed ? Lock : CalendarClock;
+        return (
+            <>
+                <Helmet><title>Booking Not Open - {show.project_name}</title></Helmet>
+                <div className="min-h-screen bg-background">
+                    <Navigation />
+                    <main className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+                        <Card className="border-2">
+                            <CardHeader className="text-center pb-4">
+                                <div className="mx-auto h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-3">
+                                    <Icon className="h-8 w-8 text-muted-foreground" />
+                                </div>
+                                <CardTitle className="text-2xl">
+                                    {isLockedClosed ? 'Booking is closed' : 'Booking is not open yet'}
+                                </CardTitle>
+                                <CardDescription className="text-base">
+                                    {isLockedClosed
+                                        ? <>Online reservations for <strong>{show.project_name}</strong> are currently closed. Please contact the show organizer.</>
+                                        : <>Reservations for <strong>{show.project_name}</strong> haven't opened yet. Please check back soon, or contact the show organizer.</>}
+                                </CardDescription>
+                            </CardHeader>
+                        </Card>
+                    </main>
+                </div>
+            </>
+        );
+    }
+
     const stepLabels = ['Select Items', 'Your Details', 'Review & Pay'];
 
     return (
@@ -990,7 +1097,7 @@ const PublicBookingPage = () => {
                         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                             <div className="lg:col-span-3">
                                 {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} />}
-                                {step === 2 && <Step2_Details details={details} setDetails={setDetails} showWindow={showWindow} />}
+                                {step === 2 && <Step2_Details details={details} setDetails={setDetails} showWindow={showWindow} bookWindow={bookWindow} />}
                                 {step === 3 && <Step3_Review orderSummary={orderSummary} details={details} onSubmit={handleSubmit} isSubmitting={isSubmitting} />}
                             </div>
 
