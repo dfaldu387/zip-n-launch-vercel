@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon } from 'lucide-react';
+import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon, ZoomIn } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { events } from '@/lib/eventsData';
 import { format } from 'date-fns';
@@ -19,6 +20,8 @@ const EventDetailPage = () => {
   const [patternsData, setPatternsData] = useState([]);
   const [scoresheetsData, setScoresheetsData] = useState([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  // Full-size image preview (pattern / score sheet) — works for logged-out visitors.
+  const [previewImage, setPreviewImage] = useState(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -261,6 +264,19 @@ const EventDetailPage = () => {
     );
   }
 
+  // Pattern book is published (as a show module or a standalone book).
+  const patternPublished = event.isFromProjects && (
+    projectData?.moduleStatuses?.patternBook === 'published' ||
+    ['Final', 'Publication', 'published'].includes(event.project?.status)
+  );
+  // Optional scheduled release: if a future Publication Date is set, hold the patterns
+  // back until that day (string compare on yyyy-MM-dd is date-correct).
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const patternsScheduled = patternPublished && projectData?.publicationDate && projectData.publicationDate > todayStr;
+  const publicationDateLabel = projectData?.publicationDate
+    ? format(new Date(projectData.publicationDate + 'T00:00:00'), 'PPP')
+    : '';
+
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
@@ -447,7 +463,7 @@ const EventDetailPage = () => {
             )}
 
             {/* Event Highlights - Show patterns, scoresheets, divisions, and judges */}
-            <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.2 }}>
+            <motion.div id="event-patterns" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.2 }}>
               <Card className="bg-secondary border-border">
                 <CardHeader>
                   <CardTitle>Event Highlights</CardTitle>
@@ -457,8 +473,15 @@ const EventDetailPage = () => {
                   {/* Patterns and Scoresheets */}
                   {event.isFromProjects && projectData && (
                     <>
+                      {/* Scheduled release — patterns are held until the Publication Date. */}
+                      {patternsScheduled && (
+                        <div className="p-4 rounded-lg border bg-secondary text-sm text-muted-foreground flex items-center gap-2">
+                          <Calendar className="h-4 w-4" />
+                          Patterns will be posted on {publicationDateLabel}.
+                        </div>
+                      )}
                       {/* Patterns */}
-                      {patternsData.length > 0 && (
+                      {!patternsScheduled && patternsData.length > 0 && (
                         <div>
                           <h3 className="font-semibold text-primary mb-3 flex items-center">
                             <FileText className="h-5 w-5 mr-2" /> Patterns
@@ -476,11 +499,23 @@ const EventDetailPage = () => {
                                   </div>
                                 </div>
                                 {pattern.imageUrl ? (
-                                  <img 
-                                    src={pattern.imageUrl} 
-                                    alt={pattern.patternName}
-                                    className="w-full h-32 object-contain rounded border border-border mt-2 bg-white"
-                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewImage({ url: pattern.imageUrl, title: pattern.patternName })}
+                                    className="group relative block w-full mt-2"
+                                    title="Click to view full size"
+                                  >
+                                    <img
+                                      src={pattern.imageUrl}
+                                      alt={pattern.patternName}
+                                      className="w-full h-32 object-contain rounded border border-border bg-white transition group-hover:opacity-90"
+                                    />
+                                    <span className="absolute inset-0 flex items-center justify-center rounded bg-black/0 opacity-0 transition group-hover:bg-black/10 group-hover:opacity-100">
+                                      <span className="inline-flex items-center gap-1 rounded bg-black/70 px-2 py-1 text-xs font-medium text-white">
+                                        <ZoomIn className="h-3.5 w-3.5" /> View
+                                      </span>
+                                    </span>
+                                  </button>
                                 ) : (
                                   <div className="w-full h-32 bg-muted rounded border border-border mt-2 flex items-center justify-center">
                                     <ImageIcon className="h-8 w-8 text-muted-foreground" />
@@ -505,7 +540,7 @@ const EventDetailPage = () => {
                       )}
 
                       {/* Scoresheets */}
-                      {scoresheetsData.length > 0 && (
+                      {!patternsScheduled && scoresheetsData.length > 0 && (
                         <div>
                           <h3 className="font-semibold text-primary mb-3 flex items-center">
                             <FileText className="h-5 w-5 mr-2" /> Score Sheets
@@ -520,11 +555,23 @@ const EventDetailPage = () => {
                                   </div>
                                 </div>
                                 {scoresheet.imageUrl ? (
-                                  <img 
-                                    src={scoresheet.imageUrl} 
-                                    alt={scoresheet.fileName || 'Score Sheet'}
-                                    className="w-full h-32 object-contain rounded border border-border mt-2 bg-white"
-                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewImage({ url: scoresheet.imageUrl, title: scoresheet.fileName || 'Score Sheet' })}
+                                    className="group relative block w-full mt-2"
+                                    title="Click to view full size"
+                                  >
+                                    <img
+                                      src={scoresheet.imageUrl}
+                                      alt={scoresheet.fileName || 'Score Sheet'}
+                                      className="w-full h-32 object-contain rounded border border-border bg-white transition group-hover:opacity-90"
+                                    />
+                                    <span className="absolute inset-0 flex items-center justify-center rounded bg-black/0 opacity-0 transition group-hover:bg-black/10 group-hover:opacity-100">
+                                      <span className="inline-flex items-center gap-1 rounded bg-black/70 px-2 py-1 text-xs font-medium text-white">
+                                        <ZoomIn className="h-3.5 w-3.5" /> View
+                                      </span>
+                                    </span>
+                                  </button>
                                 ) : (
                                   <div className="w-full h-32 bg-muted rounded border border-border mt-2 flex items-center justify-center">
                                     <ImageIcon className="h-8 w-8 text-muted-foreground" />
@@ -728,6 +775,30 @@ const EventDetailPage = () => {
                   <CardTitle>Actions</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  {/* Book Housing & Grounds — only when the organizer has published it. */}
+                  {event.isFromProjects && projectData?.moduleStatuses?.housing === 'published' && (
+                    <Button asChild className="w-full bg-blue-600 hover:bg-blue-700">
+                      <Link to={`/show/${event.id}/book`}>
+                        <Building2 className="h-4 w-4 mr-2" /> Book Housing &amp; Grounds
+                      </Link>
+                    </Button>
+                  )}
+                  {/* Pattern book: a future Publication Date holds it back with a "posted on" note;
+                      otherwise a button that jumps to the patterns below. */}
+                  {patternPublished && (
+                    patternsScheduled ? (
+                      <div className="w-full text-center text-sm text-muted-foreground p-3 bg-secondary rounded-md flex items-center justify-center gap-2">
+                        <Calendar className="h-4 w-4" /> Patterns posted on {publicationDateLabel}
+                      </div>
+                    ) : (
+                      <Button
+                        className="w-full bg-green-600 hover:bg-green-700"
+                        onClick={() => document.getElementById('event-patterns')?.scrollIntoView({ behavior: 'smooth' })}
+                      >
+                        <BookOpen className="h-4 w-4 mr-2" /> View Pattern Book
+                      </Button>
+                    )
+                  )}
                   {getPatternStatus()}
                   {(event.website || event.show_website || event.showWebsite) && (
                     <Button asChild variant="outline" className="w-full">
@@ -765,6 +836,22 @@ const EventDetailPage = () => {
           </div>
         </div>
       </div>
+
+      {/* Full-size image preview — click any pattern / score sheet to open it. */}
+      <Dialog open={!!previewImage} onOpenChange={(open) => !open && setPreviewImage(null)}>
+        <DialogContent className="max-w-4xl p-2 sm:p-4">
+          {previewImage && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-center">{previewImage.title}</p>
+              <img
+                src={previewImage.url}
+                alt={previewImage.title}
+                className="w-full max-h-[80vh] object-contain rounded bg-white"
+              />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -28,6 +28,8 @@ import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { stampModuleStatusOnSave, migrateLegacyStatus } from '@/lib/moduleStatusService';
 import { useToast } from '@/components/ui/use-toast';
+import { ConfirmationDialog } from '@/components/ConfirmationDialog';
+import { LogoUploader } from '@/components/show-structure/LogoUploader';
 import SmartAssignDialog from '@/components/housing/SmartAssignDialog';
 import ManageStallsDialog from '@/components/housing/ManageStallsDialog';
 import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
@@ -150,6 +152,22 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
             </div>
         </div>
     </div>
+);
+
+// Per-section lock toggle — freeze one Barn / RV area / supply as you finish it so
+// it can't be adjusted by accident. Independent of the page-wide "Locked" lifecycle.
+const SectionLockToggle = ({ locked, onToggle }) => (
+    <Button
+        type="button"
+        variant={locked ? 'default' : 'outline'}
+        size="sm"
+        className={cn('h-7 text-xs gap-1', locked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+        onClick={onToggle}
+        title={locked ? 'Section locked — click to edit' : 'Lock this section so it stays as-is'}
+    >
+        <Lock className="h-3.5 w-3.5" />
+        {locked ? 'Locked' : 'Lock'}
+    </Button>
 );
 
 const BOOKING_STATUSES = ['confirmed', 'pending', 'cancelled', 'checked_in', 'checked_out'];
@@ -443,6 +461,9 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
     const rows = barn.layoutRows ?? (cols ? Math.ceil((barn.stallCount || 0) / cols) : 1);
     // When locked the grid "holds still" — no painting, no row/col changes, no aisle edits.
     const locked = barn.layoutLocked || false;
+    // Section lock — freezes the whole barn (inventory + its fees) once the organizer
+    // is done with it. Separate from layoutLocked (which only holds the grid still).
+    const sectionLocked = barn.locked || false;
     // Robert prefers the clean, tight layout (stalls punched up close, no aisle lines)
     // by default. Turning aisles on switches to the walkway/gap view.
     const showAisles = barn.showAisles || false;
@@ -549,6 +570,7 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                         <Input
                             value={barn.name}
                             onChange={(e) => onUpdate('name', e.target.value)}
+                            disabled={sectionLocked}
                             className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs"
                             placeholder="Barn/Area name..."
                         />
@@ -557,17 +579,19 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                         </Badge>
                     </div>
                     <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate this barn" onClick={onDuplicate}>
+                        <SectionLockToggle locked={sectionLocked} onToggle={() => onUpdate('locked', !sectionLocked)} />
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate this barn" disabled={sectionLocked} onClick={onDuplicate}>
                             <Copy className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" disabled={sectionLocked} onClick={onRemove}>
                             <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                     </div>
                 </div>
             </CardHeader>
             {expanded && (
-                <CardContent className="space-y-3 pt-2">
+                <CardContent className="pt-2">
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div className="space-y-1">
                             <Label className="text-xs">Housing Type</Label>
@@ -791,6 +815,7 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                             </div>
                         )}
                     </div>
+                  </fieldset>
                 </CardContent>
             )}
         </Card>
@@ -798,11 +823,15 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
 };
 
 // ── RV Area Card ──
+// One component, two faces:
+//   variant="inventory" → only the physical inventory (spots, hookup, power, notes)
+//   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
+// The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
     const [expanded, setExpanded] = useState(true);
-    const [advancedOpen, setAdvancedOpen] = useState(false);
     const pricingModel = rvArea.pricingModel || 'nightly';
+    const sectionLocked = rvArea.locked || false;
 
     return (
         <Card className={cn('border-l-4 border-l-cyan-500', rvArea.isOverflow && 'border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/10')}>
@@ -819,12 +848,17 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         </Button>
                         <Car className={cn('h-4 w-4 shrink-0', rvArea.isOverflow ? 'text-amber-600' : 'text-cyan-600')} />
-                        <Input
-                            value={rvArea.name}
-                            onChange={(e) => onUpdate('name', e.target.value)}
-                            className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs"
-                            placeholder="RV area name..."
-                        />
+                        {variant === 'inventory' ? (
+                            <Input
+                                value={rvArea.name}
+                                onChange={(e) => onUpdate('name', e.target.value)}
+                                disabled={sectionLocked}
+                                className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs"
+                                placeholder="RV area name..."
+                            />
+                        ) : (
+                            <span className="text-base font-semibold">{rvArea.name || 'RV Area'}</span>
+                        )}
                         <Badge variant="outline" className="text-xs">
                             {rvArea.spotCount || 0} spots
                         </Badge>
@@ -836,15 +870,17 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                         )}
                     </div>
                     <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
+                        <SectionLockToggle locked={sectionLocked} onToggle={() => onUpdate('locked', !sectionLocked)} />
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" disabled={sectionLocked} onClick={onRemove}>
                             <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                     </div>
                 </div>
             </CardHeader>
-            {expanded && (
-                <CardContent className="space-y-3 pt-2">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {expanded && variant === 'inventory' && (
+                <CardContent className="pt-2">
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                         <div className="space-y-1">
                             <Label className="text-xs"># of Camping Spots</Label>
                             <Input
@@ -853,22 +889,6 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                                 value={rvArea.spotCount || 0}
                                 onChange={(e) => onUpdate('spotCount', parseInt(e.target.value) || 0)}
                                 className="h-8 text-xs"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">
-                                {pricingModel === 'flat' ? 'Flat Rate ($)' : 'Price / Night ($)'}
-                            </Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={pricingModel === 'flat' ? (rvArea.flatRate || '') : (rvArea.pricePerNight || '')}
-                                onChange={(e) => onUpdate(
-                                    pricingModel === 'flat' ? 'flatRate' : 'pricePerNight',
-                                    parseFloat(e.target.value) || 0
-                                )}
-                                className="h-8 text-xs"
-                                placeholder="$0"
                             />
                         </div>
                         <div className="space-y-1">
@@ -907,104 +927,118 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
                             placeholder="Water hookups, dump station, etc."
                         />
                     </div>
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={rvArea.hasWater || false}
-                                onCheckedChange={(checked) => onUpdate('hasWater', checked)}
-                            />
-                            <Label className="text-xs">Water</Label>
+                  </fieldset>
+                </CardContent>
+            )}
+            {expanded && variant === 'fees' && (
+                <CardContent className="pt-2">
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                    {/* Pricing Model drives the Price label right next to it — they always line up. */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="space-y-1">
+                            <Label className="text-xs">Pricing Model</Label>
+                            <Select value={pricingModel} onValueChange={(val) => onUpdate('pricingModel', val)}>
+                                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    {RV_PRICING_MODELS.map(m => (
+                                        <SelectItem key={m.id} value={m.id} className="text-xs">{m.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={rvArea.hasSewer || false}
-                                onCheckedChange={(checked) => onUpdate('hasSewer', checked)}
+                        <div className="space-y-1">
+                            <Label className="text-xs">
+                                {pricingModel === 'flat' ? 'Flat Rate ($)' : 'Price / Night ($)'}
+                            </Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={pricingModel === 'flat' ? (rvArea.flatRate || '') : (rvArea.pricePerNight || '')}
+                                onChange={(e) => onUpdate(
+                                    pricingModel === 'flat' ? 'flatRate' : 'pricePerNight',
+                                    parseFloat(e.target.value) || 0
+                                )}
+                                className="h-8 text-xs"
+                                placeholder="$0"
                             />
-                            <Label className="text-xs">Sewer</Label>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={rvArea.hasWifi || false}
-                                onCheckedChange={(checked) => onUpdate('hasWifi', checked)}
+                        <div className="space-y-1">
+                            <Label className="text-xs">Payment Timing</Label>
+                            <Select value={rvArea.paymentTiming || 'pre_entry'} onValueChange={(val) => onUpdate('paymentTiming', val)}>
+                                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    {FEE_TIMING_OPTIONS.map(o => (
+                                        <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Due Date</Label>
+                            <Input
+                                type="date"
+                                value={rvArea.dueDate || ''}
+                                onChange={(e) => onUpdate('dueDate', e.target.value)}
+                                className="h-8 text-xs"
                             />
-                            <Label className="text-xs">Wi-Fi</Label>
                         </div>
                     </div>
-
-                    {/* Fee details — same questions as the Fee Structure page */}
-                    <FeeDetailsFields item={rvArea} onUpdate={onUpdate} unitDefault="per_night" unitOptions={['flat', 'per_night', 'custom']} />
-
-                    {/* Advanced settings */}
-                    <div className="border-t pt-3">
-                        <button
-                            type="button"
-                            onClick={() => setAdvancedOpen(o => !o)}
-                            className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1"
-                        >
-                            {advancedOpen ? '▾' : '▸'} Advanced (pricing model, length limit, fees, overflow)
-                        </button>
-                        {advancedOpen && (
-                            <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">Pricing Model</Label>
-                                        <Select value={pricingModel} onValueChange={(val) => onUpdate('pricingModel', val)}>
-                                            <SelectTrigger className="h-8 text-xs">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {RV_PRICING_MODELS.map(m => (
-                                                    <SelectItem key={m.id} value={m.id} className="text-xs">{m.name}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">Max RV Length (ft)</Label>
-                                        <Input
-                                            type="number"
-                                            min={0}
-                                            value={rvArea.maxLength || ''}
-                                            onChange={(e) => onUpdate('maxLength', parseInt(e.target.value) || 0)}
-                                            className="h-8 text-xs"
-                                            placeholder="0 = no limit"
-                                        />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">Early Arrival Fee / Day ($)</Label>
-                                        <Input
-                                            type="number"
-                                            min={0}
-                                            value={rvArea.earlyArrivalFeePerDay || ''}
-                                            onChange={(e) => onUpdate('earlyArrivalFeePerDay', parseFloat(e.target.value) || 0)}
-                                            className="h-8 text-xs"
-                                            placeholder="$0"
-                                        />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">Late Departure Fee / Day ($)</Label>
-                                        <Input
-                                            type="number"
-                                            min={0}
-                                            value={rvArea.lateDepartureFeePerDay || ''}
-                                            onChange={(e) => onUpdate('lateDepartureFeePerDay', parseFloat(e.target.value) || 0)}
-                                            className="h-8 text-xs"
-                                            placeholder="$0"
-                                        />
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2 pt-1">
-                                    <Checkbox
-                                        checked={rvArea.isOverflow || false}
-                                        onCheckedChange={(checked) => onUpdate('isOverflow', checked)}
-                                    />
-                                    <Label className="text-xs">
-                                        Overflow lot — only used when primary RV areas are full
-                                    </Label>
-                                </div>
-                            </div>
-                        )}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="space-y-1">
+                            <Label className="text-xs">Late Fee ($)</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={rvArea.lateFee || ''}
+                                onChange={(e) => onUpdate('lateFee', parseFloat(e.target.value) || 0)}
+                                className="h-8 text-xs"
+                                placeholder="$0"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Max RV Length (ft)</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={rvArea.maxLength || ''}
+                                onChange={(e) => onUpdate('maxLength', parseInt(e.target.value) || 0)}
+                                className="h-8 text-xs"
+                                placeholder="0 = no limit"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Early Arrival Fee / Day ($)</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={rvArea.earlyArrivalFeePerDay || ''}
+                                onChange={(e) => onUpdate('earlyArrivalFeePerDay', parseFloat(e.target.value) || 0)}
+                                className="h-8 text-xs"
+                                placeholder="$0"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label className="text-xs">Late Departure Fee / Day ($)</Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={rvArea.lateDepartureFeePerDay || ''}
+                                onChange={(e) => onUpdate('lateDepartureFeePerDay', parseFloat(e.target.value) || 0)}
+                                className="h-8 text-xs"
+                                placeholder="$0"
+                            />
+                        </div>
                     </div>
+                    <div className="flex items-center gap-2 pt-1">
+                        <Checkbox
+                            checked={rvArea.isOverflow || false}
+                            onCheckedChange={(checked) => onUpdate('isOverflow', checked)}
+                        />
+                        <Label className="text-xs">
+                            Overflow lot — only used when primary RV areas are full
+                        </Label>
+                    </div>
+                  </fieldset>
                 </CardContent>
             )}
         </Card>
@@ -1013,55 +1047,113 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove }) => {
 
 // ── Supply Item Card ──
 
-const SupplyItemCard = ({ item, onUpdate, onRemove }) => {
-    return (
-        <div className="p-3 border rounded-lg bg-background border-l-4 border-l-amber-500 space-y-3">
-            <div className="flex items-center gap-3">
-                <ShoppingCart className="h-4 w-4 text-amber-600 flex-shrink-0" />
-                <Input
-                    value={item.name}
-                    onChange={(e) => onUpdate('name', e.target.value)}
-                    className="h-8 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 flex-1 min-w-0"
-                    placeholder="Supply name..."
-                />
-                {item.preBedding && (
-                    <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
-                )}
-                <div className="flex items-center gap-2 flex-shrink-0">
-                    <div className="space-y-0">
+// Two faces, like the RV card:
+//   variant="inventory" → stock on hand, sold, remaining (the count)
+//   variant="fees"       → price, unit, fee details, pre-bedding (the money)
+const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }) => {
+    const locked = item.locked || false;
+
+    if (variant === 'inventory') {
+        const stock = item.stockQty || 0;
+        const remaining = stock - sold;
+        return (
+            <div className={cn('p-3 border rounded-lg bg-background border-l-4 border-l-amber-500', locked && 'opacity-70')}>
+                <div className="flex flex-wrap items-center gap-3">
+                    <ShoppingCart className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                    <fieldset disabled={locked} className="contents">
                         <Input
-                            type="number"
-                            min={0}
-                            value={item.price || ''}
-                            onChange={(e) => onUpdate('price', parseFloat(e.target.value) || 0)}
-                            className="h-8 text-xs w-20"
-                            placeholder="$ Price"
+                            value={item.name}
+                            onChange={(e) => onUpdate('name', e.target.value)}
+                            className="h-8 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 flex-1 min-w-[8rem]"
+                            placeholder="Supply name..."
                         />
+                        {item.preBedding && (
+                            <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
+                        )}
+                        <div className="flex items-end gap-2 flex-shrink-0">
+                            <div className="space-y-1">
+                                <Label className="text-[10px] text-muted-foreground">Stock on hand</Label>
+                                <Input
+                                    type="number"
+                                    min={0}
+                                    value={item.stockQty || ''}
+                                    onChange={(e) => onUpdate('stockQty', parseInt(e.target.value) || 0)}
+                                    className="h-8 text-xs w-24"
+                                    placeholder="0"
+                                />
+                            </div>
+                            <div className="space-y-1 text-center">
+                                <Label className="text-[10px] text-muted-foreground block">Unit</Label>
+                                <span className="text-xs text-muted-foreground inline-block h-8 leading-8">{item.unit || 'each'}</span>
+                            </div>
+                        </div>
+                    </fieldset>
+                    {/* Sold / Remaining are computed from live bookings — not editable. */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                        <Badge variant="outline" className="text-xs">Sold {sold}</Badge>
+                        <Badge
+                            className={cn(
+                                'text-xs',
+                                stock === 0 ? 'bg-slate-200 text-slate-700'
+                                    : remaining <= 0 ? 'bg-red-500 text-white'
+                                    : remaining <= Math.max(1, Math.ceil(stock * 0.1)) ? 'bg-amber-500 text-white'
+                                    : 'bg-emerald-600 text-white'
+                            )}
+                        >
+                            {stock === 0 ? 'No limit' : `${remaining} left`}
+                        </Badge>
                     </div>
-                    <div className="space-y-0">
-                        <Input
-                            value={item.unit || ''}
-                            onChange={(e) => onUpdate('unit', e.target.value)}
-                            className="h-8 text-xs w-24"
-                            placeholder="per unit"
-                        />
-                    </div>
-                    <div className="space-y-0">
-                        <Input
-                            type="number"
-                            min={0}
-                            value={item.stockQty || ''}
-                            onChange={(e) => onUpdate('stockQty', parseInt(e.target.value) || 0)}
-                            className="h-8 text-xs w-20"
-                            placeholder="Stock"
-                        />
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
+                    <SectionLockToggle locked={locked} onToggle={() => onUpdate('locked', !locked)} />
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0" disabled={locked} onClick={onRemove}>
                         <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                 </div>
             </div>
+        );
+    }
 
+    return (
+        <div className={cn('p-3 border rounded-lg bg-background border-l-4 border-l-amber-500 space-y-3', locked && 'opacity-70')}>
+            <div className="flex items-center gap-3">
+                <ShoppingCart className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                <fieldset disabled={locked} className="contents">
+                    <Input
+                        value={item.name}
+                        onChange={(e) => onUpdate('name', e.target.value)}
+                        className="h-8 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 flex-1 min-w-0"
+                        placeholder="Supply name..."
+                    />
+                    {item.preBedding && (
+                        <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
+                    )}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="space-y-0">
+                            <Input
+                                type="number"
+                                min={0}
+                                value={item.price || ''}
+                                onChange={(e) => onUpdate('price', parseFloat(e.target.value) || 0)}
+                                className="h-8 text-xs w-20"
+                                placeholder="$ Price"
+                            />
+                        </div>
+                        <div className="space-y-0">
+                            <Input
+                                value={item.unit || ''}
+                                onChange={(e) => onUpdate('unit', e.target.value)}
+                                className="h-8 text-xs w-24"
+                                placeholder="per unit"
+                            />
+                        </div>
+                    </div>
+                </fieldset>
+                <SectionLockToggle locked={locked} onToggle={() => onUpdate('locked', !locked)} />
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0" disabled={locked} onClick={onRemove}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+            </div>
+
+          <fieldset disabled={locked} className="space-y-3 block">
             {/* Fee details — same questions as the Fee Structure page */}
             <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault="per_bag" unitOptions={['flat', 'per_bag', 'per_night', 'custom']} />
 
@@ -1083,6 +1175,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove }) => {
                     Pre-bedding — delivered to stalls before the show (paid in advance, not sold at the show)
                 </Label>
             </div>
+          </fieldset>
         </div>
     );
 };
@@ -1190,7 +1283,7 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBarns }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBarns, onUpdateCover }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const showNights = getShowNights(pd);
@@ -1269,8 +1362,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     });
     const [lastSavedAt, setLastSavedAt] = useState(null);
     const [isDirty, setIsDirty] = useState(false);
+    // Publishing pushes the show live on the public Events page, so it needs a
+    // deliberate second step. Holds true while the "Are you sure?" dialog is open.
+    const [confirmPublish, setConfirmPublish] = useState(false);
     // Locked and Published are both read-only (matches the app's isModuleEditable).
     const isLocked = publishStatus === 'locked' || publishStatus === 'published';
+
+    // Guard the lifecycle toggle: going *to* Published asks first; everything else applies now.
+    const requestStatusChange = (nextStatus) => {
+        if (nextStatus === publishStatus) return;
+        if (nextStatus === 'published') { setConfirmPublish(true); return; }
+        setPublishStatus(nextStatus);
+    };
 
     // Sync from parent when DB changes externally (kiosk update, tab-focus refetch, immediate-save).
     // Merge to preserve any in-flight local edits to non-status fields.
@@ -1534,6 +1637,32 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         return total;
     }, [bookings, barns]);
 
+    // How many of each supply have been sold across live bookings — drives the
+    // supply inventory (Stock on-hand → Sold → Remaining). Booking supply line
+    // items carry { type:'supply', refId, qty } where refId is the supply id or name.
+    const suppliesSold = useMemo(() => {
+        const sold = {};
+        for (const b of bookings) {
+            if (b.status === 'cancelled') continue;
+            for (const it of (b.items || [])) {
+                if (it.type !== 'supply') continue;
+                const key = it.refId;
+                if (key == null) continue;
+                sold[key] = (sold[key] || 0) + (it.qty || 0);
+            }
+        }
+        return sold;
+    }, [bookings]);
+
+    // Sold count for one supply — match by id first, fall back to name (older bookings).
+    const soldForSupply = (s) => (suppliesSold[s.id] || 0) + (s.id !== s.name ? (suppliesSold[s.name] || 0) : 0);
+
+    // RV areas can be priced per-night or as one flat rate for the whole stay.
+    // These keep every revenue table honest no matter which model is picked.
+    const rvIsFlat = (r) => r.pricingModel === 'flat';
+    const rvUnitPrice = (r) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0));
+    const rvPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0) * nights);
+
     // ───── Analytics ─────
     // Computed from existing data; no DB calls. Drives the Analytics tab.
     const analytics = useMemo(() => {
@@ -1742,13 +1871,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     );
                                 })}
                                 {rvAreas.map(rv => {
-                                    const perSpot = (rv.pricePerNight || 0) * showNights;
+                                    const isFlat = rvIsFlat(rv);
+                                    const perSpot = rvPerSpotTotal(rv, showNights);
                                     const maxRev = perSpot * (rv.spotCount || 0);
                                     return (
                                         <tr key={rv.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                            <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV)</span></td>
-                                            <td className="px-2 py-1.5 text-right">${(rv.pricePerNight || 0).toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{showNights}</td>
+                                            <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV{isFlat ? ' · flat' : ''})</span></td>
+                                            <td className="px-2 py-1.5 text-right">${rvUnitPrice(rv).toFixed(0)}</td>
+                                            <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
                                             <td className="px-2 py-1.5 text-right font-semibold">${perSpot.toFixed(0)}</td>
                                             <td className="px-2 py-1.5 text-center">{rv.spotCount || 0}</td>
                                             <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
@@ -1763,7 +1893,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
                                         ${(
                                             barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0)
-                                            + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * showNights), 0)
+                                            + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights)), 0)
                                         ).toLocaleString()}
                                     </td>
                                 </tr>
@@ -1794,7 +1924,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         key={s.id}
                                         type="button"
                                         title={s.hint}
-                                        onClick={() => setPublishStatus(s.id)}
+                                        onClick={() => requestStatusChange(s.id)}
                                         className={cn(
                                             'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors',
                                             isActive ? s.active : 'text-muted-foreground hover:text-foreground'
@@ -1824,6 +1954,31 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </span>
                     </div>
                 </div>
+
+                {/* Event cover image — outside the editor so it stays editable even when Published. */}
+                <Card className="mt-4 border-l-4 border-l-pink-500">
+                    <CardContent className="py-3 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                            {pd.coverImageUrl ? (
+                                <img src={pd.coverImageUrl} alt="Event cover" className="h-12 w-20 rounded object-cover border" />
+                            ) : (
+                                <div className="h-12 w-20 rounded border bg-muted flex items-center justify-center">
+                                    <ImagePlus className="h-5 w-5 text-muted-foreground" />
+                                </div>
+                            )}
+                            <div>
+                                <p className="text-sm font-semibold">Event cover image</p>
+                                <p className="text-[11px] text-muted-foreground">Shown on the public Events page card. Optional — a colored banner is used if none.</p>
+                            </div>
+                        </div>
+                        <LogoUploader
+                            fieldId="cover"
+                            showId={show.id}
+                            currentLogoUrl={pd.coverImageUrl || ''}
+                            onUploadComplete={(url) => onUpdateCover && onUpdateCover(url)}
+                        />
+                    </CardContent>
+                </Card>
 
                 {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
                 <TabsContent value="inventory" className="mt-4">
@@ -1948,6 +2103,50 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     ))}
                                 </div>
                             )}
+
+                            {/* Supplies — track stock on hand; it draws down as exhibitors buy. Prices live in the Fees tab. */}
+                            <div className="border-t pt-4 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <ShoppingCart className="h-5 w-5 text-amber-600" />
+                                    <h3 className="text-base font-semibold">Supplies</h3>
+                                    <Badge variant="outline" className="text-xs">{supplies.length} item{supplies.length !== 1 ? 's' : ''}</Badge>
+                                </div>
+                                <Button onClick={() => addSupply()} variant="outline" size="sm">
+                                    <Plus className="h-4 w-4 mr-1.5" /> Add Supply
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground -mt-2">Hay, shavings, mats — set how many you have. Stock counts down as people buy; leave Stock at 0 for unlimited.</p>
+
+                            {/* Quick-add presets (inventory-first — price it later in the Fees tab) */}
+                            <div className="flex flex-wrap gap-1.5 -mt-1">
+                                {SUPPLY_PRESETS.filter(p => !supplies.some(s => s.name === p.name)).map(preset => (
+                                    <Button key={preset.name} variant="outline" size="sm" className="h-7 text-xs" onClick={() => addSupply(preset)}>
+                                        <Plus className="h-3 w-3 mr-1" /> {preset.name}
+                                    </Button>
+                                ))}
+                            </div>
+
+                            {supplies.length === 0 ? (
+                                <Card>
+                                    <CardContent className="py-10 text-center">
+                                        <ShoppingCart className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                        <p className="text-sm text-muted-foreground">No supplies yet — use the quick-add buttons or "Add Supply" to start tracking stock.</p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="space-y-2">
+                                    {supplies.map(item => (
+                                        <SupplyItemCard
+                                            key={item.id}
+                                            item={item}
+                                            variant="inventory"
+                                            sold={soldForSupply(item)}
+                                            onUpdate={(field, value) => updateSupply(item.id, field, value)}
+                                            onRemove={() => removeSupply(item.id)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
                           </fieldset>
                 </TabsContent>
 
@@ -1979,11 +2178,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 ) : (
                                     <div className="space-y-2">
                                         {barns.map(barn => (
-                                            <div key={barn.id} className="rounded-lg border bg-muted/20 p-3 space-y-2">
+                                            <div key={barn.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', barn.locked && 'opacity-70')}>
                                                 <div className="flex items-center justify-between">
-                                                    <span className="text-sm font-medium">{barn.name}</span>
+                                                    <span className="text-sm font-medium flex items-center gap-1.5">
+                                                        {barn.name}
+                                                        {barn.locked && <Lock className="h-3 w-3 text-amber-600" />}
+                                                    </span>
                                                     <span className="text-xs text-muted-foreground">{(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls</span>
                                                 </div>
+                                                <fieldset disabled={barn.locked} className="block">
                                                 <FeeDetailsFields
                                                     item={barn}
                                                     onUpdate={(field, value) => updateBarn(barn.id, field, value)}
@@ -2004,6 +2207,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         </div>
                                                     )}
                                                 />
+                                                </fieldset>
                                             </div>
                                         ))}
                                         {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'custom']))}
@@ -2032,6 +2236,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             <RvAreaCard
                                                 key={rv.id}
                                                 rvArea={rv}
+                                                variant="fees"
                                                 onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
                                                 onRemove={() => removeRvArea(rv.id)}
                                             />
@@ -2243,13 +2448,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                     })}
                                                     {rvAreas.map(rv => {
                                                         const hookupInfo = RV_HOOKUP_TYPES.find(t => t.id === rv.hookupType) || RV_HOOKUP_TYPES[0];
-                                                        const maxRev = (rv.spotCount || 0) * (rv.pricePerNight || 0) * (showNights || 3);
+                                                        const isFlat = rvIsFlat(rv);
+                                                        const maxRev = (rv.spotCount || 0) * rvPerSpotTotal(rv, showNights || 3);
                                                         return (
                                                             <tr key={rv.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{rv.name}</td>
+                                                                <td className="px-3 py-2 font-medium">{rv.name}{isFlat && <span className="text-xs text-cyan-600"> · flat</span>}</td>
                                                                 <td className="px-3 py-2 text-center text-cyan-600">{hookupInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{rv.spotCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">${(rv.pricePerNight || 0).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-right">${rvUnitPrice(rv).toFixed(2)}{isFlat ? ' flat' : ''}</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant="outline" className="text-xs">-</Badge>
                                                                 </td>
@@ -2268,7 +2474,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <td className="px-3 py-2 text-right">
                                                             ${(
                                                                 barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0)
-                                                                + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (r.pricePerNight || 0) * (showNights || 3)), 0)
+                                                                + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights || 3)), 0)
                                                             ).toLocaleString()}
                                                         </td>
                                                     </tr>
@@ -2434,6 +2640,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     )}
                 </TabsContent>
             </Tabs>
+
+            {/* Second step before going live on the public Events page. */}
+            <ConfirmationDialog
+                isOpen={confirmPublish}
+                onClose={() => setConfirmPublish(false)}
+                onConfirm={() => { setConfirmPublish(false); setPublishStatus('published'); }}
+                title="Publish to the event page?"
+                description={`This makes Housing & Grounds for "${show.project_name || 'this show'}" live on the public Events page — anyone can view it and book stalls. You can switch back to Draft to take it down.`}
+                confirmText="Yes, publish"
+                cancelText="Cancel"
+            />
         </div>
     );
 };
@@ -2546,6 +2763,24 @@ const HousingGroundsManagerPage = () => {
         } catch (error) {
             toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
             throw error;
+        }
+    }, [selectedShow, toast]);
+
+    // Persist the cover image URL immediately so it shows on the public event card.
+    const updateCoverImageImmediate = useCallback(async (url) => {
+        if (!selectedShow) return;
+        try {
+            const updatedData = { ...selectedShow.project_data, coverImageUrl: url || '' };
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            toast({ title: url ? 'Cover image saved' : 'Cover image removed', description: 'It will show on the public event card.' });
+        } catch (error) {
+            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
         }
     }, [selectedShow, toast]);
 
@@ -2666,6 +2901,7 @@ const HousingGroundsManagerPage = () => {
                                 isSaving={isSaving}
                                 onUpdateBookingStatus={updateBookingStatusImmediate}
                                 onUpdateBarns={updateBarnsImmediate}
+                                onUpdateCover={updateCoverImageImmediate}
                             />
                         </>
                     )}

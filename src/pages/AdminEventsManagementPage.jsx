@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import Navigation from '@/components/Navigation';
 import AdminBackButton from '@/components/admin/AdminBackButton';
@@ -27,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import {
   Loader2,
   PlusCircle,
@@ -82,6 +84,9 @@ const EMPTY_EVENT = {
 const AdminEventsManagementPage = () => {
   const { toast } = useToast();
   const [events, setEvents] = useState([]);
+  const [publishedProjects, setPublishedProjects] = useState([]);
+  const [pendingUnpublish, setPendingUnpublish] = useState(null); // project pending admin take-down
+  const [unpublishingId, setUnpublishingId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
@@ -110,6 +115,46 @@ const AdminEventsManagementPage = () => {
       } else {
         setEvents(data || []);
       }
+
+      // Auto-published shows & pattern books that also appear on /events (read-only here).
+      const { data: projData } = await supabase
+        .from('projects')
+        .select('id, project_name, project_type, project_data, status')
+        .in('project_type', ['show', 'pattern_book']);
+      const pub = (projData || [])
+        .filter((p) => {
+          const pd = p.project_data || {};
+          const housing = pd.moduleStatuses?.housing === 'published';
+          const pattern = ['Final', 'Publication', 'published'].includes(p.status) || pd.moduleStatuses?.patternBook === 'published';
+          return housing || pattern;
+        })
+        .map((p) => {
+          const pd = p.project_data || {};
+          const general = pd.showDetails?.general || {};
+          const venue = pd.showDetails?.venue || {};
+          return {
+            id: p.id,
+            name: p.project_name || general.showName || 'Untitled',
+            start_date: general.startDate || pd.startDate || null,
+            end_date: general.endDate || pd.endDate || null,
+            location: venue.facilityName || venue.address || pd.venueName || pd.venueAddress || '',
+            kind: pd.moduleStatuses?.housing === 'published' ? 'Housing' : 'Pattern Book',
+          };
+        });
+
+      // Order by relevance: ongoing first, then upcoming (soonest), then completed (most recent).
+      const STATUS_ORDER = { ongoing: 0, upcoming: 1, completed: 2 };
+      pub.sort((a, b) => {
+        const sa = getComputedStatus(a);
+        const sb = getComputedStatus(b);
+        const ra = STATUS_ORDER[sa] ?? 3;
+        const rb = STATUS_ORDER[sb] ?? 3;
+        if (ra !== rb) return ra - rb;
+        if (sa === 'completed') return new Date(b.end_date || 0) - new Date(a.end_date || 0);
+        return new Date(a.start_date || 0) - new Date(b.start_date || 0);
+      });
+      setPublishedProjects(pub);
+
       setIsLoading(false);
     };
 
@@ -294,6 +339,41 @@ const AdminEventsManagementPage = () => {
     toast({ title: 'Event deleted' });
   };
 
+  // Admin take-down: flips only the publish status so the project leaves /events.
+  // Never edits the organizer's actual content (barns, patterns, fees, etc.).
+  const handleUnpublish = async (p) => {
+    setUnpublishingId(p.id);
+    try {
+      const { data: row, error: fetchErr } = await supabase
+        .from('projects')
+        .select('project_data, status')
+        .eq('id', p.id)
+        .single();
+      if (fetchErr) throw fetchErr;
+
+      const pd = row?.project_data || {};
+      const newPd = { ...pd, moduleStatuses: { ...(pd.moduleStatuses || {}) } };
+      if (newPd.moduleStatuses.housing === 'published') newPd.moduleStatuses.housing = 'draft';
+      if (newPd.moduleStatuses.patternBook === 'published') newPd.moduleStatuses.patternBook = 'draft';
+      if (pd.stallingService?.publishStatus === 'published') {
+        newPd.stallingService = { ...pd.stallingService, publishStatus: 'draft' };
+      }
+      const updates = { project_data: newPd };
+      if (['Final', 'Publication'].includes(row?.status)) updates.status = 'Draft';
+
+      const { error } = await supabase.from('projects').update(updates).eq('id', p.id);
+      if (error) throw error;
+
+      setPublishedProjects((prev) => prev.filter((x) => x.id !== p.id));
+      toast({ title: 'Unpublished', description: `"${p.name}" was removed from the public Events page.` });
+    } catch (error) {
+      toast({ title: 'Could not unpublish', description: error.message, variant: 'destructive' });
+    } finally {
+      setUnpublishingId(null);
+      setPendingUnpublish(null);
+    }
+  };
+
   return (
     <>
       <Helmet>
@@ -416,6 +496,88 @@ const AdminEventsManagementPage = () => {
               )}
             </CardContent>
           </Card>
+
+          {/* Read-only: shows & pattern books organizers have published. They appear on
+              /events automatically; admins can monitor them here but edit them in their own tools. */}
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Auto-Published Shows &amp; Pattern Books ({publishedProjects.length})</CardTitle>
+              <CardDescription>Published by organizers — these also appear on `/events`. Read-only here.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : publishedProjects.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  No shows or pattern books are published yet.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Dates</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {publishedProjects.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="font-medium">{p.name}</TableCell>
+                        <TableCell><Badge variant="outline">{p.kind}</Badge></TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Calendar className="h-4 w-4" />
+                            {p.start_date ? `${p.start_date.slice(0, 10)} — ${p.end_date?.slice(0, 10)}` : 'TBD'}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <MapPin className="h-4 w-4" />
+                            {p.location || 'TBD'}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={STATUS_BADGE_STYLES[getComputedStatus(p)] || 'outline'}>
+                            {getComputedStatus(p)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button asChild variant="ghost" size="sm">
+                            <Link to={`/event-detail/${p.id}`}>View</Link>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
+                            disabled={unpublishingId === p.id}
+                            onClick={() => setPendingUnpublish(p)}
+                          >
+                            {unpublishingId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Unpublish'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          <ConfirmationDialog
+            isOpen={!!pendingUnpublish}
+            onClose={() => setPendingUnpublish(null)}
+            onConfirm={() => pendingUnpublish && handleUnpublish(pendingUnpublish)}
+            title="Unpublish from the Events page?"
+            description={pendingUnpublish ? `"${pendingUnpublish.name}" will be removed from the public Events page. This only changes its publish status — the organizer's content is untouched, and they can publish it again.` : ''}
+            confirmText="Yes, unpublish"
+            cancelText="Cancel"
+          />
 
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">

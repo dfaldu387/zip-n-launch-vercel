@@ -471,25 +471,25 @@ const PatternBookBuilderPage = () => {
                     cancelText="Cancel"
                 />
 
-                {/* Save Confirmation Dialog */}
+                {/* Publish-to-event confirmation — second step before going live publicly. */}
                 <Dialog open={isSaveConfirmationOpen} onOpenChange={setIsSaveConfirmationOpen}>
                     <DialogContent>
                         <DialogHeader>
-                            <DialogTitle>Save Project First</DialogTitle>
+                            <DialogTitle>Publish to the event page?</DialogTitle>
                             <DialogDescription>
-                                Please save your project before publishing. This ensures all your changes are saved.
+                                This saves and publishes the pattern book for {formData.showName ? `"${formData.showName}"` : 'this show'} to the public Events page, where anyone can view it. Continue?
                             </DialogDescription>
                         </DialogHeader>
                         <DialogFooter>
-                            <Button 
-                                variant="outline" 
+                            <Button
+                                variant="outline"
                                 onClick={() => setIsSaveConfirmationOpen(false)}
                                 disabled={isSaving}
                             >
                                 Cancel
                             </Button>
-                            <Button 
-                                onClick={handleSaveAndPublish} 
+                            <Button
+                                onClick={handleSaveAndPublish}
                                 disabled={isSaving}
                             >
                                 {isSaving ? (
@@ -500,7 +500,7 @@ const PatternBookBuilderPage = () => {
                                 ) : (
                                     <>
                                         <Save className="mr-2 h-4 w-4" />
-                                        Save & Continue
+                                        Yes, publish
                                     </>
                                 )}
                             </Button>

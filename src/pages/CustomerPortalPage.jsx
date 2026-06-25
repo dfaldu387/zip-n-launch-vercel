@@ -49,6 +49,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import ProjectDetailModal from '@/components/ProjectDetailModal';
+import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { downloadPatternBookFolder } from '@/lib/patternBookDownloader';
 import { applyTextOverlay, getOverlayDataFromContext, batchDetectFieldPositions, applyTextOverlayWithPositions } from '@/lib/scoresheetTextOverlay';
 import { findClassItemId } from '@/lib/resultsUtils';
@@ -1520,12 +1521,10 @@ const PatternFolderItem = ({ project, onRefresh, currentUserName, isPastPatternP
                         </p>
                         <div className="space-y-2">
                             {(() => {
-                                // Status flow: Draft ↔ Locked (bidirectional), → Publication (terminal).
-                                // Users can roll a Locked project back to Draft to edit, then re-lock.
-                                const dbStatus = project.status || 'Draft';
-                                const isPublished = dbStatus === 'Final' || dbStatus === 'Publication';
-                                const draftDisabled = isPublished;
-                                const lockedDisabled = isPublished;
+                                // Status flow is fully bidirectional: Draft ↔ Locked ↔ Publication.
+                                // An organizer can roll a Published book back to Draft to edit, then re-publish.
+                                const draftDisabled = false;
+                                const lockedDisabled = false;
                                 return (
                                     <>
                                         <button
@@ -1829,7 +1828,18 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
             });
         }
     };
-    
+
+    // Taking a book *off* Published removes it from the public Events page, so confirm first.
+    const [pendingStatus, setPendingStatus] = useState(null);
+    const requestStatusChange = (newStatus) => {
+        if (newStatus === displayStatus) return;
+        if (displayStatus === 'Publication' && newStatus !== 'Publication') {
+            setPendingStatus(newStatus);
+            return;
+        }
+        handleStatusChange(newStatus);
+    };
+
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
     const handleArchive = async () => {
@@ -2038,23 +2048,18 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
                         </span>
                         <div className="flex items-center gap-2">
                             <span className="text-sm text-muted-foreground">Status:</span>
-                            <Select value={displayStatus} onValueChange={handleStatusChange}>
+                            <Select value={displayStatus} onValueChange={requestStatusChange}>
                                 <SelectTrigger className="w-36 h-9 text-sm">
                                     <SelectValue>
                                         {displayStatus === 'Lock & Approve Mode' ? 'Apprvd & Locked' : displayStatus === 'Publication' ? 'Published' : displayStatus}
                                     </SelectValue>
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem
-                                        value="Draft"
-                                        disabled={displayStatus === 'Lock & Approve Mode' || displayStatus === 'Publication'}
-                                    >
+                                    {/* Fully bidirectional — roll back to Draft from any status to edit. */}
+                                    <SelectItem value="Draft">
                                         Draft
                                     </SelectItem>
-                                    <SelectItem
-                                        value="Lock & Approve Mode"
-                                        disabled={displayStatus === 'Publication'}
-                                    >
+                                    <SelectItem value="Lock & Approve Mode">
                                         Apprvd & Locked
                                     </SelectItem>
                                     <SelectItem value="Publication">
@@ -2062,6 +2067,15 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
                                     </SelectItem>
                                 </SelectContent>
                             </Select>
+                            <ConfirmationDialog
+                                isOpen={!!pendingStatus}
+                                onClose={() => setPendingStatus(null)}
+                                onConfirm={() => { const s = pendingStatus; setPendingStatus(null); handleStatusChange(s); }}
+                                title="Unpublish this pattern book?"
+                                description="It will be removed from the public Events page and visitors won't be able to view it. You can publish it again anytime."
+                                confirmText="Yes, unpublish"
+                                cancelText="Cancel"
+                            />
                         </div>
                     </div>
 
@@ -2178,6 +2192,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
     const [projectStatus, setProjectStatus] = useState(project.status || 'Draft'); // Local status state
     const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+    const [pendingStatus, setPendingStatus] = useState(null); // Unpublish confirmation
     const [viewDownloadDialogOpen, setViewDownloadDialogOpen] = useState(false);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
     // Local mirror of project.project_data so Layout C's builder can mutate it
@@ -2303,6 +2318,16 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     };
 
     const displayStatus = getDisplayStatus();
+
+    // Taking a book *off* Published removes it from the public Events page, so confirm first.
+    const requestStatusChange = (newStatus) => {
+        if (newStatus === displayStatus) return;
+        if (displayStatus === 'Publication' && newStatus !== 'Publication') {
+            setPendingStatus(newStatus);
+            return;
+        }
+        handleStatusChange(newStatus);
+    };
 
     // Handle preview button click
     const handleViewPattern = async (pattern) => {
@@ -6148,7 +6173,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     <div className="flex items-center gap-4 mr-10">
                         <Select
                             value={displayStatus}
-                            onValueChange={handleStatusChange}
+                            onValueChange={requestStatusChange}
                             disabled={isUpdatingStatus}
                         >
                             <SelectTrigger className="w-36 h-9 text-sm">
@@ -6157,25 +6182,28 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                 </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
-                                {(() => {
-                                    const dbSt = project.status || 'Draft';
-                                    const isPublished = dbSt === 'Final' || dbSt === 'Publication';
-                                    return (
-                                        <>
-                                            <SelectItem value="Draft" disabled={isPublished}>
-                                                Draft
-                                            </SelectItem>
-                                            <SelectItem value="Lock & Approve Mode" disabled={isPublished}>
-                                                Apprvd & Locked
-                                            </SelectItem>
-                                            <SelectItem value="Publication">
-                                                Published
-                                            </SelectItem>
-                                        </>
-                                    );
-                                })()}
+                                {/* All three are switchable both ways — an organizer can roll a
+                                    Published book back to Draft to edit, then re-publish. */}
+                                <SelectItem value="Draft">
+                                    Draft
+                                </SelectItem>
+                                <SelectItem value="Lock & Approve Mode">
+                                    Apprvd & Locked
+                                </SelectItem>
+                                <SelectItem value="Publication">
+                                    Published
+                                </SelectItem>
                             </SelectContent>
                         </Select>
+                        <ConfirmationDialog
+                            isOpen={!!pendingStatus}
+                            onClose={() => setPendingStatus(null)}
+                            onConfirm={() => { const s = pendingStatus; setPendingStatus(null); handleStatusChange(s); }}
+                            title="Unpublish this pattern book?"
+                            description="It will be removed from the public Events page and visitors won't be able to view it. You can publish it again anytime."
+                            confirmText="Yes, unpublish"
+                            cancelText="Cancel"
+                        />
                     </div>
                 </div>
                 
@@ -6192,7 +6220,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     <span>Location: {projectData.venueName || projectData.venueAddress || 'Not set'}</span>
                     <span>Last saved: {format(new Date(project.updated_at), "MMM d, yyyy")}</span>
                 </div>
-                
+
                 {/* Main Tabs */}
                 <div className="flex gap-2">
                     <button

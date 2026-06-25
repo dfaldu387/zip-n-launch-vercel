@@ -50,16 +50,19 @@ import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, closestCenter, pointerWithin, useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
+import { EventCard, getComputedStatus } from '@/components/events/EventCard';
 
-// Compute event status dynamically from dates
-const getComputedStatus = (event) => {
-  if (!event.start_date || !event.end_date) return 'upcoming';
-  const now = new Date();
-  const start = startOfDay(new Date(event.start_date));
-  const end = endOfDay(new Date(event.end_date));
-  if (isBefore(now, start)) return 'upcoming';
-  if (isAfter(now, end)) return 'completed';
-  return 'ongoing';
+// Pick a cover photo for an event card from whatever the organizer already uploaded —
+// a dedicated cover, else a Show Logo image from the Pattern Book Builder (Step 6).
+const IMG_RE = /\.(jpe?g|png|webp|gif|jfif|avif)(\?|$)/i;
+const deriveCoverUrl = (pd = {}) => {
+  if (pd.coverImageUrl) return pd.coverImageUrl;
+  const fromLogos = (pd.showLogos || []).find(l => l?.url && IMG_RE.test(l.url));
+  if (fromLogos) return fromLogos.url;
+  const fromMarketing = (pd.generalMarketing || []).find(f => (f?.fileUrl && IMG_RE.test(f.fileUrl)) || (f?.fileName && IMG_RE.test(f.fileName)));
+  if (fromMarketing) return fromMarketing.fileUrl;
+  if (pd.showLogoUrl && IMG_RE.test(pd.showLogoUrl)) return pd.showLogoUrl;
+  return null;
 };
 
 const LiveEventCard = ({ event, onSelect }) => {
@@ -82,101 +85,6 @@ const LiveEventCard = ({ event, onSelect }) => {
       </div>
     </motion.div>
   );
-};
-
-const STATUS_BADGE_CONFIG = {
-  upcoming: { label: 'Upcoming', variant: 'secondary', className: 'backdrop-blur-sm bg-black/30 text-white' },
-  ongoing: { label: 'Ongoing', variant: 'default', className: 'backdrop-blur-sm bg-green-600/80 text-white' },
-  completed: { label: 'Completed', variant: 'outline', className: 'backdrop-blur-sm bg-black/30 text-white' },
-};
-
-const EventCard = ({ event, onPatternBookClick }) => {
-    const computedStatus = getComputedStatus(event);
-    const badgeConfig = STATUS_BADGE_CONFIG[computedStatus] || STATUS_BADGE_CONFIG.upcoming;
-
-    const getLocationDisplay = () => {
-        if (event.location) return event.location;
-        return 'Location TBD';
-    };
-
-    return (
-        <motion.div
-            layout
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.3 }}
-            className="h-full"
-        >
-            <Card className="bg-secondary border-border hover:border-primary/50 transition-all duration-300 group h-full flex flex-col">
-                <CardHeader className="p-0">
-                    <Link to={`/event-detail/${event.id}`}>
-                        <div className="aspect-video relative overflow-hidden rounded-t-lg">
-                            <img
-                              alt={event.name}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                              src={event.thumbnail_url || "https://images.unsplash.com/photo-1691257790470-b5e4e80ca59f"}
-                            />
-                            <div className="absolute top-2 right-2">
-                                <Badge variant={badgeConfig.variant} className={badgeConfig.className}>
-                                    {badgeConfig.label}
-                                </Badge>
-                            </div>
-                        </div>
-                    </Link>
-                </CardHeader>
-                <CardContent className="pt-4 flex-grow">
-                    <Link to={`/event-detail/${event.id}`}>
-                        <CardTitle className="text-lg font-bold group-hover:text-primary transition-colors">{event.name}</CardTitle>
-                    </Link>
-                    <div className="text-sm text-muted-foreground mt-2 space-y-2">
-                        <div className="flex items-center"><Calendar className="h-4 w-4 mr-2" />{format(new Date(event.start_date), 'MMM d, yyyy')} - {format(new Date(event.end_date), 'MMM d, yyyy')}</div>
-                        <div className="flex items-center"><MapPin className="h-4 w-4 mr-2" />{getLocationDisplay()}</div>
-                        {computedStatus === 'upcoming' && (
-                            <div className="flex items-center">
-                                <BookOpen className="h-4 w-4 mr-2" />
-                                {['published', 'Publication'].includes(event.project?.status) ? (
-                                    <span
-                                        className="text-green-600 dark:text-green-400 cursor-pointer hover:underline"
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            if (onPatternBookClick && event.pattern_book_id) {
-                                                onPatternBookClick(event.pattern_book_id);
-                                            }
-                                        }}
-                                    >
-                                        Published
-                                    </span>
-                                ) : ['approved', 'locked'].includes(event.project?.status) ? (
-                                    <span className="text-blue-600 dark:text-blue-400">Approved</span>
-                                ) : (
-                                    <span className="text-amber-600 dark:text-amber-400">Pending</span>
-                                )}
-                            </div>
-                        )}
-                        {(event.show_website || event.showWebsite) && (
-                            <div className="flex items-center">
-                                <Globe className="h-4 w-4 mr-2" />
-                                <a href={event.show_website || event.showWebsite} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline truncate">{(event.show_website || event.showWebsite).replace(/^https?:\/\//, '')}</a>
-                            </div>
-                        )}
-                        {(event.show_facebook || event.showFacebook) && (
-                            <div className="flex items-center">
-                                <Facebook className="h-4 w-4 mr-2" />
-                                <a href={event.show_facebook || event.showFacebook} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Facebook Event</a>
-                            </div>
-                        )}
-                    </div>
-                </CardContent>
-                <CardFooter className="pt-4 flex items-center justify-between">
-                    <Link to={`/event-detail/${event.id}`} className="flex-1">
-                        <Button variant="ghost" size="sm">View Details</Button>
-                    </Link>
-                </CardFooter>
-            </Card>
-        </motion.div>
-    );
 };
 
 const EventsPage = () => {
@@ -211,8 +119,59 @@ const EventsPage = () => {
           showFacebook: event.show_facebook || event.showFacebook,
         }));
 
-        setAllEvents(formattedEvents);
-        const live = formattedEvents.filter(e => e.status === 'live');
+        // Also surface organizer projects that have been published — either their
+        // Housing & Grounds (a 'show') or their Pattern Book — so the public can find
+        // and use them straight from the Events page (Option B — no separate events row).
+        const { data: showsData } = await supabase
+            .from('projects')
+            .select('id, project_name, project_type, project_data, status, created_at')
+            .in('project_type', ['show', 'pattern_book']);
+
+        // Housing lives in moduleStatuses.housing; a standalone pattern book is published
+        // through the project's top-level status (Final/Publication), matching the PBB flow.
+        const isHousingPublished = (p) => p.project_data?.moduleStatuses?.housing === 'published';
+        const isPatternPublished = (p) =>
+            ['Final', 'Publication', 'published'].includes(p.status) ||
+            p.project_data?.moduleStatuses?.patternBook === 'published';
+
+        const showEvents = (showsData || [])
+            .filter(p => {
+                if (!isHousingPublished(p) && !isPatternPublished(p)) return false; // must be live somehow
+                const pd = p.project_data || {};
+                const general = pd.showDetails?.general || {};
+                const sd = general.startDate || pd.startDate;
+                const ed = general.endDate || pd.endDate;
+                return !!sd && !!ed; // need dates so the card renders cleanly
+            })
+            .map(p => {
+                const pd = p.project_data || {};
+                const general = pd.showDetails?.general || {};
+                const venue = pd.showDetails?.venue || {};
+                return {
+                    id: p.id,
+                    name: p.project_name || general.showName || 'Untitled Show',
+                    start_date: general.startDate || pd.startDate,
+                    end_date: general.endDate || pd.endDate,
+                    location: venue.facilityName || venue.address || pd.venueName || pd.venueAddress || '',
+                    thumbnail_url: deriveCoverUrl(pd),  // dedicated cover, else a Show Logo image they already uploaded
+                    coverColor: pd.coverColor || null,  // pattern books may have a saved cover color
+                    status: p.status,
+                    project: { status: p.status },
+                    pattern_book_id: p.id,
+                    _fromShow: true,                              // distinguishes a published project from a seeded event
+                    _housingPublished: isHousingPublished(p),     // drives the "Book Stalls" button on the detail page
+                    _patternPublished: isPatternPublished(p),     // drives the "View Pattern Book" button
+                };
+            });
+
+        // Dedupe: don't list a show twice if it already has a matching events-table row.
+        const eventIds = new Set(formattedEvents.map(e => e.id));
+        const eventPatternBookIds = new Set(formattedEvents.map(e => e.pattern_book_id).filter(Boolean));
+        const dedupedShowEvents = showEvents.filter(s => !eventIds.has(s.id) && !eventPatternBookIds.has(s.id));
+
+        const mergedEvents = [...formattedEvents, ...dedupedShowEvents];
+        setAllEvents(mergedEvents);
+        const live = mergedEvents.filter(e => e.status === 'live');
         if (live.length > 0) {
             setSelectedShow(live[0]);
         }
@@ -375,15 +334,15 @@ const EventsPage = () => {
              {filteredUpcoming.length === 0 && <p className="text-muted-foreground col-span-full text-center">No upcoming events match your search.</p>}
         </section>
 
-        <section>
-            <h2 className="text-3xl font-bold mb-6">Completed Events</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {filteredCompleted.map(event => (
-                    <EventCard key={event.id} event={event} onPatternBookClick={handlePatternBookClick} />
-                ))}
-            </div>
-            {filteredCompleted.length === 0 && <p className="text-muted-foreground col-span-full text-center">No completed events yet.</p>}
-        </section>
+        {/* Completed events live on their own Past Events page — keep /events focused on
+            what visitors can act on (ongoing & upcoming). */}
+        {filteredCompleted.length > 0 && (
+          <section className="text-center">
+            <Link to="/events/past" className="text-sm text-primary hover:underline">
+              View past events ({filteredCompleted.length}) →
+            </Link>
+          </section>
+        )}
 
       </main>
 

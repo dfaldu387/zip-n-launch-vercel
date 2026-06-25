@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { EventCard } from '@/components/events/EventCard';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Video, BookOpen, Calendar, ShieldCheck, Zap, ArrowRight, UploadCloud, Star, CheckCircle, FileText, ImageIcon } from 'lucide-react';
@@ -45,6 +46,18 @@ const getAssociationLabel = (associations) => {
   return '';
 };
 
+// Pick a cover photo from whatever the organizer already uploaded (matches EventsPage).
+const IMG_RE = /\.(jpe?g|png|webp|gif|jfif|avif)(\?|$)/i;
+const deriveCoverUrl = (pd = {}) => {
+  if (pd.coverImageUrl) return pd.coverImageUrl;
+  const fromLogos = (pd.showLogos || []).find(l => l?.url && IMG_RE.test(l.url));
+  if (fromLogos) return fromLogos.url;
+  const fromMarketing = (pd.generalMarketing || []).find(f => (f?.fileUrl && IMG_RE.test(f.fileUrl)) || (f?.fileName && IMG_RE.test(f.fileName)));
+  if (fromMarketing) return fromMarketing.fileUrl;
+  if (pd.showLogoUrl && IMG_RE.test(pd.showLogoUrl)) return pd.showLogoUrl;
+  return null;
+};
+
 const HomePage = () => {
   const [liveShows, setLiveShows] = useState([]);
   const { toast } = useToast();
@@ -61,11 +74,46 @@ const HomePage = () => {
 
       if (error) {
         console.error('Failed to load events for home page:', error);
-        setLiveShows([]);
-        return;
       }
 
-      const visible = (data || [])
+      // Also include published shows & pattern books (same source as /events).
+      const { data: projData } = await supabase
+        .from('projects')
+        .select('id, project_name, project_type, project_data, status')
+        .in('project_type', ['show', 'pattern_book']);
+      const projEvents = (projData || [])
+        .filter((p) => {
+          const pd = p.project_data || {};
+          const housing = pd.moduleStatuses?.housing === 'published';
+          const pattern = ['Final', 'Publication', 'published'].includes(p.status) || pd.moduleStatuses?.patternBook === 'published';
+          if (!housing && !pattern) return false;
+          const general = pd.showDetails?.general || {};
+          return !!(general.startDate || pd.startDate) && !!(general.endDate || pd.endDate);
+        })
+        .map((p) => {
+          const pd = p.project_data || {};
+          const general = pd.showDetails?.general || {};
+          const venue = pd.showDetails?.venue || {};
+          return {
+            id: p.id,
+            name: p.project_name || general.showName || 'Untitled',
+            start_date: general.startDate || pd.startDate,
+            end_date: general.endDate || pd.endDate,
+            location: venue.facilityName || venue.address || pd.venueName || pd.venueAddress || '',
+            associations: pd.associations ? Object.keys(pd.associations).filter((k) => pd.associations[k]) : null,
+            thumbnail_url: deriveCoverUrl(pd),
+            coverColor: pd.coverColor || null,
+            project: { status: p.status },
+            pattern_book_id: p.id,
+          };
+        });
+
+      // Merge with events-table rows, skipping any project already represented there.
+      const eventIds = new Set((data || []).map((e) => e.id));
+      const allEvents = [...(data || []), ...projEvents.filter((p) => !eventIds.has(p.id))];
+
+      // Keep the full event objects (live/upcoming, top 3) so the shared EventCard can render them.
+      const visible = allEvents
         .map((event) => ({ event, status: getComputedStatus(event) }))
         .filter(({ status }) => status === 'ongoing' || status === 'upcoming')
         .sort((a, b) => {
@@ -73,14 +121,7 @@ const HomePage = () => {
           return a.status === 'ongoing' ? -1 : 1;
         })
         .slice(0, 3)
-        .map(({ event, status }) => ({
-          id: event.id,
-          name: event.name,
-          dates: formatDateRange(event.start_date, event.end_date),
-          association: getAssociationLabel(event.associations),
-          status: status === 'ongoing' ? 'live' : 'upcoming',
-          image_url: event.thumbnail_url || null,
-        }));
+        .map(({ event }) => event);
 
       setLiveShows(visible);
     };
@@ -171,50 +212,13 @@ const HomePage = () => {
                 Watch live events and access pattern books in real-time.
               </p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {liveShows.map((show, index) => <motion.div key={show.id} initial={{
-              opacity: 0,
-              y: 20
-            }} animate={{
-              opacity: 1,
-              y: 0
-            }} transition={{
-              duration: 0.5,
-              delay: index * 0.1
-            }}>
-                  <Card className="bg-card/90 border-border hover:border-primary/50 transition-all duration-300 flex flex-col h-full">
-                    <CardHeader>
-                      <div className="aspect-video relative mb-4 bg-muted rounded-lg overflow-hidden flex items-center justify-center">
-                        {show.image_url ? (
-                          <img
-                            src={show.image_url}
-                            alt={show.name}
-                            className="absolute inset-0 w-full h-full object-cover"
-                          />
-                        ) : (
-                          <ImageIcon className="h-10 w-10 text-muted-foreground/60" />
-                        )}
-                        <Badge className={`absolute top-2 right-2 ${show.status === 'live' ? 'bg-red-600 text-white' : 'bg-primary/80 text-primary-foreground'}`}>
-                          {show.status.toUpperCase()}
-                        </Badge>
-                      </div>
-                      <CardTitle className="text-foreground">{show.name}</CardTitle>
-                      <CardDescription className="flex items-center gap-4">
-                        <span>{show.association}</span>
-                        <span className="flex items-center gap-1.5"><Calendar className="h-4 w-4" /> {show.dates}</span>
-                      </CardDescription>
-                    </CardHeader>
-                    <CardFooter className="mt-auto flex gap-2">
-                      <Button onClick={() => handleWatchLive(show)} className="w-full bg-primary/20 text-primary hover:bg-primary/30">
-                        <Video className="mr-2 h-4 w-4" /> Watch Live
-                      </Button>
-                      <Button onClick={() => handleOpenBook(show)} variant="outline" className="w-full">
-                        <BookOpen className="mr-2 h-4 w-4" /> Pattern Book
-                      </Button>
-                    </CardFooter>
-                  </Card>
-                </motion.div>)}
-            </div>
+            {liveShows.length === 0 ? (
+              <p className="text-center text-muted-foreground">No live or upcoming shows right now.</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                {liveShows.map((show) => <EventCard key={show.id} event={show} />)}
+              </div>
+            )}
           </div>
         </section>
 
