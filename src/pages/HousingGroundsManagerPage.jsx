@@ -636,29 +636,6 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                             placeholder="Water, electricity, fans, etc."
                         />
                     </div>
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={barn.hasElectricity || false}
-                                onCheckedChange={(checked) => onUpdate('hasElectricity', checked)}
-                            />
-                            <Label className="text-xs">Electricity</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={barn.hasWater || false}
-                                onCheckedChange={(checked) => onUpdate('hasWater', checked)}
-                            />
-                            <Label className="text-xs">Water</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Checkbox
-                                checked={barn.hasFans || false}
-                                onCheckedChange={(checked) => onUpdate('hasFans', checked)}
-                            />
-                            <Label className="text-xs">Fans</Label>
-                        </div>
-                    </div>
 
                     {/* Barn Layout — design the barn as a Rows × Columns grid of stalls */}
                     <div className="border-t pt-3">
