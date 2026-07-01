@@ -15,6 +15,10 @@ import {
     unassignStall,
 } from '@/lib/stallAssignment';
 
+// Labels for non-stall boxes so the dialog can mirror the real barn shape
+// (aisles / rooms / blocked / empty gaps), not just a packed list of stalls.
+const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack' };
+
 // Per-booking manual override.
 // Shows: requested barns, currently assigned stalls (clickable to unassign),
 // and available stalls in each requested barn (clickable to assign).
@@ -126,29 +130,56 @@ const ManageStallsDialog = ({ booking, barns, onApply }) => {
                                                 Wants {qty} · {(barn.stalls || []).filter(s => !s.bookingId && (s.type || 'stall') === 'stall').length} free
                                             </Badge>
                                         </div>
-                                        <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2">
-                                            {(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').map(stall => {
-                                                const isMine = stall.bookingId === booking.id;
-                                                const isFree = !stall.bookingId;
+                                        {/* Mirror the real barn layout: render every box in the
+                                            barn's rows × columns so aisle gaps, rooms and blocked
+                                            boxes sit exactly where they do in the Barn Layout.
+                                            Only stall boxes are clickable. */}
+                                        <div
+                                            className="grid gap-2"
+                                            style={{ gridTemplateColumns: `repeat(${barn.layoutCols || Math.min((barn.stalls || []).length || 10, 10)}, minmax(0, 1fr))` }}
+                                        >
+                                            {(barn.stalls || []).map(stall => {
+                                                const type = stall.type || 'stall';
+                                                if (type === 'stall') {
+                                                    const isMine = stall.bookingId === booking.id;
+                                                    const isFree = !stall.bookingId;
+                                                    return (
+                                                        <button
+                                                            key={stall.id}
+                                                            type="button"
+                                                            onClick={() => handleStallClick(stall, barn.id)}
+                                                            className={cn(
+                                                                'h-12 rounded-md border-2 text-xs font-mono font-semibold transition flex items-center justify-center',
+                                                                isMine && 'bg-emerald-500 text-white border-emerald-600 hover:bg-emerald-600',
+                                                                isFree && 'border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary',
+                                                                !isMine && !isFree && 'bg-muted border-muted text-muted-foreground cursor-not-allowed opacity-60'
+                                                            )}
+                                                            title={
+                                                                isMine ? 'Your stall — click to unassign' :
+                                                                isFree ? 'Free — click to assign' :
+                                                                'Taken by another booking'
+                                                            }
+                                                        >
+                                                            {stall.number}
+                                                        </button>
+                                                    );
+                                                }
+                                                // Non-stall box — keep its position so the barn shape matches inventory.
+                                                const label = ROOM_LABELS[type];
                                                 return (
-                                                    <button
+                                                    <div
                                                         key={stall.id}
-                                                        type="button"
-                                                        onClick={() => handleStallClick(stall, barn.id)}
+                                                        title={label || (type === 'blocked' ? 'Blocked' : type === 'aisle' ? 'Aisle' : '')}
                                                         className={cn(
-                                                            'h-12 rounded-md border-2 text-xs font-mono font-semibold transition flex items-center justify-center',
-                                                            isMine && 'bg-emerald-500 text-white border-emerald-600 hover:bg-emerald-600',
-                                                            isFree && 'border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary',
-                                                            !isMine && !isFree && 'bg-muted border-muted text-muted-foreground cursor-not-allowed opacity-60'
+                                                            'h-12 rounded-md flex items-center justify-center text-[9px] uppercase tracking-wide select-none',
+                                                            type === 'empty' && 'opacity-0',
+                                                            type === 'aisle' && 'bg-muted/40',
+                                                            type === 'blocked' && 'bg-muted border border-muted-foreground/30 text-muted-foreground line-through',
+                                                            label && 'border border-muted-foreground/30 text-muted-foreground bg-muted/30'
                                                         )}
-                                                        title={
-                                                            isMine ? 'Your stall — click to unassign' :
-                                                            isFree ? 'Free — click to assign' :
-                                                            'Taken by another booking'
-                                                        }
                                                     >
-                                                        {stall.number}
-                                                    </button>
+                                                        {label || (type === 'blocked' ? stall.number : '')}
+                                                    </div>
                                                 );
                                             })}
                                         </div>

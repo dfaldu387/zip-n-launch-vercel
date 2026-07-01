@@ -94,6 +94,22 @@ import React, { useState, useEffect } from 'react';
         const { general = {}, venue = {}, officials = {}, fees = [], entry = {}, scheduling = {}, awards = {} } = showDetails;
         const stalling = project_data?.stallingService || {};
         const hasInventory = (stalling.barns?.length || 0) + (stalling.rvAreas?.length || 0) + (stalling.supportSpaces?.length || 0) + (stalling.supplies?.length || 0) > 0;
+        // Fee Highlights: prefer entry fees (showDetails.fees); if none, fall back to
+        // the Housing module prices so shows priced only in the Housing manager still
+        // display their stall / RV / supply rates here.
+        const housingFees = [
+            ...(stalling.barns || [])
+                .filter(b => b.pricePerNight > 0)
+                .map(b => ({ id: `barn-${b.id}`, name: `${b.name || 'Stall'} (per night)`, amount: b.pricePerNight })),
+            ...(stalling.rvAreas || [])
+                .map(r => ({ r, amt: r.pricingModel === 'flat' ? r.flatRate : r.pricePerNight }))
+                .filter(({ amt }) => amt > 0)
+                .map(({ r, amt }) => ({ id: `rv-${r.id}`, name: `${r.name || 'RV spot'} (${r.pricingModel === 'flat' ? 'flat rate' : 'per night'})`, amount: amt })),
+            ...(stalling.supplies || [])
+                .filter(s => s.price > 0)
+                .map(s => ({ id: `supply-${s.id}`, name: `${s.name || 'Supply'} (per ${s.unit || 'unit'})`, amount: s.price })),
+        ];
+        const feeHighlights = fees.length > 0 ? fees : housingFees;
         const marketing = project_data?.marketing || {};
         const socialLinks = [
             { url: marketing.facebook, icon: Facebook, label: 'Facebook' },
@@ -162,17 +178,25 @@ import React, { useState, useEffect } from 'react';
                                         <CardHeader><CardTitle className="flex items-center"><Info className="mr-2" /> General Information</CardTitle></CardHeader>
                                         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                             <DetailItem icon={Calendar} label="Show Dates" value={`${format(new Date(project_data.startDate), 'PPP')} to ${format(new Date(project_data.endDate), 'PPP')}`} />
-                                            <DetailItem icon={Info} label="Venue" value={venue.facilityName} />
-                                            <DetailItem icon={Users} label="Show Manager" value={`${general.managerName} (${general.managerContactEmail})`} />
-                                            <DetailItem icon={Users} label="Show Secretary" value={`${general.secretaryName} (${general.secretaryContactEmail})`} />
+                                            {/* Fall back to the flat wizard fields (project_data.venueName/Address)
+                                                when the nested showDetails.venue isn't present. */}
+                                            <DetailItem icon={Info} label="Venue" value={[venue.facilityName || project_data.venueName, venue.address || project_data.venueAddress].filter(Boolean).join(' — ')} />
+                                            {/* Only show Manager / Secretary when they were actually filled in. */}
+                                            {general.managerName && (
+                                                <DetailItem icon={Users} label="Show Manager" value={`${general.managerName}${general.managerContactEmail ? ` (${general.managerContactEmail})` : ''}`} />
+                                            )}
+                                            {general.secretaryName && (
+                                                <DetailItem icon={Users} label="Show Secretary" value={`${general.secretaryName}${general.secretaryContactEmail ? ` (${general.secretaryContactEmail})` : ''}`} />
+                                            )}
                                         </CardContent>
                                     </Card>
 
-                                    <Card>
-                                        <CardHeader><CardTitle className="flex items-center"><Users className="mr-2" /> Officials & Staff</CardTitle></CardHeader>
-                                        <CardContent>
-                                            {Object.keys(officials).length > 0 ? (
-                                                Object.entries(officials).map(([assocId, roles]) => (
+                                    {/* Only show the Officials & Staff card when officials exist. */}
+                                    {Object.keys(officials).length > 0 && (
+                                        <Card>
+                                            <CardHeader><CardTitle className="flex items-center"><Users className="mr-2" /> Officials & Staff</CardTitle></CardHeader>
+                                            <CardContent>
+                                                {Object.entries(officials).map(([assocId, roles]) => (
                                                     <div key={assocId} className="mb-4">
                                                         {Object.entries(roles).map(([roleId, members]) => (
                                                             <div key={roleId}>
@@ -183,35 +207,36 @@ import React, { useState, useEffect } from 'react';
                                                             </div>
                                                         ))}
                                                     </div>
-                                                ))
-                                            ) : <p className="text-muted-foreground">Staff details not available.</p>}
-                                        </CardContent>
-                                    </Card>
+                                                ))}
+                                            </CardContent>
+                                        </Card>
+                                    )}
                                 </div>
 
                                 <div className="space-y-8">
-                                    <Card>
-                                        <CardHeader><CardTitle className="flex items-center"><FileText className="mr-2" /> Show Assets</CardTitle></CardHeader>
-                                        <CardContent className="space-y-2">
-                                            {assets.length > 0 ? (
-                                                assets.map(asset => (
+                                    {/* Only show the Show Assets card when public assets exist. */}
+                                    {assets.length > 0 && (
+                                        <Card>
+                                            <CardHeader><CardTitle className="flex items-center"><FileText className="mr-2" /> Show Assets</CardTitle></CardHeader>
+                                            <CardContent className="space-y-2">
+                                                {assets.map(asset => (
                                                     <div key={asset.id} className="flex items-center justify-between p-2 rounded-md bg-secondary">
                                                         <span className="font-medium text-sm">{asset.custom_name || asset.file_name}</span>
                                                         <Button variant="ghost" size="icon" onClick={() => handleDownload(asset.file_url, asset.file_name)}>
                                                             <Download className="h-4 w-4" />
                                                         </Button>
                                                     </div>
-                                                ))
-                                            ) : <p className="text-muted-foreground text-sm">No public assets available for this show.</p>}
-                                        </CardContent>
-                                    </Card>
+                                                ))}
+                                            </CardContent>
+                                        </Card>
+                                    )}
 
                                     <Card>
                                         <CardHeader><CardTitle className="flex items-center"><DollarSign className="mr-2" /> Fee Highlights</CardTitle></CardHeader>
                                         <CardContent>
-                                            {fees.length > 0 ? (
+                                            {feeHighlights.length > 0 ? (
                                                 <ul className="space-y-2">
-                                                    {fees.slice(0, 5).map(fee => (
+                                                    {feeHighlights.slice(0, 5).map(fee => (
                                                         <li key={fee.id} className="flex justify-between text-sm">
                                                             <span className="text-muted-foreground">{fee.name}</span>
                                                             <span className="font-semibold">${parseFloat(fee.amount).toFixed(2)}</span>

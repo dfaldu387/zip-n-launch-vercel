@@ -1578,36 +1578,46 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const totalBookings = bookings.length;
     const confirmedOnly = bookings.filter(b => b.status === 'confirmed').length;
     const checkedInOnly = bookings.filter(b => b.status === 'checked_in').length;
-    // "Confirmed" stat shows confirmed-status only; OCCUPANCY counts anyone actively holding a stall (confirmed OR checked_in).
+    // "Confirmed" stat shows confirmed-status only.
     const confirmedBookings = confirmedOnly + checkedInOnly;
     const totalUnits = totalStalls + totalRvSpots;
-    const occupancyRate = totalUnits > 0 ? Math.round((confirmedBookings / totalUnits) * 100) : 0;
+    // OCCUPANCY = occupied spaces ÷ total spaces, both counted in the SAME unit
+    // (physical stalls + RV spots) — not bookings ÷ units. Counts anyone actively
+    // holding space (confirmed OR checked_in): assigned stalls + booked RV spots.
+    const activeBookingIds = new Set(
+        bookings.filter(b => b.status === 'confirmed' || b.status === 'checked_in').map(b => b.id)
+    );
+    const occupiedStalls = barns.reduce(
+        (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId && activeBookingIds.has(s.bookingId)).length,
+        0
+    );
+    const occupiedRvSpots = bookings.reduce((sum, b) => {
+        if (!activeBookingIds.has(b.id)) return sum;
+        return sum + (b.items || []).filter(i => i.type === 'rv').reduce((s, it) => s + (it.qty || 0), 0);
+    }, 0);
+    const occupiedUnits = occupiedStalls + occupiedRvSpots;
+    const occupancyRate = totalUnits > 0 ? Math.round((occupiedUnits / totalUnits) * 100) : 0;
 
+    // Projected Revenue = everything booked (stalls + RV + supplies), not just
+    // assigned stalls — so it matches the booking totals and the Stall Fee
+    // Calculator's Max Revenue (which also counts RV). One amount per booking.
     const projectedRevenue = useMemo(() => {
-        const bookingById = new Map(bookings.map(b => [b.id, b]));
         let total = 0;
-        const counted = new Set(); // stallIds already counted via stall.bookingId
-
-        // Multi-stall + any stall pinned to a booking (the modern model).
-        for (const barn of barns) {
-            for (const stall of barn.stalls || []) {
-                if (!stall.bookingId) continue;
-                const b = bookingById.get(stall.bookingId);
-                if (!b || b.status === 'cancelled') continue;
-                total += (barn.pricePerNight || 0) * (b.nights || 0);
-                counted.add(stall.id);
+        for (const b of bookings) {
+            if (b.status === 'cancelled') continue;
+            // Prefer the stored booking total (full subtotal the exhibitor was quoted).
+            const stored = Number(b.totalAmount ?? b.amount ?? 0);
+            if (stored > 0) { total += stored; continue; }
+            // Next best: sum the booking's line items (stall + rv + supply + support).
+            if (Array.isArray(b.items) && b.items.length) {
+                total += b.items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+                continue;
             }
-        }
-
-        // Legacy single-stall bookings that only set booking.stallId.
-        for (const booking of bookings) {
-            if (booking.status === 'cancelled' || !booking.stallId) continue;
-            if (counted.has(booking.stallId)) continue;
-            for (const barn of barns) {
-                const stall = (barn.stalls || []).find(s => s.id === booking.stallId);
-                if (stall) {
-                    total += (barn.pricePerNight || 0) * (booking.nights || 0);
-                    break;
+            // Legacy fallback: a single assigned stall with no stored total/items.
+            if (b.stallId) {
+                for (const barn of barns) {
+                    const stall = (barn.stalls || []).find(s => s.id === b.stallId);
+                    if (stall) { total += (barn.pricePerNight || 0) * (b.nights || 0); break; }
                 }
             }
         }
@@ -1640,6 +1650,19 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const rvUnitPrice = (r) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0));
     const rvPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0) * nights);
 
+    // "Booked" counts for the Pricing Summary — reservations that aren't cancelled,
+    // measured in physical spaces. Stalls use the modern stall→booking pin
+    // (stall.bookingId), RV uses the booked quantity from the booking's line items.
+    const reservedBookingIds = useMemo(
+        () => new Set(bookings.filter(b => b.status !== 'cancelled').map(b => b.id)),
+        [bookings]
+    );
+    const bookedStallsForBarn = (barn) =>
+        (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall' && s.bookingId && reservedBookingIds.has(s.bookingId)).length;
+    const bookedSpotsForRvArea = (rv) =>
+        bookings.reduce((sum, b) => (b.status === 'cancelled' ? sum
+            : sum + (b.items || []).filter(i => i.type === 'rv' && i.refId === rv.id).reduce((s, it) => s + (it.qty || 0), 0)), 0);
+
     // ───── Analytics ─────
     // Computed from existing data; no DB calls. Drives the Analytics tab.
     const analytics = useMemo(() => {
@@ -1667,25 +1690,29 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         for (const b of bookings) {
             if (b.status === 'cancelled') { cancelledCount += 1; continue; }
             const amt = Number(b.totalAmount ?? b.amount ?? 0);
-            if (ACTIVE_STATUSES.has(b.status)) realizedRevenue += amt;
+            const isActive = ACTIVE_STATUSES.has(b.status);
+            if (isActive) realizedRevenue += amt;
 
-            // Per-item revenue breakdown
+            // Per-item breakdown. Revenue sums count only realized (active) bookings
+            // so the "Revenue by Source" slices always add up to Realized Revenue.
+            // Demand is recorded for every non-cancelled booking — a request is a
+            // request whether or not it's confirmed yet.
             for (const it of b.items || []) {
                 const itAmt = Number(it.amount || 0);
                 if (it.type === 'stall') {
-                    stallRevenue += itAmt;
+                    if (isActive) stallRevenue += itAmt;
                     const barn = barns.find(x => x.id === it.refId);
                     if (barn) recordDemand(barn.id, barn.name, 'stall');
                 } else if (it.type === 'rv' || it.type === 'rv_fee') {
-                    rvRevenue += itAmt;
+                    if (isActive) rvRevenue += itAmt;
                     if (it.type === 'rv') {
                         const area = rvAreas.find(x => x.id === it.refId);
                         if (area) recordDemand(area.id, area.name, 'rv');
                     }
                 } else if (it.type === 'support') {
-                    supportRevenue += itAmt;
+                    if (isActive) supportRevenue += itAmt;
                 } else if (it.type === 'supply') {
-                    supplyRevenue += itAmt;
+                    if (isActive) supplyRevenue += itAmt;
                 }
             }
             // Legacy single-stall bookings have no items[]
@@ -1722,7 +1749,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             : 0;
 
         return {
-            occupancy: { rate: occupancyRate, occupied: confirmedBookings, total: totalUnits },
+            occupancy: { rate: occupancyRate, occupied: occupiedUnits, total: totalUnits },
             revenue: {
                 total: realizedRevenue,
                 byStalls: stallRevenue,
@@ -1735,7 +1762,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             demandList: demandList.slice(0, 5),
             powerLoad: { ampsUsed, ampsCapacity, pct: powerLoadPct },
         };
-    }, [bookings, barns, rvAreas, occupancyRate, confirmedBookings, totalUnits]);
+    }, [bookings, barns, rvAreas, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
         await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked }, opts);
@@ -2403,10 +2430,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 <tbody>
                                                     {barns.map(barn => {
                                                         const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
-                                                        const bookedCount = bookings.filter(b => {
-                                                            if (b.status === 'cancelled') return false;
-                                                            return (barn.stalls || []).some(s => s.id === b.stallId);
-                                                        }).length;
+                                                        const bookedCount = bookedStallsForBarn(barn);
                                                         const maxRev = (barn.stallCount || 0) * (barn.pricePerNight || 0) * (showNights || 3);
                                                         return (
                                                             <tr key={barn.id} className="border-b last:border-0">
@@ -2426,6 +2450,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                     {rvAreas.map(rv => {
                                                         const hookupInfo = RV_HOOKUP_TYPES.find(t => t.id === rv.hookupType) || RV_HOOKUP_TYPES[0];
                                                         const isFlat = rvIsFlat(rv);
+                                                        const rvBooked = bookedSpotsForRvArea(rv);
                                                         const maxRev = (rv.spotCount || 0) * rvPerSpotTotal(rv, showNights || 3);
                                                         return (
                                                             <tr key={rv.id} className="border-b last:border-0">
@@ -2434,7 +2459,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                 <td className="px-3 py-2 text-center">{rv.spotCount || 0}</td>
                                                                 <td className="px-3 py-2 text-right">${rvUnitPrice(rv).toFixed(2)}{isFlat ? ' flat' : ''}</td>
                                                                 <td className="px-3 py-2 text-center">
-                                                                    <Badge variant="outline" className="text-xs">-</Badge>
+                                                                    <Badge variant={rvBooked > 0 ? 'default' : 'outline'} className="text-xs">{rvBooked}</Badge>
                                                                 </td>
                                                                 <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
                                                             </tr>
@@ -2447,7 +2472,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <td className="px-3 py-2" />
                                                         <td className="px-3 py-2 text-center">{totalUnits}</td>
                                                         <td className="px-3 py-2" />
-                                                        <td className="px-3 py-2 text-center">{confirmedBookings}</td>
+                                                        <td className="px-3 py-2 text-center">
+                                                            {barns.reduce((s, b) => s + bookedStallsForBarn(b), 0)
+                                                                + rvAreas.reduce((s, r) => s + bookedSpotsForRvArea(r), 0)}
+                                                        </td>
                                                         <td className="px-3 py-2 text-right">
                                                             ${(
                                                                 barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0)
@@ -2474,23 +2502,40 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             <th className="text-right px-3 py-2 font-medium">Price</th>
                                                             <th className="text-center px-3 py-2 font-medium">Unit</th>
                                                             <th className="text-center px-3 py-2 font-medium">Stock</th>
+                                                            <th className="text-center px-3 py-2 font-medium">Sold</th>
+                                                            <th className="text-center px-3 py-2 font-medium">Remaining</th>
                                                             <th className="text-right px-3 py-2 font-medium">Stock Value</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {supplies.map(item => (
-                                                            <tr key={item.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{item.name}</td>
-                                                                <td className="px-3 py-2 text-right">${(item.price || 0).toFixed(2)}</td>
-                                                                <td className="px-3 py-2 text-center text-muted-foreground">{item.unit || '-'}</td>
-                                                                <td className="px-3 py-2 text-center">{item.stockQty || 0}</td>
-                                                                <td className="px-3 py-2 text-right font-semibold">${((item.price || 0) * (item.stockQty || 0)).toLocaleString()}</td>
-                                                            </tr>
-                                                        ))}
+                                                        {supplies.map(item => {
+                                                            const stock = item.stockQty || 0;
+                                                            const sold = soldForSupply(item);
+                                                            const remaining = stock - sold;
+                                                            return (
+                                                                <tr key={item.id} className="border-b last:border-0">
+                                                                    <td className="px-3 py-2 font-medium">{item.name}</td>
+                                                                    <td className="px-3 py-2 text-right">${(item.price || 0).toFixed(2)}</td>
+                                                                    <td className="px-3 py-2 text-center text-muted-foreground">{item.unit || '-'}</td>
+                                                                    <td className="px-3 py-2 text-center">{stock === 0 ? <span className="text-muted-foreground">∞</span> : stock}</td>
+                                                                    <td className="px-3 py-2 text-center">{sold}</td>
+                                                                    <td className="px-3 py-2 text-center">
+                                                                        {stock === 0 ? (
+                                                                            <span className="text-muted-foreground">No limit</span>
+                                                                        ) : (
+                                                                            <span className={cn('font-semibold', remaining <= 0 ? 'text-red-600' : remaining <= Math.max(1, Math.ceil(stock * 0.1)) ? 'text-amber-600' : 'text-emerald-600')}>
+                                                                                {remaining}
+                                                                            </span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="px-3 py-2 text-right font-semibold">${((item.price || 0) * stock).toLocaleString()}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
                                                     </tbody>
                                                     <tfoot>
                                                         <tr className="bg-muted/30 font-semibold">
-                                                            <td className="px-3 py-2" colSpan={4}>Total Stock Value</td>
+                                                            <td className="px-3 py-2" colSpan={6}>Total Stock Value</td>
                                                             <td className="px-3 py-2 text-right">
                                                                 ${supplies.reduce((sum, s) => sum + ((s.price || 0) * (s.stockQty || 0)), 0).toLocaleString()}
                                                             </td>

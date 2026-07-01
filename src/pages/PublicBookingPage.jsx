@@ -81,7 +81,7 @@ const QtyStepper = ({ value, onChange, max, min = 0 }) => (
 
 // ───────────────────────── Step 1: Select Items ─────────────────────────
 
-const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
+const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = {} }) => {
     const { barns, rvAreas, supportSpaces, supplies } = inventory;
 
     const updateQty = (key, qty) => {
@@ -108,7 +108,8 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {barns.map(barn => {
-                            const totalStalls = (barn.stalls || []).length || barn.stallCount || 0;
+                            // Only real stalls are bookable — exclude aisle/room/empty/blocked boxes.
+                            const totalStalls = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length || barn.stallCount || 0;
                             const bookedStalls = (barn.stalls || []).filter(s => s.bookingId).length;
                             const available = Math.max(totalStalls - bookedStalls, 0);
                             const qty = selection.stalls?.[barn.id] || 0;
@@ -277,20 +278,24 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {supplies.map(item => {
-                            const qty = selection.supplies?.[item.id || item.name] || 0;
                             const key = item.id || item.name;
+                            const qty = selection.supplies?.[key] || 0;
+                            // Remaining = stock on hand − already sold. stockQty of 0 means "no limit".
+                            const limited = item.stockQty > 0;
+                            const remaining = limited ? Math.max(item.stockQty - (suppliesSold[key] || 0), 0) : undefined;
+                            const soldOut = limited && remaining === 0;
                             return (
                                 <div key={key} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div className="flex-1">
                                         <p className="font-semibold text-sm">{item.name}</p>
                                         <p className="text-xs text-muted-foreground">
                                             {money(item.price)} per {item.unit}
-                                            {item.stockQty > 0 && ` · ${item.stockQty} in stock`}
+                                            {limited && ` · ${soldOut ? 'Sold out' : `${remaining} of ${item.stockQty} available`}`}
                                         </p>
                                     </div>
                                     <QtyStepper
                                         value={qty}
-                                        max={item.stockQty > 0 ? item.stockQty : undefined}
+                                        max={remaining}
                                         onChange={(v) => setSelection(prev => ({
                                             ...prev,
                                             supplies: { ...(prev.supplies || {}), [key]: v },
@@ -624,6 +629,22 @@ const PublicBookingPage = () => {
             supportSpaces: stalling.supportSpaces || [],
             supplies: stalling.supplies || [],
         };
+    }, [show]);
+
+    // How many of each supply are already sold on existing (non-cancelled)
+    // bookings, keyed by refId (= supply.id || supply.name). Lets the stepper cap
+    // at what's actually left so exhibitors can't oversell past remaining stock.
+    const suppliesSold = useMemo(() => {
+        const existing = show?.project_data?.stallingService?.bookings || [];
+        const sold = {};
+        for (const b of existing) {
+            if (b.status === 'cancelled') continue;
+            for (const it of b.items || []) {
+                if (it.type !== 'supply' || it.refId == null) continue;
+                sold[it.refId] = (sold[it.refId] || 0) + (it.qty || 0);
+            }
+        }
+        return sold;
     }, [show]);
 
     const showWindow = useMemo(() => {
@@ -1096,7 +1117,7 @@ const PublicBookingPage = () => {
                         {/* Step body */}
                         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                             <div className="lg:col-span-3">
-                                {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} />}
+                                {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} suppliesSold={suppliesSold} />}
                                 {step === 2 && <Step2_Details details={details} setDetails={setDetails} showWindow={showWindow} bookWindow={bookWindow} />}
                                 {step === 3 && <Step3_Review orderSummary={orderSummary} details={details} onSubmit={handleSubmit} isSubmitting={isSubmitting} />}
                             </div>

@@ -30,7 +30,9 @@ const summarizeInventory = (stalling = {}) => {
     let bookedStalls = 0;
     let minStallPrice = Infinity;
     for (const barn of barns) {
-        const total = (barn.stalls || []).length || barn.stallCount || 0;
+        // Count only boxes that are actual stalls — aisles/rooms/empty/blocked
+        // aren't bookable (matches the manager's stall count).
+        const total = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length || barn.stallCount || 0;
         const booked = (barn.stalls || []).filter(s => s.bookingId).length;
         totalStalls += total;
         bookedStalls += booked;

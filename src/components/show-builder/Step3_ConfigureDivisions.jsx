@@ -1126,11 +1126,13 @@ export const Step3_ConfigureDivisions = ({ formData, setFormData, associationsDa
                     {/* Day tabs */}
                     {showBill.days.length > 1 && (
                         <Tabs value={activeDayId} onValueChange={setActiveDayId} className="mb-4">
-                            <TabsList>
-                                {showBill.days.map(day => (
-                                    <TabsTrigger key={day.id} value={day.id}>{day.label}</TabsTrigger>
-                                ))}
-                            </TabsList>
+                            <div className="overflow-x-auto pb-1 -mx-1 px-1">
+                                <TabsList className="w-max">
+                                    {showBill.days.map(day => (
+                                        <TabsTrigger key={day.id} value={day.id} className="shrink-0">{day.label}</TabsTrigger>
+                                    ))}
+                                </TabsList>
+                            </div>
                         </Tabs>
                     )}
 
