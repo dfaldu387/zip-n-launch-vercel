@@ -100,7 +100,7 @@ const BookingStatusPage = () => {
         );
     }
 
-    const { booking, assignedStalls = [], show } = data;
+    const { booking, assignedStalls = [], assignedRvSpots = [], show } = data;
     const meta = STATUS_META[booking.status] || STATUS_META.pending;
     const StatusIcon = meta.icon;
     const shortRef = String(booking.id || '').slice(0, 8).toUpperCase();
@@ -234,6 +234,32 @@ const BookingStatusPage = () => {
                                         </div>
                                     )}
                                 </div>
+
+                                {/* Assigned RV / camping spots */}
+                                {rvItems.length > 0 && (
+                                    <div className="rounded-lg border p-3">
+                                        <p className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1.5">
+                                            <Car className="h-3.5 w-3.5 text-cyan-600" /> Your RV / Camping Spots ({assignedRvSpots.length})
+                                        </p>
+                                        {assignedRvSpots.length === 0 ? (
+                                            <p className="text-sm text-muted-foreground italic">
+                                                Specific RV spot numbers not assigned yet — the organizer will assign them before the show.
+                                            </p>
+                                        ) : (
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {assignedRvSpots.map(s => (
+                                                    <Badge
+                                                        key={s.spotId}
+                                                        className="bg-cyan-600 text-white font-mono text-sm px-3 py-1.5"
+                                                        title={`${s.areaName} · Spot ${s.spotNumber}`}
+                                                    >
+                                                        {s.areaName}: {s.spotNumber}
+                                                    </Badge>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* Horses */}
                                 {horseList.length > 0 && (

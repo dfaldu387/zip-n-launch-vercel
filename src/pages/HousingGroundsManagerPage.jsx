@@ -30,11 +30,12 @@ import { stampModuleStatusOnSave, migrateLegacyStatus } from '@/lib/moduleStatus
 import { useToast } from '@/components/ui/use-toast';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { LogoUploader } from '@/components/show-structure/LogoUploader';
-import SmartAssignDialog from '@/components/housing/SmartAssignDialog';
-import ManageStallsDialog from '@/components/housing/ManageStallsDialog';
+import AddBookingDialog from '@/components/housing/AddBookingDialog';
+import MasterListPanel from '@/components/housing/MasterListPanel';
+import AssignBoard from '@/components/housing/AssignBoard';
 import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
-import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns } from '@/lib/stallAssignment';
+import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls } from '@/lib/stallAssignment';
 import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
 
 // ── Constants ──
@@ -1159,7 +1160,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
 
 // ── Booking Row ──
 
-const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStatusChange }) => {
+const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall }) => {
     const stallOptions = useMemo(() => {
         const options = [];
         for (const barn of barns) {
@@ -1215,7 +1216,16 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
                         )}
                     </div>
                 ) : (
-                    <Select value={booking.stallId || '__none__'} onValueChange={(val) => onUpdate('stallId', val === '__none__' ? '' : val)}>
+                    <Select
+                        value={booking.stallId || '__none__'}
+                        onValueChange={(val) => {
+                            const stallId = val === '__none__' ? '' : val;
+                            // Pin via stall.bookingId (reflects in map/counts) when a handler
+                            // is provided; fall back to the plain field otherwise.
+                            if (onAssignStall) onAssignStall(stallId);
+                            else onUpdate('stallId', stallId);
+                        }}
+                    >
                         <SelectTrigger className="h-7 text-xs">
                             <SelectValue placeholder="Assign stall..." />
                         </SelectTrigger>
@@ -1260,7 +1270,7 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBarns, onUpdateCover }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const showNights = getShowNights(pd);
@@ -1540,18 +1550,24 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     };
 
     // ── Booking CRUD ──
-    const addBooking = () => {
-        setBookings(prev => [...prev, {
-            id: uuidv4(),
-            exhibitorName: '',
-            horseName: '',
-            trainerName: '',
-            stallId: '',
-            nights: showNights || 3,
-            status: 'pending',
-            notes: '',
-            amount: 0,
-        }]);
+    // Add a fully-built manual booking (from AddBookingDialog). It already carries
+    // items[] + totalAmount, so it behaves exactly like an online booking. Update
+    // local state for instant display, then persist immediately so it isn't lost.
+    const addBooking = async (booking) => {
+        setBookings(prev => [...prev, booking]);
+        if (onAddBookingImmediate) await onAddBookingImmediate(booking);
+    };
+
+    // Assign a single stall to a booking from the inline dropdown (legacy manual
+    // rows with no items). Pins the stall via stall.bookingId so it shows in the
+    // barn map / Booked count / occupancy, and keeps booking.stallId for the
+    // legacy revenue path. Clears any stall previously pinned to this booking.
+    const assignSingleStall = async (booking, stallId) => {
+        let next = unassignBookingStalls(barns, booking.id);
+        if (stallId) next = assignStallToBooking(next, stallId, booking.id);
+        setBarns(next);
+        updateBooking(booking.id, 'stallId', stallId || '');
+        if (onUpdateBarns) await onUpdateBarns(next);
     };
 
     const updateBooking = (bookingId, field, value) => {
@@ -1914,6 +1930,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         <TabsTrigger value="fees">Fees</TabsTrigger>
                         <TabsTrigger value="pricing">Pricing Summary</TabsTrigger>
                         <TabsTrigger value="bookings">Bookings ({totalBookings})</TabsTrigger>
+                        <TabsTrigger value="masterlist">Master List</TabsTrigger>
+                        <TabsTrigger value="assign">Assign Stalls</TabsTrigger>
                         <TabsTrigger value="analytics">Analytics</TabsTrigger>
                     </TabsList>
 
@@ -2292,16 +2310,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 {/* ── Bookings Tab ── */}
                 <TabsContent value="bookings" className="space-y-4 mt-4">
                     <div className="flex items-center gap-3 flex-wrap">
-                        <Button onClick={addBooking} variant="outline">
-                            <ShoppingCart className="h-4 w-4 mr-2" /> Add Booking
-                        </Button>
-                        <SmartAssignDialog
-                            bookings={bookings}
-                            barns={barns}
-                            onApply={async (newBarns) => {
-                                setBarns(newBarns);
-                                if (onUpdateBarns) await onUpdateBarns(newBarns);
-                            }}
+                        <AddBookingDialog
+                            inventory={{ barns, rvAreas, supplies }}
+                            suppliesSold={suppliesSold}
+                            defaultNights={showNights}
+                            onAdd={addBooking}
                         />
                         <div className="relative flex-1 max-w-sm">
                             <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
@@ -2340,16 +2353,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onUpdate={(field, value) => updateBooking(booking.id, field, value)}
                                             onRemove={() => removeBooking(booking.id)}
                                             onStatusChange={onUpdateBookingStatus}
+                                            onAssignStall={(stallId) => assignSingleStall(booking, stallId)}
                                         />
                                     </div>
-                                    <ManageStallsDialog
-                                        booking={booking}
-                                        barns={barns}
-                                        onApply={async (newBarns) => {
-                                            setBarns(newBarns);
-                                            if (onUpdateBarns) await onUpdateBarns(newBarns);
-                                        }}
-                                    />
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -2398,6 +2404,41 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             })}
                         </div>
                     )}
+                </TabsContent>
+
+                {/* ── Master List Tab (Phase 1: spreadsheet-style roster) ── */}
+                <TabsContent value="masterlist" className="space-y-4 mt-4">
+                    <MasterListPanel
+                        bookings={bookings}
+                        barns={barns}
+                        rvAreas={rvAreas}
+                        showName={show.project_name || 'Show'}
+                    />
+                </TabsContent>
+
+                {/* ── Assign Stalls Tab (Phase 2: drag-drop / click-to-assign board) ── */}
+                <TabsContent value="assign" className="space-y-4 mt-4">
+                    <AssignBoard
+                        bookings={bookings}
+                        barns={barns}
+                        rvAreas={rvAreas}
+                        onApplyBarns={async (newBarns) => {
+                            setBarns(newBarns);
+                            if (onUpdateBarns) await onUpdateBarns(newBarns);
+                        }}
+                        onApplyRvAreas={async (newRvAreas) => {
+                            setRvAreas(newRvAreas);
+                            if (onUpdateRvAreas) await onUpdateRvAreas(newRvAreas);
+                        }}
+                        meta={{
+                            showName: show.project_name || 'Show',
+                            facility: pd?.showDetails?.venue?.facilityName || '',
+                            dateRange: [
+                                pd?.showDetails?.general?.startDate || pd?.startDate,
+                                pd?.showDetails?.general?.endDate || pd?.endDate,
+                            ].filter(Boolean).join(' – '),
+                        }}
+                    />
                 </TabsContent>
 
                 {/* ── Pricing Summary Tab ── */}
@@ -2788,6 +2829,31 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
+    // Persist updated rvAreas immediately (used by the RV assignment board).
+    // Commits camper spot -> booking assignments without requiring "Save All".
+    const updateRvAreasImmediate = useCallback(async (nextRvAreas) => {
+        if (!selectedShow) return;
+        try {
+            const updatedData = stampModuleStatusOnSave({
+                ...selectedShow.project_data,
+                stallingService: {
+                    ...(selectedShow.project_data?.stallingService || {}),
+                    rvAreas: nextRvAreas,
+                },
+            }, 'housing');
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+        } catch (error) {
+            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+            throw error;
+        }
+    }, [selectedShow, toast]);
+
     // Persist the cover image URL immediately so it shows on the public event card.
     const updateCoverImageImmediate = useCallback(async (url) => {
         if (!selectedShow) return;
@@ -2835,6 +2901,30 @@ const HousingGroundsManagerPage = () => {
             toast({ title: 'Status updated', description: `Booking is now ${newStatus.replace('_', ' ')}.` });
         } catch (error) {
             toast({ title: 'Status save failed', description: error.message, variant: 'destructive' });
+        }
+    }, [selectedShow, toast]);
+
+    // Append a manually-created booking to the DB immediately (no Save All needed),
+    // mirroring updateBookingStatusImmediate so it survives a refresh right away.
+    const addBookingImmediate = useCallback(async (booking) => {
+        if (!selectedShow) return;
+        try {
+            const currentBookings = selectedShow.project_data?.stallingService?.bookings || [];
+            const updatedBookings = [...currentBookings, booking];
+            const updatedData = stampModuleStatusOnSave({
+                ...selectedShow.project_data,
+                stallingService: { ...(selectedShow.project_data?.stallingService || {}), bookings: updatedBookings },
+            }, 'housing');
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+        } catch (error) {
+            toast({ title: 'Could not save booking', description: error.message, variant: 'destructive' });
+            throw error;
         }
     }, [selectedShow, toast]);
 
@@ -2923,7 +3013,9 @@ const HousingGroundsManagerPage = () => {
                                 isSaving={isSaving}
                                 onUpdateBookingStatus={updateBookingStatusImmediate}
                                 onUpdateBarns={updateBarnsImmediate}
+                                onUpdateRvAreas={updateRvAreasImmediate}
                                 onUpdateCover={updateCoverImageImmediate}
+                                onAddBookingImmediate={addBookingImmediate}
                             />
                         </>
                     )}
