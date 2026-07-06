@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon, ZoomIn } from 'lucide-react';
+import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon, ZoomIn, Download, Printer } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { events } from '@/lib/eventsData';
 import { format } from 'date-fns';
 import { supabase } from '@/lib/supabaseClient';
+import { downloadPatternJpeg, printPatterns, downloadPatternBookPdf } from '@/lib/patternExport';
 
 const EventDetailPage = () => {
   const { id } = useParams();
@@ -22,6 +23,9 @@ const EventDetailPage = () => {
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
   // Full-size image preview (pattern / score sheet) — works for logged-out visitors.
   const [previewImage, setPreviewImage] = useState(null);
+  // Rider-facing pattern filters: narrow the pattern list by show date and/or division.
+  const [patternDateFilter, setPatternDateFilter] = useState('all');
+  const [patternDivisionFilter, setPatternDivisionFilter] = useState('all');
   const { toast } = useToast();
 
   useEffect(() => {
@@ -149,13 +153,26 @@ const EventDetailPage = () => {
                       .select('image_url')
                       .eq('pattern_id', numericPatternId)
                       .maybeSingle();
-                    
+
                     const { data: patternInfo } = await supabase
                       .from('tbl_patterns')
                       .select('pdf_file_name, pattern_version')
                       .eq('id', numericPatternId)
                       .maybeSingle();
-                    
+
+                    // Resolve the show date for this pattern so riders can filter by it.
+                    // Ungrouped divisions carry `date`; grouped ones store baseId/goNumber,
+                    // so the date is looked up in the discipline's divisionGos map.
+                    const resolveDivisionDate = (d) => {
+                      if (d?.date) return d.date;
+                      const baseId = d?.baseId || d?.id;
+                      const goInfo = discipline.divisionGos?.[baseId] || {};
+                      return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
+                    };
+                    const patternDate = (group.divisions || [])
+                      .map(resolveDivisionDate)
+                      .find(Boolean) || null;
+
                     patterns.push({
                       discipline: discipline.name,
                       group: group.name,
@@ -164,6 +181,7 @@ const EventDetailPage = () => {
                       patternName: patternSelection.patternName || patternInfo?.pdf_file_name || `Pattern ${numericPatternId}`,
                       imageUrl: patternMedia?.image_url || null,
                       version: patternSelection.version || patternInfo?.pattern_version || null,
+                      date: patternDate,
                     });
                   }
                 }
@@ -276,6 +294,57 @@ const EventDetailPage = () => {
   const publicationDateLabel = projectData?.publicationDate
     ? format(new Date(projectData.publicationDate + 'T00:00:00'), 'PPP')
     : '';
+
+  // --- Pattern search/filter (by date + division) ---
+  const divLabel = (div) =>
+    typeof div === 'object' ? (div.division || div.name || div.id) : div;
+  const formatPatternDate = (d) => {
+    try { return format(new Date(d + 'T00:00:00'), 'PPP'); } catch { return d; }
+  };
+  const patternDateOptions = [...new Set(patternsData.map((p) => p.date).filter(Boolean))].sort();
+  const patternDivisionOptions = [
+    ...new Set(patternsData.flatMap((p) => (p.divisions || []).map(divLabel)).filter(Boolean)),
+  ].sort();
+  const filteredPatterns = patternsData.filter((p) => {
+    const dateOk = patternDateFilter === 'all' || p.date === patternDateFilter;
+    const divOk =
+      patternDivisionFilter === 'all' ||
+      (p.divisions || []).map(divLabel).includes(patternDivisionFilter);
+    return dateOk && divOk;
+  });
+
+  // --- Download / print (single pattern + branded pattern book) ---
+  const showName = projectData?.showName || event.name || 'EquiPatterns';
+  const patternMeta = (p) => ({
+    showName,
+    divisions: p.divisions,
+    date: p.date ? formatPatternDate(p.date) : '',
+    patternName: p.patternName,
+  });
+  const handleDownloadPattern = async (p) => {
+    const ok = await downloadPatternJpeg(p.imageUrl, patternMeta(p));
+    if (!ok) toast({ title: 'Download failed', description: 'Could not build the pattern image.', variant: 'destructive' });
+  };
+  const handlePrintPattern = async (p) => {
+    const ok = await printPatterns({ imageUrl: p.imageUrl, meta: patternMeta(p) });
+    if (!ok) toast({ title: 'Print blocked', description: 'Allow pop-ups to print this pattern.', variant: 'destructive' });
+  };
+  const handleDownloadBook = async () => {
+    toast({ title: 'Building pattern book…', description: `${filteredPatterns.length} pattern(s)` });
+    const ok = await downloadPatternBookPdf(
+      filteredPatterns.map((p) => ({ ...p, dateLabel: p.date ? formatPatternDate(p.date) : '' })),
+      { showName }
+    );
+    if (!ok) toast({ title: 'Download failed', description: 'No printable patterns in the current filter.', variant: 'destructive' });
+  };
+  const handlePrintBook = async () => {
+    const items = filteredPatterns
+      .filter((p) => p.imageUrl)
+      .map((p) => ({ imageUrl: p.imageUrl, meta: patternMeta(p) }));
+    if (items.length === 0) return;
+    const ok = await printPatterns(items);
+    if (!ok) toast({ title: 'Print blocked', description: 'Allow pop-ups to print the book.', variant: 'destructive' });
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -483,21 +552,93 @@ const EventDetailPage = () => {
                       {/* Patterns */}
                       {!patternsScheduled && patternsData.length > 0 && (
                         <div>
-                          <h3 className="font-semibold text-primary mb-3 flex items-center">
-                            <FileText className="h-5 w-5 mr-2" /> Patterns
-                          </h3>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {patternsData.map((pattern, idx) => (
-                              <div key={idx} className="border border-border rounded-lg p-3 bg-background/50">
-                                <div className="flex items-start justify-between mb-2">
-                                  <div className="flex-1">
-                                    <p className="font-medium text-foreground">{pattern.patternName}</p>
-                                    <p className="text-sm text-muted-foreground">{pattern.discipline} - {pattern.group}</p>
-                                    {pattern.version && (
-                                      <Badge variant="outline" className="mt-1 text-xs">Version: {pattern.version}</Badge>
-                                    )}
-                                  </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                            <h3 className="font-semibold text-primary flex items-center">
+                              <FileText className="h-5 w-5 mr-2" /> Patterns
+                            </h3>
+                            {/* Whole-book actions — respect the active date/division filter */}
+                            {filteredPatterns.length > 0 && (
+                              <div className="flex items-center gap-2">
+                                <Button variant="outline" size="sm" onClick={handleDownloadBook}>
+                                  <BookOpen className="h-4 w-4 mr-1" /> Download Book (PDF)
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={handlePrintBook}>
+                                  <Printer className="h-4 w-4 mr-1" /> Print Book
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          {/* Search / filter: find your patterns by show date and/or division */}
+                          {(patternDateOptions.length > 0 || patternDivisionOptions.length > 0) && (
+                            <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                              {patternDateOptions.length > 0 && (
+                                <div className="flex-1">
+                                  <label className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                                    <Calendar className="h-3.5 w-3.5" /> Date
+                                  </label>
+                                  <select
+                                    value={patternDateFilter}
+                                    onChange={(e) => setPatternDateFilter(e.target.value)}
+                                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                                  >
+                                    <option value="all">All dates</option>
+                                    {patternDateOptions.map((d) => (
+                                      <option key={d} value={d}>{formatPatternDate(d)}</option>
+                                    ))}
+                                  </select>
                                 </div>
+                              )}
+                              {patternDivisionOptions.length > 0 && (
+                                <div className="flex-1">
+                                  <label className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                                    <Users className="h-3.5 w-3.5" /> Division
+                                  </label>
+                                  <select
+                                    value={patternDivisionFilter}
+                                    onChange={(e) => setPatternDivisionFilter(e.target.value)}
+                                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                                  >
+                                    <option value="all">All divisions</option>
+                                    {patternDivisionOptions.map((d) => (
+                                      <option key={d} value={d}>{d}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                              {(patternDateFilter !== 'all' || patternDivisionFilter !== 'all') && (
+                                <div className="flex items-end">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => { setPatternDateFilter('all'); setPatternDivisionFilter('all'); }}
+                                  >
+                                    Clear
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {filteredPatterns.length === 0 ? (
+                            <div className="p-4 rounded-lg border border-border bg-background/50 text-sm text-muted-foreground text-center">
+                              No patterns match this date/division. Try clearing the filters.
+                            </div>
+                          ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {filteredPatterns.map((pattern, idx) => (
+                              <div key={idx} className="border border-border rounded-lg p-3 bg-background/50">
+                                {/* Divisions at top — most important for riders searching their class */}
+                                {pattern.divisions && pattern.divisions.length > 0 && (
+                                  <div className="mb-2">
+                                    <p className="text-xs text-muted-foreground mb-1">Divisions:</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {pattern.divisions.map((div, divIdx) => (
+                                        <Badge key={divIdx} variant="secondary" className="text-xs">
+                                          {typeof div === 'object' ? (div.division || div.name || div.id) : div}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                                 {pattern.imageUrl ? (
                                   <button
                                     type="button"
@@ -521,21 +662,26 @@ const EventDetailPage = () => {
                                     <ImageIcon className="h-8 w-8 text-muted-foreground" />
                                   </div>
                                 )}
-                                {pattern.divisions && pattern.divisions.length > 0 && (
-                                  <div className="mt-2">
-                                    <p className="text-xs text-muted-foreground mb-1">Divisions:</p>
-                                    <div className="flex flex-wrap gap-1">
-                                      {pattern.divisions.map((div, divIdx) => (
-                                        <Badge key={divIdx} variant="secondary" className="text-xs">
-                                          {typeof div === 'object' ? (div.division || div.name || div.id) : div}
-                                        </Badge>
-                                      ))}
-                                    </div>
+                                {/* Save to phone / print this single pattern (branded) */}
+                                {pattern.imageUrl && (
+                                  <div className="flex gap-2 mt-2">
+                                    <Button variant="outline" size="sm" className="flex-1" onClick={() => handleDownloadPattern(pattern)}>
+                                      <Download className="h-4 w-4 mr-1" /> JPEG
+                                    </Button>
+                                    <Button variant="outline" size="sm" className="flex-1" onClick={() => handlePrintPattern(pattern)}>
+                                      <Printer className="h-4 w-4 mr-1" /> Print
+                                    </Button>
                                   </div>
                                 )}
+                                {/* Pattern name / group at the bottom; version intentionally hidden */}
+                                <div className="mt-2">
+                                  <p className="font-medium text-foreground">{pattern.patternName}</p>
+                                  <p className="text-sm text-muted-foreground">{pattern.discipline} - {pattern.group}</p>
+                                </div>
                               </div>
                             ))}
                           </div>
+                          )}
                         </div>
                       )}
 
