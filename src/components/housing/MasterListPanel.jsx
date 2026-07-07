@@ -9,9 +9,11 @@ import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardLi
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 
 // ── Phase 1: Master List ──
-// A spreadsheet-style roster of everyone who booked (stalls + RV). Read-only
-// summary with sort / filter / print / CSV export. Assignment itself still
-// happens via the per-row "Manage Stalls" dialog (drag-drop board is Phase 2).
+// A spreadsheet-style roster of everyone who booked (stalls + RV + pre-ordered
+// supplies like shavings/hay). Read-only summary with sort / filter, plus two
+// paper-ready exports: a CSV (opens in Excel/Sheets — includes contact, dates,
+// supplies and horse names) and a printable Stalls & RV worklist with a tick-off
+// column. Assignment itself still happens via the per-row "Manage Stalls" dialog.
 
 // How many RV spots a booking asked for (across all rv line items).
 const getRvCount = (booking) =>
@@ -24,20 +26,62 @@ const getHorseCount = (booking) => {
     return booking?.horseName ? 1 : 0;
 };
 
+// The actual horse names (array, comma-string, or single field — normalize to a list).
+const getHorseNames = (booking) => {
+    if (Array.isArray(booking?.horseNames)) return booking.horseNames.filter(Boolean);
+    if (typeof booking?.horseNames === 'string') return booking.horseNames.split(',').map(s => s.trim()).filter(Boolean);
+    if (booking?.horseName) return [booking.horseName];
+    return [];
+};
+
+// Pre-ordered supplies (shavings / hay / feed) — one entry per supply line item.
+// item.name already reads like "Shavings × 3"; strip the trailing "× n" so we can
+// re-render it consistently as "Shavings ×3" and expose the qty on its own.
+const getSupplies = (booking) =>
+    (booking?.items || [])
+        .filter(it => it?.type === 'supply')
+        .map(it => {
+            const qty = Number(it.qty) || 0;
+            const base = String(it.name || '').replace(/\s*×\s*\d+\s*$/, '').trim();
+            return { name: base || it.name || 'Item', qty };
+        });
+
+// 'YYYY-MM-DD' → 'Jul 3' without pulling in a date library.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmtDate = (iso) => {
+    if (!iso) return '';
+    const [y, m, d] = String(iso).split('-').map(Number);
+    if (!y || !m || !d) return String(iso);
+    return `${MONTHS[m - 1]} ${d}`;
+};
+
 // Build one flat row per booking with everything the table + export need.
 const buildRow = (booking, barns) => {
     const requested = getRequestedStallCount(booking);
     const assigned = getAssignedStallsForBooking(booking, barns);
+    const supplies = getSupplies(booking);
+    const horseNamesArr = getHorseNames(booking);
     return {
         booking,
         name: booking.exhibitorName || '—',
         trainer: booking.trainerName || '',
+        email: booking.email || '',
+        phone: booking.phone || '',
+        arrival: booking.arrivalDate || '',
+        departure: booking.departureDate || '',
+        arrivalLabel: fmtDate(booking.arrivalDate),
+        departureLabel: fmtDate(booking.departureDate),
         stalls: requested,
         assignedCount: assigned.length,
         stallNumbersArr: assigned.map(s => s.number),
         stallNumbers: assigned.map(s => s.number).join(', '),
         rv: getRvCount(booking),
+        supplies,
+        supplyCount: supplies.reduce((n, s) => n + s.qty, 0),
+        suppliesStr: supplies.map(s => `${s.name} ×${s.qty}`).join(', '),
         horses: getHorseCount(booking),
+        horseNamesArr,
+        horseNamesStr: horseNamesArr.join(', '),
         status: booking.status || 'pending',
     };
 };
@@ -54,12 +98,25 @@ const csvCell = (v) => {
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
+// A generation timestamp for every export, so a printed/emailed copy is traceable.
+// `human` reads like "Jul 7, 2026, 12:25 PM"; `file` is filename-safe "2026-07-07_1225".
+const exportStamp = () => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const human = d.toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+    const file = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+    return { human, file };
+};
+
 const COLUMNS = [
     { key: 'name', label: 'Exhibitor', align: 'left' },
     { key: 'trainer', label: 'Trainer / Group', align: 'left' },
     { key: 'stalls', label: 'Stalls', align: 'center' },
     { key: 'assignedCount', label: 'Assigned', align: 'center' },
     { key: 'rv', label: 'RV', align: 'center' },
+    { key: 'suppliesStr', label: 'Supplies / Pre-Orders', align: 'left' },
     { key: 'horses', label: 'Horses', align: 'center' },
     { key: 'status', label: 'Status', align: 'left' },
 ];
@@ -84,7 +141,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         const q = search.trim().toLowerCase();
         let list = rows.filter(r => {
             if (q) {
-                const hay = `${r.name} ${r.trainer} ${r.stallNumbers}`.toLowerCase();
+                const hay = `${r.name} ${r.trainer} ${r.stallNumbers} ${r.suppliesStr} ${r.horseNamesStr} ${r.email} ${r.phone}`.toLowerCase();
                 if (!hay.includes(q)) return false;
             }
             if (statusFilter !== 'all' && r.status !== statusFilter) return false;
@@ -109,8 +166,9 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         stalls: t.stalls + r.stalls,
         assigned: t.assigned + r.assignedCount,
         rv: t.rv + r.rv,
+        supplies: t.supplies + r.supplyCount,
         horses: t.horses + r.horses,
-    }), { stalls: 0, assigned: 0, rv: 0, horses: 0 }), [filtered]);
+    }), { stalls: 0, assigned: 0, rv: 0, supplies: 0, horses: 0 }), [filtered]);
 
     const toggleSort = (key) => setSort(prev =>
         prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
@@ -121,44 +179,88 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
     };
 
     const exportCsv = () => {
-        const header = ['Exhibitor', 'Trainer/Group', 'Stalls', 'Assigned', 'Assigned Stalls', 'RV', 'Horses', 'Status'];
-        const lines = [header.join(',')];
+        const { human, file } = exportStamp();
+        const header = [
+            'Exhibitor', 'Trainer/Group', 'Email', 'Phone',
+            'Arrival', 'Departure',
+            'Stalls', 'Assigned', 'Assigned Stalls', 'RV',
+            'Supplies / Pre-Orders', 'Horses', 'Horse Names', 'Status',
+        ];
+        const lines = [
+            '﻿' + csvCell(`${showName} — Master List`), // BOM so Excel reads UTF-8 accents correctly
+            'Generated:,' + csvCell(human),
+            '', // blank spacer row before the table header
+            header.join(','),
+        ];
         for (const r of filtered) {
             lines.push([
-                r.name, r.trainer, r.stalls, r.assignedCount, r.stallNumbers, r.rv, r.horses, r.status,
+                r.name, r.trainer, r.email, r.phone,
+                r.arrivalLabel, r.departureLabel,
+                r.stalls, r.assignedCount, r.stallNumbers, r.rv,
+                r.suppliesStr, r.horses, r.horseNamesStr, r.status,
             ].map(csvCell).join(','));
         }
         const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${showName.replace(/[^\w-]+/g, '_')}_master_list.csv`;
+        a.download = `${showName.replace(/[^\w-]+/g, '_')}_master_list_${file}.csv`;
         a.click();
         URL.revokeObjectURL(url);
     };
 
+    // Escape values before injecting into the print window's HTML.
+    const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
     const printList = () => {
-        const rowsHtml = filtered.map(r => `
+        const { human } = exportStamp();
+        const rowsHtml = filtered.map(r => {
+            const assignedCell = r.stalls > 0
+                ? `${r.assignedCount}/${r.stalls}${r.stallNumbers ? ` <span class="muted">(${esc(r.stallNumbers)})</span>` : ''}`
+                : '—';
+            const contact = [r.email, r.phone].filter(Boolean).map(esc).join(' · ');
+            const dates = (r.arrivalLabel || r.departureLabel)
+                ? `${esc(r.arrivalLabel)} – ${esc(r.departureLabel)}` : '';
+            return `
             <tr>
-                <td>${r.name}</td><td>${r.trainer}</td>
-                <td style="text-align:center">${r.stalls}</td>
-                <td style="text-align:center">${r.assignedCount}/${r.stalls} ${r.stallNumbers ? `<span style="color:#666">(${r.stallNumbers})</span>` : ''}</td>
-                <td style="text-align:center">${r.rv}</td>
-                <td style="text-align:center">${r.horses}</td>
-                <td>${r.status.replace('_', ' ')}</td>
-            </tr>`).join('');
-        const html = `<!doctype html><html><head><title>${showName} — Master List</title>
+                <td class="check"></td>
+                <td>
+                    <strong>${esc(r.name)}</strong>
+                    ${r.trainer ? `<div class="muted">${esc(r.trainer)}</div>` : ''}
+                    ${contact ? `<div class="muted">${contact}</div>` : ''}
+                    ${dates ? `<div class="muted">${dates}</div>` : ''}
+                </td>
+                <td class="c">${assignedCell}</td>
+                <td class="c">${r.rv || '—'}</td>
+                <td>${r.suppliesStr ? esc(r.suppliesStr) : '—'}</td>
+                <td>${r.horseNamesStr ? esc(r.horseNamesStr) : (r.horses ? `${r.horses} horse${r.horses !== 1 ? 's' : ''}` : '—')}</td>
+                <td class="cap">${esc(r.status.replace('_', ' '))}</td>
+            </tr>`;
+        }).join('');
+        const html = `<!doctype html><html><head><title>${esc(showName)} — Master List</title>
             <style>
+                *{box-sizing:border-box}
                 body{font-family:system-ui,Arial,sans-serif;padding:24px;color:#111}
-                h1{font-size:18px;margin:0 0 4px} p{color:#666;margin:0 0 16px;font-size:12px}
+                h1{font-size:18px;margin:0 0 4px}
+                p.sub{color:#666;margin:0 0 16px;font-size:12px}
                 table{border-collapse:collapse;width:100%;font-size:12px}
-                th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
-                th{background:#f3f4f6}
+                th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top}
+                th{background:#f3f4f6;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+                td.c,th.c{text-align:center}
+                td.cap{text-transform:capitalize}
+                td.check{width:26px;text-align:center}
+                td.check::before{content:"";display:inline-block;width:13px;height:13px;border:1.5px solid #333;border-radius:2px}
+                .muted{color:#666;font-size:11px;margin-top:2px}
+                tbody tr:nth-child(even){background:#fafafa}
+                @media print{body{padding:0}tbody tr{page-break-inside:avoid}}
             </style></head><body>
-            <h1>${showName} — Master Booking List</h1>
-            <p>${filtered.length} bookings · ${totals.stalls} stalls · ${totals.rv} RV · ${totals.horses} horses</p>
+            <h1>${esc(showName)} — Stalls, RV &amp; Supplies Worklist</h1>
+            <p class="sub">Generated ${esc(human)}</p>
+            <p class="sub">${filtered.length} bookings · ${totals.stalls} stalls · ${totals.rv} RV · ${totals.supplies} supplies · ${totals.horses} horses</p>
             <table><thead><tr>
-                <th>Exhibitor</th><th>Trainer / Group</th><th>Stalls</th><th>Assigned</th><th>RV</th><th>Horses</th><th>Status</th>
+                <th>✔</th><th>Exhibitor / Contact</th><th class="c">Stalls</th><th class="c">RV</th>
+                <th>Supplies / Pre-Orders</th><th>Horses</th><th>Status</th>
             </tr></thead><tbody>${rowsHtml}</tbody></table>
             </body></html>`;
         const w = window.open('', '_blank');
@@ -261,7 +363,23 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                             ) : <span className="text-muted-foreground flex justify-center">—</span>}
                                         </td>
                                         <td className="px-3 py-2 text-center tabular-nums">{r.rv || '—'}</td>
-                                        <td className="px-3 py-2 text-center tabular-nums">{r.horses || '—'}</td>
+                                        <td className="px-3 py-2">
+                                            {r.supplies.length > 0 ? (
+                                                <div className="flex items-center gap-1 flex-wrap">
+                                                    {r.supplies.map((s, i) => (
+                                                        <Badge key={i} variant="outline" className="text-[10px] font-normal">
+                                                            {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            ) : <span className="text-muted-foreground">—</span>}
+                                        </td>
+                                        <td className="px-3 py-2 text-center">
+                                            <span className="tabular-nums font-medium">{r.horses || '—'}</span>
+                                            {r.horseNamesStr && (
+                                                <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{r.horseNamesStr}</div>
+                                            )}
+                                        </td>
                                         <td className="px-3 py-2">
                                             <Badge className={cn('text-[10px] capitalize', STATUS_STYLES[r.status] || '')}>
                                                 {r.status.replace('_', ' ')}
@@ -278,6 +396,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.stalls}</td>
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.assigned}</td>
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.rv}</td>
+                                    <td className="px-3 py-2 tabular-nums">{totals.supplies ? `${totals.supplies} items` : ''}</td>
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.horses}</td>
                                     <td className="px-3 py-2" />
                                 </tr>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon, ZoomIn, Download, Printer } from 'lucide-react';
+import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon, ZoomIn, Download, Printer, ShoppingCart } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,7 +11,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { events } from '@/lib/eventsData';
 import { format } from 'date-fns';
 import { supabase } from '@/lib/supabaseClient';
-import { downloadPatternJpeg, printPatterns, downloadPatternBookPdf } from '@/lib/patternExport';
+import { downloadPatternJpeg, printPatterns, downloadPatternBookPdf, buildBrandedPatternCanvas } from '@/lib/patternExport';
 
 const EventDetailPage = () => {
   const { id } = useParams();
@@ -26,6 +26,9 @@ const EventDetailPage = () => {
   // Rider-facing pattern filters: narrow the pattern list by show date and/or division.
   const [patternDateFilter, setPatternDateFilter] = useState('all');
   const [patternDivisionFilter, setPatternDivisionFilter] = useState('all');
+  // Print-ready branded previews (show name + date + divisions + EquiPatterns baked in),
+  // keyed by pattern uid — what the rider sees on the page IS the document they download.
+  const [brandedPreviews, setBrandedPreviews] = useState({});
   const { toast } = useToast();
 
   useEffect(() => {
@@ -174,6 +177,7 @@ const EventDetailPage = () => {
                       .find(Boolean) || null;
 
                     patterns.push({
+                      uid: patterns.length, // stable id — matches branded-preview cache regardless of filtering
                       discipline: discipline.name,
                       group: group.name,
                       divisions: group.divisions || [],
@@ -227,6 +231,36 @@ const EventDetailPage = () => {
 
     fetchEventData();
   }, [id, toast]);
+
+  // Build a print-ready branded document for each pattern (show name + class date +
+  // divisions header, EquiPatterns footer) so the on-page preview matches the
+  // downloaded/printed file exactly. Runs whenever the patterns or show identity change.
+  useEffect(() => {
+    let cancelled = false;
+    const generate = async () => {
+      if (!patternsData.length) { setBrandedPreviews({}); return; }
+      const name = projectData?.showName || event?.name || 'EquiPatterns';
+      const fmtDate = (d) => {
+        try { return format(new Date(d + 'T00:00:00'), 'PPP'); } catch { return d; }
+      };
+      for (const p of patternsData) {
+        if (cancelled) return;
+        if (!p.imageUrl) continue;
+        const rendered = await buildBrandedPatternCanvas(p.imageUrl, {
+          showName: name,
+          divisions: p.divisions,
+          date: p.date ? fmtDate(p.date) : '',
+          patternName: p.patternName,
+        });
+        if (cancelled) return;
+        if (rendered) {
+          setBrandedPreviews((prev) => ({ ...prev, [p.uid]: rendered.dataUrl }));
+        }
+      }
+    };
+    generate();
+    return () => { cancelled = true; };
+  }, [patternsData, projectData, event]);
 
   const handleShare = (platform) => {
     toast({
@@ -642,15 +676,21 @@ const EventDetailPage = () => {
                                 {pattern.imageUrl ? (
                                   <button
                                     type="button"
-                                    onClick={() => setPreviewImage({ url: pattern.imageUrl, title: pattern.patternName })}
+                                    onClick={() => setPreviewImage({ url: brandedPreviews[pattern.uid] || pattern.imageUrl, title: pattern.patternName })}
                                     className="group relative block w-full mt-2"
                                     title="Click to view full size"
                                   >
+                                    {/* Branded, print-ready document (falls back to raw drawing until it renders) */}
                                     <img
-                                      src={pattern.imageUrl}
+                                      src={brandedPreviews[pattern.uid] || pattern.imageUrl}
                                       alt={pattern.patternName}
-                                      className="w-full h-32 object-contain rounded border border-border bg-white transition group-hover:opacity-90"
+                                      className="w-full h-48 object-contain rounded border border-border bg-white transition group-hover:opacity-90"
                                     />
+                                    {!brandedPreviews[pattern.uid] && (
+                                      <span className="absolute top-1 right-1 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white">
+                                        Preparing…
+                                      </span>
+                                    )}
                                     <span className="absolute inset-0 flex items-center justify-center rounded bg-black/0 opacity-0 transition group-hover:bg-black/10 group-hover:opacity-100">
                                       <span className="inline-flex items-center gap-1 rounded bg-black/70 px-2 py-1 text-xs font-medium text-white">
                                         <ZoomIn className="h-3.5 w-3.5" /> View
@@ -921,11 +961,22 @@ const EventDetailPage = () => {
                   <CardTitle>Actions</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {/* Book Housing & Grounds — only when the organizer has published it. */}
+                  {/* Book Stalls, RV & Supplies — only when the organizer has published it. */}
                   {event.isFromProjects && projectData?.moduleStatuses?.housing === 'published' && (
                     <Button asChild className="w-full bg-blue-600 hover:bg-blue-700">
                       <Link to={`/show/${event.id}/book`}>
-                        <Building2 className="h-4 w-4 mr-2" /> Book Housing &amp; Grounds
+                        <Building2 className="h-4 w-4 mr-2" /> Book Stalls, RV &amp; Supplies
+                      </Link>
+                    </Button>
+                  )}
+                  {/* Order Hay & Shavings — live at-show reorder. Shows when housing is
+                      published AND the organizer stocks supplies (hay/shavings/etc). */}
+                  {event.isFromProjects &&
+                    projectData?.moduleStatuses?.housing === 'published' &&
+                    (projectData?.stallingService?.supplies || []).length > 0 && (
+                    <Button asChild className="w-full bg-amber-600 hover:bg-amber-700">
+                      <Link to={`/show/${event.id}/order-supplies`}>
+                        <ShoppingCart className="h-4 w-4 mr-2" /> Order Hay &amp; Shavings
                       </Link>
                     </Button>
                   )}

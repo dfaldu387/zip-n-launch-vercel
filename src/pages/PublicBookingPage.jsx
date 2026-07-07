@@ -1100,14 +1100,22 @@ const PublicBookingPage = () => {
                                 const num = i + 1;
                                 const active = step === num;
                                 const done = step > num;
+                                // Allow jumping BACK to an already-completed step; block forward
+                                // clicks so validateStep() still guards required fields.
+                                const canGoBack = num < step;
                                 return (
                                     <React.Fragment key={label}>
-                                        <div className={`flex items-center gap-2 ${active ? 'text-primary' : done ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+                                        <button
+                                            type="button"
+                                            onClick={() => { if (canGoBack) setStep(num); }}
+                                            disabled={!canGoBack}
+                                            className={`flex items-center gap-2 ${active ? 'text-primary' : done ? 'text-emerald-600' : 'text-muted-foreground'} ${canGoBack ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                                        >
                                             <div className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-semibold border-2 ${active ? 'border-primary bg-primary text-primary-foreground' : done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-muted'}`}>
                                                 {done ? <CheckCircle2 className="h-4 w-4" /> : num}
                                             </div>
                                             <span className="text-sm font-medium hidden sm:inline">{label}</span>
-                                        </div>
+                                        </button>
                                         {i < stepLabels.length - 1 && <div className={`flex-1 h-0.5 ${done ? 'bg-emerald-600' : 'bg-muted'}`} />}
                                     </React.Fragment>
                                 );

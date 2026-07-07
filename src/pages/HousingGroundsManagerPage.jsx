@@ -18,7 +18,7 @@ import {
     Building2, Warehouse, Car, ShoppingCart, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
-    ChevronDown, ChevronRight,
+    ChevronDown, ChevronRight, Clock, Phone, CheckCircle2, RefreshCw,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -1268,9 +1268,138 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
     );
 };
 
+// ── Hay & Shavings Orders (live at-show reorders) ──
+// Fulfillment view for the facility/supply manager. Each order is a supplies-only
+// booking placed from the public event page during the show. Newest first, with a
+// timestamp, who ordered, who they stable with, and a one-click Fulfilled toggle.
+
+const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+
+const fmtOrderedAt = (iso) => {
+    if (!iso) return 'Time unknown';
+    try {
+        return new Date(iso).toLocaleString(undefined, {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        });
+    } catch {
+        return iso;
+    }
+};
+
+const SupplyOrderCard = ({ order, onFulfill }) => {
+    const fulfilled = order.fulfillmentStatus === 'fulfilled';
+    const total = order.totalAmount ?? order.amount ?? 0;
+    return (
+        <Card className={cn('border', fulfilled && 'opacity-70 border-emerald-300 dark:border-emerald-800')}>
+            <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                            <Clock className="h-3.5 w-3.5" /> {fmtOrderedAt(order.createdAt)}
+                            {fulfilled && (
+                                <Badge className="bg-emerald-600 text-white text-[10px]">Fulfilled</Badge>
+                            )}
+                        </div>
+                        <p className="font-semibold">{order.exhibitorName || 'Unknown'}</p>
+                        <p className="text-sm text-muted-foreground">
+                            Stable with/under: <span className="text-foreground">{order.stableWith || order.trainerName || '—'}</span>
+                        </p>
+                        {order.phone && (
+                            <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                <Phone className="h-3.5 w-3.5" /> {order.phone}
+                            </p>
+                        )}
+                    </div>
+                    <div className="text-right">
+                        <p className="text-lg font-bold tabular-nums">{fmtMoney(total)}</p>
+                        <Button
+                            size="sm"
+                            variant={fulfilled ? 'outline' : 'default'}
+                            className={cn('mt-2', !fulfilled && 'bg-emerald-600 hover:bg-emerald-700')}
+                            onClick={() => onFulfill(order.id, {
+                                fulfillmentStatus: fulfilled ? 'new' : 'fulfilled',
+                                fulfilledAt: fulfilled ? null : new Date().toISOString(),
+                            })}
+                        >
+                            {fulfilled ? <>Undo</> : <><CheckCircle2 className="h-4 w-4 mr-1" /> Mark Fulfilled</>}
+                        </Button>
+                    </div>
+                </div>
+                <div className="mt-3 border-t pt-2 space-y-1">
+                    {(order.items || []).map((it, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                            <span>{it.name}</span>
+                            <span className="tabular-nums text-muted-foreground">{fmtMoney(it.amount)}</span>
+                        </div>
+                    ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
+};
+
+const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive }) => {
+    const pending = orders.filter(o => o.fulfillmentStatus !== 'fulfilled');
+    const done = orders.filter(o => o.fulfillmentStatus === 'fulfilled');
+
+    // Header row: manual refresh + a note that the list updates on its own while live.
+    const RefreshBar = () => (
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex flex-wrap gap-2">
+                <Badge className="bg-amber-600 text-white">To fulfill: {pending.length}</Badge>
+                <Badge variant="outline">Fulfilled: {done.length}</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+                {isLive && (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> Auto-updating
+                    </span>
+                )}
+                <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing}>
+                    <RefreshCw className={cn('h-4 w-4 mr-1', isRefreshing && 'animate-spin')} /> Refresh
+                </Button>
+            </div>
+        </div>
+    );
+
+    if (orders.length === 0) {
+        return (
+            <div className="space-y-4">
+                <RefreshBar />
+                <Card>
+                    <CardContent className="py-12 text-center">
+                        <ShoppingCart className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+                        <p className="text-muted-foreground">No hay &amp; shavings orders yet.</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Orders placed from the event page during the show land here, newest first.
+                        </p>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-4">
+            <RefreshBar />
+            {pending.length > 0 && (
+                <div className="space-y-2">
+                    {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} />)}
+                </div>
+            )}
+            {done.length > 0 && (
+                <div className="space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Fulfilled</p>
+                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} />)}
+                </div>
+            )}
+        </div>
+    );
+};
+
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const showNights = getShowNights(pd);
@@ -1578,15 +1707,75 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setBookings(prev => prev.filter(b => b.id !== bookingId));
     };
 
+    // Live at-show hay/shavings reorders are supplies-only (no stalls/dates) — keep
+    // them out of the stall-focused Bookings tab and give them their own tab.
+    const isLiveSupply = (b) => b.orderType === 'live-supply';
+    const stallBookings = useMemo(() => bookings.filter(b => !isLiveSupply(b)), [bookings]);
+    const liveSupplyOrders = useMemo(
+        () => bookings
+            .filter(isLiveSupply)
+            // Newest first — facility works the freshest orders at the top.
+            .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+        [bookings]
+    );
+
     const filteredBookings = useMemo(() => {
-        if (!searchTerm.trim()) return bookings;
+        if (!searchTerm.trim()) return stallBookings;
         const q = searchTerm.toLowerCase();
-        return bookings.filter(b =>
+        return stallBookings.filter(b =>
             (b.exhibitorName || '').toLowerCase().includes(q) ||
             (b.horseName || '').toLowerCase().includes(q) ||
             (b.trainerName || '').toLowerCase().includes(q)
         );
-    }, [bookings, searchTerm]);
+    }, [stallBookings, searchTerm]);
+
+    // ── Live-order polling ──
+    // At-show hay/shavings orders can arrive any minute. Poll the DB and merge in
+    // NEW orders so the facility sees them without a manual reload. We only APPEND
+    // (match by id) so in-progress edits on other bookings are never overwritten.
+    const [isRefreshingOrders, setIsRefreshingOrders] = useState(false);
+    const bookingsRef = useRef(bookings);
+    useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
+
+    const refreshLiveOrders = useCallback(async ({ silent = false } = {}) => {
+        if (!show?.id) return;
+        if (!silent) setIsRefreshingOrders(true);
+        try {
+            const { data, error } = await supabase
+                .from('projects')
+                .select('project_data')
+                .eq('id', show.id)
+                .single();
+            if (error) throw error;
+            const remote = data?.project_data?.stallingService?.bookings || [];
+            const known = new Set(bookingsRef.current.map(b => b.id));
+            const fresh = remote.filter(b => b.orderType === 'live-supply' && !known.has(b.id));
+            if (fresh.length) {
+                setBookings(prev => {
+                    const ids = new Set(prev.map(b => b.id));
+                    const add = fresh.filter(b => !ids.has(b.id));
+                    return add.length ? [...prev, ...add] : prev;
+                });
+                toast({
+                    title: `🔔 ${fresh.length} new order${fresh.length > 1 ? 's' : ''}`,
+                    description: 'New hay & shavings order came in — see the Hay & Shavings tab.',
+                });
+            } else if (!silent) {
+                toast({ title: 'Up to date', description: 'No new orders.' });
+            }
+        } catch (err) {
+            if (!silent) toast({ title: 'Refresh failed', description: err.message, variant: 'destructive' });
+        } finally {
+            if (!silent) setIsRefreshingOrders(false);
+        }
+    }, [show?.id, toast]);
+
+    // Auto-poll every 30s, but only while the show is Published (live to riders).
+    useEffect(() => {
+        if (publishStatus !== 'published') return;
+        const t = setInterval(() => refreshLiveOrders({ silent: true }), 30000);
+        return () => clearInterval(t);
+    }, [publishStatus, refreshLiveOrders]);
 
     // ── Stats ──
     const totalStalls = barns.reduce((sum, b) => sum + (b.stallCount || 0), 0);
@@ -1929,7 +2118,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         <TabsTrigger value="inventory">Inventory</TabsTrigger>
                         <TabsTrigger value="fees">Fees</TabsTrigger>
                         <TabsTrigger value="pricing">Pricing Summary</TabsTrigger>
-                        <TabsTrigger value="bookings">Bookings ({totalBookings})</TabsTrigger>
+                        <TabsTrigger value="bookings">Bookings ({stallBookings.length})</TabsTrigger>
+                        <TabsTrigger value="supplyorders">Hay &amp; Shavings ({liveSupplyOrders.length})</TabsTrigger>
                         <TabsTrigger value="masterlist">Master List</TabsTrigger>
                         <TabsTrigger value="assign">Assign Stalls</TabsTrigger>
                         <TabsTrigger value="analytics">Analytics</TabsTrigger>
@@ -2404,6 +2594,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             })}
                         </div>
                     )}
+                </TabsContent>
+
+                {/* ── Hay & Shavings Orders Tab (live at-show reorders) ── */}
+                <TabsContent value="supplyorders" className="space-y-4 mt-4">
+                    <SupplyOrdersPanel
+                        orders={liveSupplyOrders}
+                        onFulfill={onUpdateBookingFields}
+                        onRefresh={() => refreshLiveOrders({ silent: false })}
+                        isRefreshing={isRefreshingOrders}
+                        isLive={publishStatus === 'published'}
+                    />
                 </TabsContent>
 
                 {/* ── Master List Tab (Phase 1: spreadsheet-style roster) ── */}
@@ -2904,6 +3105,31 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
+    // Patch arbitrary fields on one booking and save immediately (no Save All).
+    // Used by the Hay & Shavings Orders tab to flip fulfillmentStatus on the spot.
+    const updateBookingFieldsImmediate = useCallback(async (bookingId, patch) => {
+        if (!selectedShow) return;
+        try {
+            const currentBookings = selectedShow.project_data?.stallingService?.bookings || [];
+            const updatedBookings = currentBookings.map(b =>
+                b.id === bookingId ? { ...b, ...patch } : b
+            );
+            const updatedData = stampModuleStatusOnSave({
+                ...selectedShow.project_data,
+                stallingService: { ...(selectedShow.project_data?.stallingService || {}), bookings: updatedBookings },
+            }, 'housing');
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+        } catch (error) {
+            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+        }
+    }, [selectedShow, toast]);
+
     // Append a manually-created booking to the DB immediately (no Save All needed),
     // mirroring updateBookingStatusImmediate so it survives a refresh right away.
     const addBookingImmediate = useCallback(async (booking) => {
@@ -3012,6 +3238,7 @@ const HousingGroundsManagerPage = () => {
                                 onSave={handleSave}
                                 isSaving={isSaving}
                                 onUpdateBookingStatus={updateBookingStatusImmediate}
+                                onUpdateBookingFields={updateBookingFieldsImmediate}
                                 onUpdateBarns={updateBarnsImmediate}
                                 onUpdateRvAreas={updateRvAreasImmediate}
                                 onUpdateCover={updateCoverImageImmediate}

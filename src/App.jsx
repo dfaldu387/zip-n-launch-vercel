@@ -78,6 +78,7 @@ import AdminEventsManagementPage from '@/pages/AdminEventsManagementPage';
 import AdminSponsorshipPackagesPage from '@/pages/AdminSponsorshipPackagesPage';
 import PublicShowPage from '@/pages/PublicShowPage';
 import PublicBookingPage from '@/pages/PublicBookingPage';
+import QuickSupplyOrderPage from '@/pages/QuickSupplyOrderPage';
 import PublicShowsListPage from '@/pages/PublicShowsListPage';
 import CheckInPage from '@/pages/CheckInPage';
 import BookingStatusPage from '@/pages/BookingStatusPage';
@@ -167,6 +168,7 @@ function App() {
                   <Route path="/upload-request/:token" element={<PatternUploadRequestPage />} />
                   <Route path="/judge-request/:token" element={<PatternJudgeRequestPage />} />
                   <Route path="/show/:showId/book" element={<PublicBookingPage />} />
+                  <Route path="/show/:showId/order-supplies" element={<QuickSupplyOrderPage />} />
                   <Route path="/booking/:bookingId" element={<BookingStatusPage />} />
                   <Route path="/find-booking" element={<FindBookingPage />} />
                   
