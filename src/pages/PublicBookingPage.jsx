@@ -373,50 +373,96 @@ const Step2_Details = ({ details, setDetails, showWindow, bookWindow = {} }) => 
                         <User className="h-5 w-5 text-primary" /> Contact Information
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <CardContent className="space-y-6">
+                    {/* ---- Exhibitor (required) ---- */}
                     <div>
-                        <Label>Exhibitor Name *</Label>
-                        <Input
-                            value={details.exhibitorName}
-                            onChange={(e) => setDetails(d => ({ ...d, exhibitorName: e.target.value }))}
-                            placeholder="John Smith"
-                        />
-                    </div>
-                    <div>
-                        <Label>Trainer / Ranch / Group</Label>
-                        <Input
-                            value={details.trainerName}
-                            onChange={(e) => setDetails(d => ({ ...d, trainerName: e.target.value }))}
-                            placeholder="(optional, helps us group your stalls)"
-                        />
-                    </div>
-                    <div>
-                        <Label>Email *</Label>
-                        <div className="relative">
-                            <Mail className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                            <Input
-                                type="email"
-                                value={details.email}
-                                onChange={(e) => setDetails(d => ({ ...d, email: e.target.value }))}
-                                placeholder="you@example.com"
-                                className="pl-9"
-                            />
+                        <p className="text-xs font-semibold uppercase tracking-wide text-primary mb-3">Exhibitor</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <Label>Exhibitor Name *</Label>
+                                <Input
+                                    value={details.exhibitorName}
+                                    onChange={(e) => setDetails(d => ({ ...d, exhibitorName: e.target.value }))}
+                                    placeholder="John Smith"
+                                />
+                            </div>
+                            <div className="hidden md:block" />
+                            <div>
+                                <Label>Exhibitor Email *</Label>
+                                <div className="relative">
+                                    <Mail className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                    <Input
+                                        type="email"
+                                        value={details.email}
+                                        onChange={(e) => setDetails(d => ({ ...d, email: e.target.value }))}
+                                        placeholder="you@example.com"
+                                        className="pl-9"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <Label>Exhibitor Phone *</Label>
+                                <div className="relative">
+                                    <Phone className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                    <Input
+                                        type="tel"
+                                        value={details.phone}
+                                        onChange={(e) => setDetails(d => ({ ...d, phone: e.target.value }))}
+                                        placeholder="(555) 555-1234"
+                                        className="pl-9"
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div>
-                        <Label>Phone *</Label>
-                        <div className="relative">
-                            <Phone className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                            <Input
-                                type="tel"
-                                value={details.phone}
-                                onChange={(e) => setDetails(d => ({ ...d, phone: e.target.value }))}
-                                placeholder="(555) 555-1234"
-                                className="pl-9"
-                            />
+
+                    {/* ---- Trainer / Ranch / Group (optional) ---- */}
+                    <div className="border-t border-border pt-5">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                            Trainer / Ranch / Group
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-3">Optional — helps us group your stalls together.</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <Label>Trainer / Ranch / Group Name</Label>
+                                <Input
+                                    value={details.trainerName}
+                                    onChange={(e) => setDetails(d => ({ ...d, trainerName: e.target.value }))}
+                                    placeholder="e.g., Smith Performance Horses"
+                                />
+                            </div>
+                            <div className="hidden md:block" />
+                            <div>
+                                <Label>Trainer Email</Label>
+                                <div className="relative">
+                                    <Mail className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                    <Input
+                                        type="email"
+                                        value={details.trainerEmail}
+                                        onChange={(e) => setDetails(d => ({ ...d, trainerEmail: e.target.value }))}
+                                        placeholder="trainer@example.com"
+                                        className="pl-9"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <Label>Trainer Phone</Label>
+                                <div className="relative">
+                                    <Phone className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                    <Input
+                                        type="tel"
+                                        value={details.trainerPhone}
+                                        onChange={(e) => setDetails(d => ({ ...d, trainerPhone: e.target.value }))}
+                                        placeholder="(555) 555-1234"
+                                        className="pl-9"
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div className="md:col-span-2 space-y-3">
+
+                    {/* ---- Horses ---- */}
+                    <div className="border-t border-border pt-5 space-y-3">
                         <div className="max-w-[200px]">
                             <Label>Number of Horses</Label>
                             <Input
@@ -526,10 +572,16 @@ const Step3_Review = ({ orderSummary, details, onSubmit, isSubmitting }) => {
                     <CardTitle className="text-base">Contact Summary</CardTitle>
                 </CardHeader>
                 <CardContent className="text-sm space-y-1">
-                    <p><span className="text-muted-foreground">Name:</span> {details.exhibitorName || '—'}</p>
-                    {details.trainerName && <p><span className="text-muted-foreground">Trainer/Group:</span> {details.trainerName}</p>}
+                    <p><span className="text-muted-foreground">Exhibitor:</span> {details.exhibitorName || '—'}</p>
                     <p><span className="text-muted-foreground">Email:</span> {details.email || '—'}</p>
                     <p><span className="text-muted-foreground">Phone:</span> {details.phone || '—'}</p>
+                    {(details.trainerName || details.trainerEmail || details.trainerPhone) && (
+                        <div className="pt-2 border-t mt-2 space-y-1">
+                            {details.trainerName && <p><span className="text-muted-foreground">Trainer/Group:</span> {details.trainerName}</p>}
+                            {details.trainerEmail && <p><span className="text-muted-foreground">Trainer Email:</span> {details.trainerEmail}</p>}
+                            {details.trainerPhone && <p><span className="text-muted-foreground">Trainer Phone:</span> {details.trainerPhone}</p>}
+                        </div>
+                    )}
                     {details.horseNames && <p><span className="text-muted-foreground">Horses:</span> {details.horseNames}</p>}
                     {details.preferences && (
                         <p className="pt-2 border-t mt-2">
@@ -582,9 +634,11 @@ const PublicBookingPage = () => {
         arrivalDate: '',
         departureDate: '',
         exhibitorName: '',
-        trainerName: '',
         email: '',
         phone: '',
+        trainerName: '',
+        trainerEmail: '',
+        trainerPhone: '',
         horseCount: 1,
         horseNames: '',
         preferences: '',
@@ -872,6 +926,8 @@ const PublicBookingPage = () => {
                 email: details.email,
                 phone: details.phone,
                 trainerName: details.trainerName || '',
+                trainerEmail: details.trainerEmail || '',
+                trainerPhone: details.trainerPhone || '',
                 horseName: horseList[0] || '',
                 horseNames: horseList,
                 horseCount: details.horseCount || horseList.length,

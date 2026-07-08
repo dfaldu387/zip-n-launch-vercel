@@ -65,6 +65,8 @@ const buildRow = (booking, barns) => {
         booking,
         name: booking.exhibitorName || '—',
         trainer: booking.trainerName || '',
+        trainerEmail: booking.trainerEmail || '',
+        trainerPhone: booking.trainerPhone || '',
         email: booking.email || '',
         phone: booking.phone || '',
         arrival: booking.arrivalDate || '',
@@ -141,7 +143,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         const q = search.trim().toLowerCase();
         let list = rows.filter(r => {
             if (q) {
-                const hay = `${r.name} ${r.trainer} ${r.stallNumbers} ${r.suppliesStr} ${r.horseNamesStr} ${r.email} ${r.phone}`.toLowerCase();
+                const hay = `${r.name} ${r.trainer} ${r.trainerEmail} ${r.trainerPhone} ${r.stallNumbers} ${r.suppliesStr} ${r.horseNamesStr} ${r.email} ${r.phone}`.toLowerCase();
                 if (!hay.includes(q)) return false;
             }
             if (statusFilter !== 'all' && r.status !== statusFilter) return false;
@@ -181,7 +183,8 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
     const exportCsv = () => {
         const { human, file } = exportStamp();
         const header = [
-            'Exhibitor', 'Trainer/Group', 'Email', 'Phone',
+            'Exhibitor', 'Email', 'Phone',
+            'Trainer/Group', 'Trainer Email', 'Trainer Phone',
             'Arrival', 'Departure',
             'Stalls', 'Assigned', 'Assigned Stalls', 'RV',
             'Supplies / Pre-Orders', 'Horses', 'Horse Names', 'Status',
@@ -194,7 +197,8 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         ];
         for (const r of filtered) {
             lines.push([
-                r.name, r.trainer, r.email, r.phone,
+                r.name, r.email, r.phone,
+                r.trainer, r.trainerEmail, r.trainerPhone,
                 r.arrivalLabel, r.departureLabel,
                 r.stalls, r.assignedCount, r.stallNumbers, r.rv,
                 r.suppliesStr, r.horses, r.horseNamesStr, r.status,
@@ -227,8 +231,8 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                 <td class="check"></td>
                 <td>
                     <strong>${esc(r.name)}</strong>
-                    ${r.trainer ? `<div class="muted">${esc(r.trainer)}</div>` : ''}
                     ${contact ? `<div class="muted">${contact}</div>` : ''}
+                    ${r.trainer ? `<div class="muted">${esc(r.trainer)}${(() => { const tc = [r.trainerEmail, r.trainerPhone].filter(Boolean).map(esc).join(' · '); return tc ? ` — ${tc}` : ''; })()}</div>` : ''}
                     ${dates ? `<div class="muted">${dates}</div>` : ''}
                 </td>
                 <td class="c">${assignedCell}</td>
@@ -339,7 +343,14 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                 return (
                                     <tr key={r.booking.id} className="border-b last:border-0 hover:bg-muted/30">
                                         <td className="px-3 py-2 font-medium">{r.name}</td>
-                                        <td className="px-3 py-2 text-muted-foreground">{r.trainer || '—'}</td>
+                                        <td className="px-3 py-2 text-muted-foreground">
+                                            {r.trainer || (r.trainerEmail || r.trainerPhone ? '' : '—')}
+                                            {(r.trainerEmail || r.trainerPhone) && (
+                                                <div className="text-[10px] text-muted-foreground/70 leading-tight">
+                                                    {[r.trainerEmail, r.trainerPhone].filter(Boolean).join(' · ')}
+                                                </div>
+                                            )}
+                                        </td>
                                         <td className="px-3 py-2 text-center tabular-nums">{r.stalls || '—'}</td>
                                         <td className="px-3 py-2">
                                             {r.stalls > 0 ? (

@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
     Loader2, Home, Hash, Calendar, FolderOpen,
-    MapPin, Plus, Trash2, Save, Check, X, Search, Users, DollarSign,
+    MapPin, Plus, Minus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
@@ -469,30 +469,62 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
     // by default. Turning aisles on switches to the walkway/gap view.
     const showAisles = barn.showAisles || false;
 
-    // Rebuild the stall boxes for a rows × columns grid, keeping existing bookings
-    // (matched by position) so assignments aren't lost when the layout changes.
+    // Rebuild the stall boxes for a rows × columns grid, keeping every existing box
+    // at the SAME (row, column) position — so painted types (aisle/blocked/office…)
+    // and bookings never shift when the grid grows or shrinks. New boxes only appear
+    // at the new edge (extra rows at the bottom, extra columns on the right); trimmed
+    // boxes are removed from the bottom/right. This is what lets the organizer add or
+    // remove a row/column without rebuilding the layout they already laid out.
     const regenerateGrid = (nextRows, nextCols) => {
         const r = Math.max(0, parseInt(nextRows) || 0);
         const c = Math.max(0, parseInt(nextCols) || 0);
-        const count = r * c;
         const existing = barn.stalls || [];
+        const oldCols = cols; // width the flat `existing` array is currently laid out in
+        const oldRows = rows;
         const letter = stallPrefix(barn.name);
-        const built = Array.from({ length: count }, (_, i) => ({
-            id: existing[i]?.id || uuidv4(),
-            bookingId: existing[i]?.bookingId || null,
-            type: existing[i]?.type || 'stall',
-        }));
+        const built = [];
+        for (let row = 0; row < r; row++) {
+            for (let col = 0; col < c; col++) {
+                // Look up the box that lived at this same coordinate in the old grid.
+                const inOld = row < oldRows && col < oldCols;
+                const prev = inOld ? existing[row * oldCols + col] : null;
+                // New edge cells inherit their nearest existing neighbour's type — the
+                // left neighbour for a new column, the cell above for a new row (clamp
+                // the coordinate into the old grid). This EXTENDS the pattern: an aisle
+                // row stays an aisle when a column is added, a stall row gains a stall —
+                // instead of dropping raw stalls into aisle/office rows.
+                let type = 'stall';
+                if (prev) {
+                    type = prev.type || 'stall';
+                } else if (existing.length && oldRows > 0 && oldCols > 0) {
+                    const srcRow = Math.min(row, oldRows - 1);
+                    const srcCol = Math.min(col, oldCols - 1);
+                    type = existing[srcRow * oldCols + srcCol]?.type || 'stall';
+                }
+                built.push({
+                    id: prev?.id || uuidv4(),
+                    bookingId: prev?.bookingId || null,
+                    type,
+                });
+            }
+        }
         const newStalls = renumberStalls(built, letter);
         onUpdate('layoutRows', r);
         onUpdate('layoutCols', c);
         onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
         onUpdate('stalls', newStalls);
-        // Drop aisle lines that fall outside the new grid bounds.
+        // Drop aisle lines that fall outside the new grid bounds (those on the right/
+        // bottom edges that were removed); the rest keep their position.
         const prunedCols = (barn.aisleCols || []).filter(i => i >= 1 && i < c);
         const prunedRows = (barn.aisleRows || []).filter(i => i >= 1 && i < r);
         if (prunedCols.length !== (barn.aisleCols || []).length) onUpdate('aisleCols', prunedCols);
         if (prunedRows.length !== (barn.aisleRows || []).length) onUpdate('aisleRows', prunedRows);
     };
+
+    // Edge steppers — add/remove a single row (bottom) or column (right). Kept ≥ 1 so
+    // the grid never collapses to nothing.
+    const stepRows = (delta) => regenerateGrid(Math.max(1, rows + delta), cols);
+    const stepCols = (delta) => regenerateGrid(rows, Math.max(1, cols + delta));
 
     // Paint a box's type, then renumber so stall numbers stay continuous and the
     // stall count reflects only the boxes that are actually stalls.
@@ -668,26 +700,66 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                 <div className="flex flex-wrap items-end gap-3">
                                     <div className="space-y-1">
                                         <Label className="text-xs">Rows</Label>
-                                        <Input
-                                            type="number"
-                                            min={0}
-                                            value={rows}
-                                            disabled={locked}
-                                            onChange={(e) => regenerateGrid(e.target.value, cols)}
-                                            className="h-8 text-xs w-20"
-                                        />
+                                        <div className="flex items-center gap-1">
+                                            <Button
+                                                type="button" variant="outline" size="icon"
+                                                className="h-8 w-8 shrink-0"
+                                                disabled={locked || rows <= 1}
+                                                title="Remove bottom row"
+                                                onClick={() => stepRows(-1)}
+                                            >
+                                                <Minus className="h-3.5 w-3.5" />
+                                            </Button>
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                value={rows}
+                                                disabled={locked}
+                                                onChange={(e) => regenerateGrid(e.target.value, cols)}
+                                                className="h-8 text-xs w-16 text-center"
+                                            />
+                                            <Button
+                                                type="button" variant="outline" size="icon"
+                                                className="h-8 w-8 shrink-0"
+                                                disabled={locked}
+                                                title="Add a row at the bottom"
+                                                onClick={() => stepRows(1)}
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                            </Button>
+                                        </div>
                                     </div>
                                     <span className="pb-2 text-muted-foreground">×</span>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Columns</Label>
-                                        <Input
-                                            type="number"
-                                            min={0}
-                                            value={cols}
-                                            disabled={locked}
-                                            onChange={(e) => regenerateGrid(rows, e.target.value)}
-                                            className="h-8 text-xs w-20"
-                                        />
+                                        <div className="flex items-center gap-1">
+                                            <Button
+                                                type="button" variant="outline" size="icon"
+                                                className="h-8 w-8 shrink-0"
+                                                disabled={locked || cols <= 1}
+                                                title="Remove rightmost column"
+                                                onClick={() => stepCols(-1)}
+                                            >
+                                                <Minus className="h-3.5 w-3.5" />
+                                            </Button>
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                value={cols}
+                                                disabled={locked}
+                                                onChange={(e) => regenerateGrid(rows, e.target.value)}
+                                                className="h-8 text-xs w-16 text-center"
+                                            />
+                                            <Button
+                                                type="button" variant="outline" size="icon"
+                                                className="h-8 w-8 shrink-0"
+                                                disabled={locked}
+                                                title="Add a column on the right"
+                                                onClick={() => stepCols(1)}
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                            </Button>
+                                        </div>
                                     </div>
                                     <div className="flex items-center gap-2 pb-2">
                                         <Checkbox
@@ -1196,6 +1268,7 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
                     onChange={(e) => onUpdate('trainerName', e.target.value)}
                     className="h-7 text-xs"
                     placeholder="Trainer"
+                    title={[booking.trainerEmail, booking.trainerPhone].filter(Boolean).join(' · ') || undefined}
                 />
                 {isMultiStall || (booking.items || []).length > 0 ? (
                     <div className="flex items-center gap-1 flex-wrap min-h-[28px]">

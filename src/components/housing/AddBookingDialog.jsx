@@ -39,13 +39,19 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
     const [isSaving, setIsSaving] = useState(false);
 
     const [details, setDetails] = useState({
-        exhibitorName: '', email: '', phone: '', trainerName: '', horses: '', status: 'pending',
+        exhibitorName: '', email: '', phone: '',
+        trainerName: '', trainerEmail: '', trainerPhone: '',
+        horses: '', status: 'pending',
     });
     const [nights, setNights] = useState(Math.max(1, defaultNights || 1));
     const [selection, setSelection] = useState({ stalls: {}, rvs: {}, supplies: {} });
 
     const reset = () => {
-        setDetails({ exhibitorName: '', email: '', phone: '', trainerName: '', horses: '', status: 'pending' });
+        setDetails({
+            exhibitorName: '', email: '', phone: '',
+            trainerName: '', trainerEmail: '', trainerPhone: '',
+            horses: '', status: 'pending',
+        });
         setNights(Math.max(1, defaultNights || 1));
         setSelection({ stalls: {}, rvs: {}, supplies: {} });
     };
@@ -73,6 +79,8 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
             email: details.email.trim(),
             phone: details.phone.trim(),
             trainerName: details.trainerName.trim(),
+            trainerEmail: details.trainerEmail.trim(),
+            trainerPhone: details.trainerPhone.trim(),
             horseName: horseList[0] || '',
             horseNames: horseList,
             horseCount: horseList.length,
@@ -119,30 +127,50 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
                         <div className="space-y-4">
                             {/* Contact */}
                             <div className="grid grid-cols-2 gap-3">
+                                <p className="col-span-2 text-[11px] font-semibold uppercase tracking-wide text-primary">Exhibitor</p>
                                 <div className="space-y-1">
                                     <Label className="text-xs">Exhibitor name *</Label>
                                     <Input className="h-8 text-sm" value={details.exhibitorName}
                                         onChange={(e) => setDetails(d => ({ ...d, exhibitorName: e.target.value }))}
                                         placeholder="Jane Rider" />
                                 </div>
+                                <div className="hidden sm:block" />
                                 <div className="space-y-1">
-                                    <Label className="text-xs">Trainer</Label>
-                                    <Input className="h-8 text-sm" value={details.trainerName}
-                                        onChange={(e) => setDetails(d => ({ ...d, trainerName: e.target.value }))}
-                                        placeholder="Optional" />
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-xs">Email</Label>
+                                    <Label className="text-xs">Exhibitor email</Label>
                                     <Input className="h-8 text-sm" value={details.email}
                                         onChange={(e) => setDetails(d => ({ ...d, email: e.target.value }))}
                                         placeholder="Optional" />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label className="text-xs">Phone</Label>
+                                    <Label className="text-xs">Exhibitor phone</Label>
                                     <Input className="h-8 text-sm" value={details.phone}
                                         onChange={(e) => setDetails(d => ({ ...d, phone: e.target.value }))}
                                         placeholder="Optional" />
                                 </div>
+
+                                <p className="col-span-2 mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Trainer / Ranch / Group <span className="font-normal normal-case tracking-normal">— optional</span>
+                                </p>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Trainer / group name</Label>
+                                    <Input className="h-8 text-sm" value={details.trainerName}
+                                        onChange={(e) => setDetails(d => ({ ...d, trainerName: e.target.value }))}
+                                        placeholder="Optional" />
+                                </div>
+                                <div className="hidden sm:block" />
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Trainer email</Label>
+                                    <Input className="h-8 text-sm" value={details.trainerEmail}
+                                        onChange={(e) => setDetails(d => ({ ...d, trainerEmail: e.target.value }))}
+                                        placeholder="Optional" />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Trainer phone</Label>
+                                    <Input className="h-8 text-sm" value={details.trainerPhone}
+                                        onChange={(e) => setDetails(d => ({ ...d, trainerPhone: e.target.value }))}
+                                        placeholder="Optional" />
+                                </div>
+
                                 <div className="space-y-1 col-span-2">
                                     <Label className="text-xs">Horses (comma separated)</Label>
                                     <Input className="h-8 text-sm" value={details.horses}
