@@ -37,6 +37,12 @@ import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
 import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls } from '@/lib/stallAssignment';
 import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
+import {
+    stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
+    computeGridLabels, labelValue,
+    insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
+    bookedInRow, bookedInCol,
+} from '@/lib/barnGrid';
 
 // ── Constants ──
 
@@ -275,28 +281,6 @@ const BookingLinkCard = ({ show }) => {
     );
 };
 
-// Stall-number prefix from a barn name: "Barn A" → "A", "West Barn" → "W",
-// otherwise the first letter. Keeps labels intuitive (Barn A → A1, A2…).
-const stallPrefix = (name) => {
-    const m = (name || '').match(/^barn\s+(\w)/i);
-    if (m) return m[1].toUpperCase();
-    return (name || 'S').charAt(0).toUpperCase();
-};
-
-// Number the physical stalls (stall + blocked) continuously — A1, A2, A3… —
-// skipping rooms/aisles/empty so stall numbers have no gaps.
-const renumberStalls = (arr, prefix) => {
-    let n = 0;
-    return arr.map(s => {
-        const type = s.type || 'stall';
-        if (type === 'stall' || type === 'blocked') {
-            n += 1;
-            return { ...s, number: `${prefix}${n}` };
-        }
-        return { ...s, number: '' };
-    });
-};
-
 // ── Stall Map (visual seating-chart style grid) ──
 
 // Cell types so a barn diagram can match a real floor plan (not just stalls).
@@ -315,10 +299,55 @@ const CELL_TYPES = [
 const CELL_TYPE_MAP = Object.fromEntries(CELL_TYPES.map(t => [t.id, t]));
 const ROOM_TYPES = new Set(['office', 'feed', 'wash', 'tack']);
 
+// A grid header cell you can type into (row / column label). Holds a local buffer
+// and commits on blur or Enter, so we don't re-render the whole barn per keystroke.
+const GridLabelInput = ({ value, onCommit, className, title, disabled }) => {
+    const [v, setV] = useState(value);
+    React.useEffect(() => { setV(value); }, [value]);
+    if (disabled) {
+        return <div className={cn(className, 'flex items-center justify-center')} title={title}>{value}</div>;
+    }
+    return (
+        <input
+            value={v}
+            title={title}
+            onChange={(e) => setV(e.target.value)}
+            onBlur={() => { if (v !== value) onCommit(v); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+            className={className}
+        />
+    );
+};
+
+// The tiny [＋][🗑] pair that sits beside a row or above a column. It stays faint
+// until you point at it, so the chart reads cleanly but the controls are always there.
+const GridHandle = ({ onInsert, onDelete, canDelete, insertTitle, deleteTitle }) => (
+    <div className="flex items-center justify-center gap-px opacity-30 hover:opacity-100 transition-opacity">
+        <button
+            type="button" onClick={onInsert} title={insertTitle}
+            className="h-4 w-4 rounded-sm border bg-background text-[10px] leading-none text-muted-foreground hover:bg-primary hover:text-primary-foreground hover:border-primary flex items-center justify-center"
+        >+</button>
+        <button
+            type="button" onClick={onDelete} disabled={!canDelete} title={deleteTitle}
+            className="h-4 w-4 rounded-sm border bg-background text-[10px] leading-none text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive disabled:opacity-30 disabled:hover:bg-background disabled:hover:text-muted-foreground flex items-center justify-center"
+        >−</button>
+    </div>
+);
+
 // Barn diagram: boxes in rows × columns — the visual barn itself (like a floor
 // plan / airplane seat map). Each box has a type (stall, office, feed, wash, tack,
 // aisle, empty). When onCellClick is given, clicking a box paints its type.
-const StallMap = ({ stalls, cols, centerAisle = false, tight = false, onCellClick = null, aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null }) => {
+//
+// The gutters carry the SAME A,B,C / 1,2,3 labels the Assign Stalls board shows, so
+// the two screens describe the same barn. Each gutter also holds an insert/delete
+// handle for that exact row or column — the organizer never has to rebuild a layout
+// just to squeeze one more row in.
+const StallMap = ({
+    stalls, cols, centerAisle = false, tight = false, onCellClick = null,
+    aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null,
+    rowLabels = [], colLabels = [], onRenameRow = null, onRenameCol = null,
+    onInsertRow = null, onDeleteRow = null, onInsertCol = null, onDeleteCol = null,
+}) => {
     // Drag-to-paint: hold the pointer down and sweep across boxes to paint many.
     const paintingRef = React.useRef(false);
     React.useEffect(() => {
@@ -363,6 +392,13 @@ const StallMap = ({ stalls, cols, centerAisle = false, tight = false, onCellClic
             />
         );
     };
+    // A gap-shaped spacer so the label header lines up with the boxes underneath.
+    const colGapGhost = (index) => {
+        if (tight) return null;
+        const active = (aisleCols || []).includes(index);
+        if (!editing && !active) return null;
+        return <div key={`cgg-${index}`} className={cn('flex-shrink-0', editing ? 'w-2.5' : 'w-2')} />;
+    };
     const rowGap = (index) => {
         if (tight) return null;
         const active = (aisleRows || []).includes(index);
@@ -381,14 +417,97 @@ const StallMap = ({ stalls, cols, centerAisle = false, tight = false, onCellClic
         );
     };
 
+    // Same smart defaults as the Assign Stalls board — letters on stall rows, numbers
+    // on stall columns, blank on aisle-only lines. A typed label always wins.
+    const { rowLabels: defRows, colLabels: defCols } = computeGridLabels(stalls, c);
+    // Labels always show (a locked layout still needs to be readable); only the
+    // rename inputs and the insert/delete handles disappear when locked.
+    const showGutter = true;
+    const canEditGrid = editing && !!onInsertRow;
+    // Width of the left gutter: the two 16px handles + their gap + the 32px label.
+    // The column header uses the same width, so labels sit exactly over their boxes.
+    const GUTTER = canEditGrid ? 'w-[72px]' : 'w-8';
+    const labelCls = 'h-9 w-8 shrink-0 text-center text-[10px] font-semibold text-muted-foreground bg-transparent outline-none cursor-text rounded-sm border border-dashed border-muted-foreground/25 hover:border-primary hover:bg-primary/5 focus:border-primary focus:border-solid focus:bg-primary/10 focus:text-foreground';
+    const colLabelCls = 'h-6 w-12 text-center text-[10px] font-semibold text-muted-foreground bg-transparent outline-none cursor-text rounded-sm border border-dashed border-muted-foreground/25 hover:border-primary hover:bg-primary/5 focus:border-primary focus:border-solid focus:bg-primary/10 focus:text-foreground';
+
     return (
         <div className="space-y-2">
             <div className="overflow-x-auto">
                 <div className={cn('inline-flex flex-col rounded-md border bg-background/60 p-3', tight ? 'gap-0' : 'gap-1.5')}>
+                    {/* Column handles — insert a column here / remove this column */}
+                    {canEditGrid && (
+                        <div className={cn('flex items-stretch', tight ? 'gap-0' : 'gap-1.5')}>
+                            <div className={cn(GUTTER, 'shrink-0')} />
+                            {Array.from({ length: c }).map((_, ci) => (
+                                <React.Fragment key={`ch-${ci}`}>
+                                    {ci > 0 && colGapGhost(ci)}
+                                    <div className="w-12 shrink-0">
+                                        <GridHandle
+                                            onInsert={() => onInsertCol?.(ci)}
+                                            onDelete={() => onDeleteCol?.(ci)}
+                                            canDelete={c > 1}
+                                            insertTitle={`Insert a column here (pushes column ${ci + 1} right)`}
+                                            deleteTitle="Delete this column"
+                                        />
+                                    </div>
+                                </React.Fragment>
+                            ))}
+                            <div className="w-12 shrink-0 pl-1">
+                                <GridHandle
+                                    onInsert={() => onInsertCol?.(c)}
+                                    onDelete={() => onDeleteCol?.(c - 1)}
+                                    canDelete={c > 1}
+                                    insertTitle="Add a column on the right"
+                                    deleteTitle="Remove the rightmost column"
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Column labels — 1, 2, 3… by default, click to rename */}
+                    {showGutter && (
+                        <div className={cn('flex items-stretch', tight ? 'gap-0' : 'gap-1.5')}>
+                            <div className={cn(GUTTER, 'shrink-0')} />
+                            {Array.from({ length: c }).map((_, ci) => (
+                                <React.Fragment key={`cl-${ci}`}>
+                                    {ci > 0 && colGapGhost(ci)}
+                                    <GridLabelInput
+                                        value={labelValue(colLabels, defCols, ci)}
+                                        disabled={!onRenameCol}
+                                        title="Column label — click to rename"
+                                        onCommit={(val) => onRenameCol?.(ci, val)}
+                                        className={cn(colLabelCls, tight && ci > 0 && '-ml-px')}
+                                    />
+                                </React.Fragment>
+                            ))}
+                        </div>
+                    )}
+
                     {rows.map((rowStalls, ri) => (
                         <React.Fragment key={ri}>
                             {ri > 0 && rowGap(ri)}
                             <div className={cn('flex items-stretch', tight ? 'gap-0' : 'gap-1.5')}>
+                                {/* Row handle + row label */}
+                                {showGutter && (
+                                    <div className={cn(GUTTER, 'shrink-0 flex items-center gap-1')}>
+                                        {canEditGrid && (
+                                            <GridHandle
+                                                onInsert={() => onInsertRow?.(ri)}
+                                                onDelete={() => onDeleteRow?.(ri)}
+                                                canDelete={rowCount > 1}
+                                                insertTitle={`Insert a row here (pushes this row down)`}
+                                                deleteTitle="Delete this row"
+                                            />
+                                        )}
+                                        <GridLabelInput
+                                            value={labelValue(rowLabels, defRows, ri)}
+                                            disabled={!onRenameRow}
+                                            title="Row label — click to rename"
+                                            onCommit={(val) => onRenameRow?.(ri, val)}
+                                            className={cn(labelCls, tight && ri > 0 && '-mt-px')}
+                                        />
+                                    </div>
+                                )}
                                 {rowStalls.map((stall, ci) => {
                                     const type = stall.type || 'stall';
                                     const isStall = type === 'stall';
@@ -427,6 +546,28 @@ const StallMap = ({ stalls, cols, centerAisle = false, tight = false, onCellClic
                             </div>
                         </React.Fragment>
                     ))}
+
+                    {/* Add a row at the very bottom — the move Robert asked for by name */}
+                    {canEditGrid && (
+                        <div className={cn('flex items-stretch', tight ? 'gap-0 pt-1' : 'gap-1.5')}>
+                            <div className={cn(GUTTER, 'shrink-0 flex items-center justify-end pr-1')}>
+                                <GridHandle
+                                    onInsert={() => onInsertRow?.(rowCount)}
+                                    onDelete={() => onDeleteRow?.(rowCount - 1)}
+                                    canDelete={rowCount > 1}
+                                    insertTitle="Add a row at the bottom"
+                                    deleteTitle="Remove the bottom row"
+                                />
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => onInsertRow?.(rowCount)}
+                                className="flex-1 h-6 rounded-sm border border-dashed border-muted-foreground/30 text-[10px] text-muted-foreground hover:border-primary hover:text-primary hover:bg-primary/5 transition-colors"
+                            >
+                                + Add a row at the bottom
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
@@ -444,7 +585,7 @@ const StallMap = ({ stalls, cols, centerAisle = false, tight = false, onCellClic
 
 // ── Barn/Area Card ──
 
-const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
+const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId }) => {
     const { toast } = useToast();
     const fileInputRef = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
@@ -458,8 +599,10 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
 
     // Rows × Columns layout. For older barns with only a count, derive sensible
     // defaults so the grid shows something until the organizer adjusts it.
-    const cols = barn.layoutCols ?? (barn.stallCount ? Math.min(barn.stallCount, 10) : 10);
-    const rows = barn.layoutRows ?? (cols ? Math.ceil((barn.stallCount || 0) / cols) : 1);
+    const cols = gridCols(barn);
+    const rows = gridRows(barn);
+    // Plain-language shape of the barn: "10 stall rows · 3 aisle rows · 99 stalls".
+    const shape = describeGrid(barn.stalls || [], cols);
     // When locked the grid "holds still" — no painting, no row/col changes, no aisle edits.
     const locked = barn.layoutLocked || false;
     // Section lock — freezes the whole barn (inventory + its fees) once the organizer
@@ -469,62 +612,41 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
     // by default. Turning aisles on switches to the walkway/gap view.
     const showAisles = barn.showAisles || false;
 
-    // Rebuild the stall boxes for a rows × columns grid, keeping every existing box
-    // at the SAME (row, column) position — so painted types (aisle/blocked/office…)
-    // and bookings never shift when the grid grows or shrinks. New boxes only appear
-    // at the new edge (extra rows at the bottom, extra columns on the right); trimmed
-    // boxes are removed from the bottom/right. This is what lets the organizer add or
-    // remove a row/column without rebuilding the layout they already laid out.
-    const regenerateGrid = (nextRows, nextCols) => {
-        const r = Math.max(0, parseInt(nextRows) || 0);
-        const c = Math.max(0, parseInt(nextCols) || 0);
-        const existing = barn.stalls || [];
-        const oldCols = cols; // width the flat `existing` array is currently laid out in
-        const oldRows = rows;
-        const letter = stallPrefix(barn.name);
-        const built = [];
-        for (let row = 0; row < r; row++) {
-            for (let col = 0; col < c; col++) {
-                // Look up the box that lived at this same coordinate in the old grid.
-                const inOld = row < oldRows && col < oldCols;
-                const prev = inOld ? existing[row * oldCols + col] : null;
-                // New edge cells inherit their nearest existing neighbour's type — the
-                // left neighbour for a new column, the cell above for a new row (clamp
-                // the coordinate into the old grid). This EXTENDS the pattern: an aisle
-                // row stays an aisle when a column is added, a stall row gains a stall —
-                // instead of dropping raw stalls into aisle/office rows.
-                let type = 'stall';
-                if (prev) {
-                    type = prev.type || 'stall';
-                } else if (existing.length && oldRows > 0 && oldCols > 0) {
-                    const srcRow = Math.min(row, oldRows - 1);
-                    const srcCol = Math.min(col, oldCols - 1);
-                    type = existing[srcRow * oldCols + srcCol]?.type || 'stall';
-                }
-                built.push({
-                    id: prev?.id || uuidv4(),
-                    bookingId: prev?.bookingId || null,
-                    type,
-                });
-            }
-        }
-        const newStalls = renumberStalls(built, letter);
-        onUpdate('layoutRows', r);
-        onUpdate('layoutCols', c);
-        onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
-        onUpdate('stalls', newStalls);
-        // Drop aisle lines that fall outside the new grid bounds (those on the right/
-        // bottom edges that were removed); the rest keep their position.
-        const prunedCols = (barn.aisleCols || []).filter(i => i >= 1 && i < c);
-        const prunedRows = (barn.aisleRows || []).filter(i => i >= 1 && i < r);
-        if (prunedCols.length !== (barn.aisleCols || []).length) onUpdate('aisleCols', prunedCols);
-        if (prunedRows.length !== (barn.aisleRows || []).length) onUpdate('aisleRows', prunedRows);
+    // Every reshape lands as ONE patch, so the barn never sits in a half-updated state
+    // where stalls[] and layoutCols disagree.
+    const applyPatch = (patch) => { if (patch) onUpdateFields(patch); };
+
+    // Set an exact rows × columns from the number inputs. Boxes keep their (row, col)
+    // coordinate, so painted aisles / offices and bookings never scramble.
+    const setGrid = (nextRows, nextCols) => applyPatch(resizeGrid(barn, nextRows, nextCols));
+
+    // Edge steppers — add/remove a single row (bottom) or column (right).
+    const stepRows = (delta) => (delta > 0 ? applyPatch(insertRowAt(barn, rows)) : askDeleteRow(rows - 1));
+    const stepCols = (delta) => (delta > 0 ? applyPatch(insertColAt(barn, cols)) : askDeleteCol(cols - 1));
+
+    // Deleting a row / column that holds assigned stalls would silently drop those
+    // exhibitors off the chart — always ask first.
+    const askDeleteRow = (index) => {
+        if (rows <= 1) return;
+        const n = bookedInRow(barn, index);
+        if (n > 0 && !window.confirm(`Row ${index + 1} has ${n} assigned stall${n > 1 ? 's' : ''}. Deleting it removes ${n === 1 ? 'that assignment' : 'those assignments'}. Continue?`)) return;
+        applyPatch(deleteRowAt(barn, index));
+    };
+    const askDeleteCol = (index) => {
+        if (cols <= 1) return;
+        const n = bookedInCol(barn, index);
+        if (n > 0 && !window.confirm(`Column ${index + 1} has ${n} assigned stall${n > 1 ? 's' : ''}. Deleting it removes ${n === 1 ? 'that assignment' : 'those assignments'}. Continue?`)) return;
+        applyPatch(deleteColAt(barn, index));
     };
 
-    // Edge steppers — add/remove a single row (bottom) or column (right). Kept ≥ 1 so
-    // the grid never collapses to nothing.
-    const stepRows = (delta) => regenerateGrid(Math.max(1, rows + delta), cols);
-    const stepCols = (delta) => regenerateGrid(rows, Math.max(1, cols + delta));
+    // Custom row / column names (A, B… and 1, 2… by default). Stored on the barn and
+    // shown identically on the Assign Stalls board and the printed chart.
+    const renameLine = (field, index, value) => {
+        const arr = [...(barn[field] || [])];
+        arr[index] = value;
+        onUpdate(field, arr);
+    };
+    const hasCustomLabels = (barn.rowLabels || []).some(Boolean) || (barn.colLabels || []).some(Boolean);
 
     // Paint a box's type, then renumber so stall numbers stay continuous and the
     // stall count reflects only the boxes that are actually stalls.
@@ -536,8 +658,10 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
             return next;
         });
         const newStalls = renumberStalls(updated, stallPrefix(barn.name));
-        onUpdate('stalls', newStalls);
-        onUpdate('stallCount', newStalls.filter(s => (s.type || 'stall') === 'stall').length);
+        onUpdateFields({
+            stalls: newStalls,
+            stallCount: newStalls.filter(s => (s.type || 'stall') === 'stall').length,
+        });
     };
 
     // Aisle walkways drawn between columns/rows — toggling never touches stalls.
@@ -697,15 +821,15 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                         {showLayout && (
                             <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
                                 {/* Build the barn: Rows × Columns (+ optional center aisle) */}
-                                <div className="flex flex-wrap items-end gap-3">
+                                <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
                                     <div className="space-y-1">
-                                        <Label className="text-xs">Rows</Label>
+                                        <Label className="text-xs">Rows (top → bottom)</Label>
                                         <div className="flex items-center gap-1">
                                             <Button
-                                                type="button" variant="outline" size="icon"
-                                                className="h-8 w-8 shrink-0"
+                                                type="button" variant="outline" size="sm"
+                                                className="h-8 px-2 shrink-0 gap-1"
                                                 disabled={locked || rows <= 1}
-                                                title="Remove bottom row"
+                                                title="Remove the bottom row"
                                                 onClick={() => stepRows(-1)}
                                             >
                                                 <Minus className="h-3.5 w-3.5" />
@@ -715,29 +839,29 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                                 min={1}
                                                 value={rows}
                                                 disabled={locked}
-                                                onChange={(e) => regenerateGrid(e.target.value, cols)}
-                                                className="h-8 text-xs w-16 text-center"
+                                                onChange={(e) => setGrid(e.target.value, cols)}
+                                                className="h-8 text-xs w-14 text-center"
                                             />
                                             <Button
-                                                type="button" variant="outline" size="icon"
-                                                className="h-8 w-8 shrink-0"
+                                                type="button" variant="outline" size="sm"
+                                                className="h-8 px-2 shrink-0 gap-1 text-xs"
                                                 disabled={locked}
-                                                title="Add a row at the bottom"
+                                                title="Add a row at the bottom — nothing above it moves"
                                                 onClick={() => stepRows(1)}
                                             >
-                                                <Plus className="h-3.5 w-3.5" />
+                                                <Plus className="h-3.5 w-3.5" /> Bottom
                                             </Button>
                                         </div>
                                     </div>
                                     <span className="pb-2 text-muted-foreground">×</span>
                                     <div className="space-y-1">
-                                        <Label className="text-xs">Columns</Label>
+                                        <Label className="text-xs">Columns (left → right)</Label>
                                         <div className="flex items-center gap-1">
                                             <Button
-                                                type="button" variant="outline" size="icon"
-                                                className="h-8 w-8 shrink-0"
+                                                type="button" variant="outline" size="sm"
+                                                className="h-8 px-2 shrink-0"
                                                 disabled={locked || cols <= 1}
-                                                title="Remove rightmost column"
+                                                title="Remove the rightmost column"
                                                 onClick={() => stepCols(-1)}
                                             >
                                                 <Minus className="h-3.5 w-3.5" />
@@ -747,17 +871,17 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                                 min={1}
                                                 value={cols}
                                                 disabled={locked}
-                                                onChange={(e) => regenerateGrid(rows, e.target.value)}
-                                                className="h-8 text-xs w-16 text-center"
+                                                onChange={(e) => setGrid(rows, e.target.value)}
+                                                className="h-8 text-xs w-14 text-center"
                                             />
                                             <Button
-                                                type="button" variant="outline" size="icon"
-                                                className="h-8 w-8 shrink-0"
+                                                type="button" variant="outline" size="sm"
+                                                className="h-8 px-2 shrink-0 gap-1 text-xs"
                                                 disabled={locked}
-                                                title="Add a column on the right"
+                                                title="Add a column on the right — nothing to its left moves"
                                                 onClick={() => stepCols(1)}
                                             >
-                                                <Plus className="h-3.5 w-3.5" />
+                                                <Plus className="h-3.5 w-3.5" /> Right
                                             </Button>
                                         </div>
                                     </div>
@@ -781,10 +905,26 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                             <Label htmlFor={`aisle-${barn.id}`} className="text-xs cursor-pointer">Center aisle</Label>
                                         </div>
                                     )}
-                                    <div className="pb-2 text-xs font-semibold text-primary">
-                                        = {(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls
-                                        <span className="text-muted-foreground font-normal"> of {rows * cols} boxes</span>
-                                    </div>
+                                </div>
+
+                                {/* What the grid actually is, in words — the "13 rows" that showed
+                                    only 10 rows of stalls was the confusing part. */}
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                                    <span className="font-semibold text-primary">{shape.stalls} stalls</span>
+                                    <span className="text-muted-foreground">
+                                        · {shape.stallRows} stall row{shape.stallRows !== 1 ? 's' : ''}
+                                        {shape.aisleRows > 0 && ` · ${shape.aisleRows} aisle row${shape.aisleRows !== 1 ? 's' : ''}`}
+                                        {' '}· {shape.rows} × {shape.cols} = {shape.boxes} boxes
+                                    </span>
+                                    {hasCustomLabels && !locked && (
+                                        <button
+                                            type="button"
+                                            onClick={() => onUpdateFields({ rowLabels: [], colLabels: [] })}
+                                            className="text-muted-foreground hover:text-primary underline ml-auto"
+                                        >
+                                            Reset row / column names
+                                        </button>
+                                    )}
                                 </div>
 
                                 {locked ? (
@@ -812,15 +952,13 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                             ))}
                                         </div>
 
-                                        {showAisles ? (
-                                            <p className="text-[11px] text-muted-foreground">
-                                                Tip: click a <span className="font-medium text-orange-500">thin gap between boxes</span> to draw an aisle — stalls aren't removed.
-                                            </p>
-                                        ) : (
-                                            <p className="text-[11px] text-muted-foreground">
-                                                Clean layout — stalls packed close, no aisle lines. Tick <span className="font-medium">Show aisles</span> to add walkways.
-                                            </p>
-                                        )}
+                                        <p className="text-[11px] text-muted-foreground">
+                                            {showAisles
+                                                ? <>Tip: click a <span className="font-medium text-orange-500">thin gap between boxes</span> to draw an aisle — stalls aren't removed.</>
+                                                : <>Clean layout — stalls packed close, no aisle lines. Tick <span className="font-medium">Show aisles</span> to add walkways.</>}
+                                            {' '}Use the small <span className="font-mono font-semibold">+</span> / <span className="font-mono font-semibold">−</span> beside any row or column to add or delete just that one, and click a
+                                            {' '}<span className="font-medium text-foreground">row (A, B…)</span> or <span className="font-medium text-foreground">column (1, 2…)</span> name to rename it.
+                                        </p>
                                     </>
                                 )}
 
@@ -835,6 +973,14 @@ const BarnCard = ({ barn, onUpdate, onRemove, onDuplicate, showId }) => {
                                     aisleRows={barn.aisleRows || []}
                                     onToggleAisleCol={locked ? undefined : (i) => toggleAisle('aisleCols', i)}
                                     onToggleAisleRow={locked ? undefined : (i) => toggleAisle('aisleRows', i)}
+                                    rowLabels={barn.rowLabels || []}
+                                    colLabels={barn.colLabels || []}
+                                    onRenameRow={locked ? undefined : (i, v) => renameLine('rowLabels', i, v)}
+                                    onRenameCol={locked ? undefined : (i, v) => renameLine('colLabels', i, v)}
+                                    onInsertRow={locked ? undefined : (i) => applyPatch(insertRowAt(barn, i))}
+                                    onDeleteRow={locked ? undefined : askDeleteRow}
+                                    onInsertCol={locked ? undefined : (i) => applyPatch(insertColAt(barn, i))}
+                                    onDeleteCol={locked ? undefined : askDeleteCol}
                                 />
 
                                 {/* Optional reference image — a separate picture to copy the layout from */}
@@ -1624,6 +1770,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setBarns(prev => prev.map(b => b.id === barnId ? { ...b, [field]: value } : b));
     };
 
+    // Apply several barn fields at once. Grid reshapes must land atomically — stalls[],
+    // layoutRows, layoutCols and the aisle lines have to agree at every render.
+    const updateBarnFields = (barnId, patch) => {
+        setBarns(prev => prev.map(b => b.id === barnId ? { ...b, ...patch } : b));
+    };
+
     const removeBarn = (barnId) => {
         setBarns(prev => prev.filter(b => b.id !== barnId));
     };
@@ -2349,6 +2501,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             barn={barn}
                                             showId={show.id}
                                             onUpdate={(field, value) => updateBarn(barn.id, field, value)}
+                                            onUpdateFields={(patch) => updateBarnFields(barn.id, patch)}
                                             onRemove={() => removeBarn(barn.id)}
                                             onDuplicate={() => duplicateBarn(barn.id)}
                                         />
@@ -2696,6 +2849,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         bookings={bookings}
                         barns={barns}
                         rvAreas={rvAreas}
+                        supplies={supplies}
                         onApplyBarns={async (newBarns) => {
                             setBarns(newBarns);
                             if (onUpdateBarns) await onUpdateBarns(newBarns);
@@ -2703,6 +2857,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         onApplyRvAreas={async (newRvAreas) => {
                             setRvAreas(newRvAreas);
                             if (onUpdateRvAreas) await onUpdateRvAreas(newRvAreas);
+                        }}
+                        // Manual grouping: move an exhibitor into (or out of) a trainer block.
+                        // '' clears the override and falls back to the trainer they booked with.
+                        onSetBookingGroup={async (bookingId, groupName) => {
+                            setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, stallGroup: groupName } : b));
+                            if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, { stallGroup: groupName });
                         }}
                         meta={{
                             showName: show.project_name || 'Show',
