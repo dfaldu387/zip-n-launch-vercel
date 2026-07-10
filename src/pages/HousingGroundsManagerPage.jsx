@@ -18,7 +18,8 @@ import {
     Building2, Warehouse, Car, ShoppingCart, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
-    ChevronDown, ChevronRight, Clock, Phone, CheckCircle2, RefreshCw,
+    ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
+    ClipboardList, Package, Truck, Undo2,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -39,6 +40,7 @@ import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, ap
 import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
+    numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS,
     computeGridLabels, labelValue,
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
@@ -641,12 +643,31 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 
     // Custom row / column names (A, B… and 1, 2… by default). Stored on the barn and
     // shown identically on the Assign Stalls board and the printed chart.
+    // In row-numbering mode the stall names are BUILT from these labels, so a rename
+    // has to renumber the barn as well.
     const renameLine = (field, index, value) => {
         const arr = [...(barn[field] || [])];
         arr[index] = value;
-        onUpdate(field, arr);
+        if (numberingMode(barn) !== NUMBERING_ROW) {
+            onUpdate(field, arr);
+            return;
+        }
+        const nextBarn = { ...barn, [field]: arr };
+        onUpdateFields({
+            [field]: arr,
+            stalls: renumberStalls(barn.stalls || [], nextBarn, gridCols(barn)),
+        });
     };
     const hasCustomLabels = (barn.rowLabels || []).some(Boolean) || (barn.colLabels || []).some(Boolean);
+
+    // Switching scheme renames every stall in this barn at once.
+    const setNumberingMode = (mode) => {
+        const nextBarn = { ...barn, numberingMode: mode };
+        onUpdateFields({
+            numberingMode: mode,
+            stalls: renumberStalls(barn.stalls || [], nextBarn, gridCols(barn)),
+        });
+    };
 
     // Paint a box's type, then renumber so stall numbers stay continuous and the
     // stall count reflects only the boxes that are actually stalls.
@@ -657,7 +678,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
             if (paintType !== 'stall') next.bookingId = null; // rooms/blocked can't hold a booking
             return next;
         });
-        const newStalls = renumberStalls(updated, stallPrefix(barn.name));
+        const newStalls = renumberStalls(updated, barn, gridCols(barn));
         onUpdateFields({
             stalls: newStalls,
             stallCount: newStalls.filter(s => (s.type || 'stall') === 'stall').length,
@@ -919,13 +940,58 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                     {hasCustomLabels && !locked && (
                                         <button
                                             type="button"
-                                            onClick={() => onUpdateFields({ rowLabels: [], colLabels: [] })}
+                                            onClick={() => {
+                                                // Row-mode stall names are built from these labels,
+                                                // so clearing them has to renumber too.
+                                                const nextBarn = { ...barn, rowLabels: [], colLabels: [] };
+                                                onUpdateFields({
+                                                    rowLabels: [],
+                                                    colLabels: [],
+                                                    stalls: renumberStalls(barn.stalls || [], nextBarn, gridCols(barn)),
+                                                });
+                                            }}
                                             className="text-muted-foreground hover:text-primary underline ml-auto"
                                         >
                                             Reset row / column names
                                         </button>
                                     )}
                                 </div>
+
+                                {/* How stalls are named. Continuous counts straight through the
+                                    barn; By row joins the row + column labels, so the name on the
+                                    chart is the name the groom is looking for. */}
+                                {!locked && (
+                                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                                        <span className="text-muted-foreground">Stall numbering:</span>
+                                        {[
+                                            { mode: NUMBERING_CONTINUOUS, label: 'Continuous' },
+                                            { mode: NUMBERING_ROW, label: 'By row' },
+                                        ].map(({ mode, label }) => {
+                                            const active = numberingMode(barn) === mode;
+                                            const sample = renumberStalls(barn.stalls || [], { ...barn, numberingMode: mode }, gridCols(barn))
+                                                .filter(s => s.number)
+                                                .slice(0, 2)
+                                                .map(s => s.number)
+                                                .join(', ');
+                                            return (
+                                                <button
+                                                    key={mode}
+                                                    type="button"
+                                                    onClick={() => setNumberingMode(mode)}
+                                                    className={cn(
+                                                        'px-2 py-1 rounded border transition-colors',
+                                                        active
+                                                            ? 'bg-primary text-primary-foreground border-primary'
+                                                            : 'bg-background hover:bg-muted border-border text-muted-foreground',
+                                                    )}
+                                                >
+                                                    {label}
+                                                    {sample && <span className="opacity-70 ml-1">({sample}…)</span>}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
 
                                 {locked ? (
                                     /* Locked — read-only notice instead of the paint palette */
@@ -1490,7 +1556,8 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
 // ── Hay & Shavings Orders (live at-show reorders) ──
 // Fulfillment view for the facility/supply manager. Each order is a supplies-only
 // booking placed from the public event page during the show. Newest first, with a
-// timestamp, who ordered, who they stable with, and a one-click Fulfilled toggle.
+// timestamp, who ordered, who they stable with, and an Amazon-style delivery
+// pipeline the manager advances one stage at a time.
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -1505,19 +1572,153 @@ const fmtOrderedAt = (iso) => {
     }
 };
 
-const SupplyOrderCard = ({ order, onFulfill }) => {
-    const fulfilled = order.fulfillmentStatus === 'fulfilled';
-    const total = order.totalAmount ?? order.amount ?? 0;
+const fmtStageTime = (iso) => {
+    if (!iso) return '';
+    try {
+        return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    } catch {
+        return '';
+    }
+};
+
+// Delivery pipeline, in order. `advanceLabel` is what the button says to move
+// INTO that stage, so stage 0 ("Ordered") has none — that's where orders land.
+const SUPPLY_STAGES = [
+    { key: 'new', label: 'Ordered', icon: ClipboardList, color: 'bg-amber-600' },
+    { key: 'received', label: 'Received', icon: Package, color: 'bg-blue-600', advanceLabel: 'Mark Received' },
+    { key: 'out_for_delivery', label: 'Out for delivery', icon: Truck, color: 'bg-violet-600', advanceLabel: 'Out for Delivery' },
+    { key: 'delivered', label: 'Delivered', icon: CheckCircle2, color: 'bg-emerald-600', advanceLabel: 'Mark Delivered' },
+];
+
+// Orders placed before the pipeline existed only knew 'new' | 'fulfilled'.
+// Treat the old 'fulfilled' as the final 'delivered' stage.
+const stageIndexOf = (order) => {
+    const raw = order.fulfillmentStatus === 'fulfilled' ? 'delivered' : order.fulfillmentStatus;
+    const i = SUPPLY_STAGES.findIndex(s => s.key === raw);
+    return i === -1 ? 0 : i;
+};
+
+const isDelivered = (order) => stageIndexOf(order) === SUPPLY_STAGES.length - 1;
+
+// Compact 4-dot progress rail with a timestamp under each reached stage.
+const StageRail = ({ order }) => {
+    const current = stageIndexOf(order);
+    // 'Ordered' predates the pipeline, so it has no stage stamp — the booking's
+    // own createdAt is the moment it entered that stage.
+    const stamps = { new: order.createdAt, ...(order.stageTimestamps || {}) };
     return (
-        <Card className={cn('border', fulfilled && 'opacity-70 border-emerald-300 dark:border-emerald-800')}>
+        <div className="flex items-start gap-1 mt-3">
+            {SUPPLY_STAGES.map((stage, i) => {
+                const reached = i <= current;
+                const Icon = stage.icon;
+                return (
+                    <React.Fragment key={stage.key}>
+                        {i > 0 && (
+                            <div className={cn(
+                                'h-0.5 flex-1 mt-3.5 rounded',
+                                i <= current ? SUPPLY_STAGES[current].color : 'bg-muted',
+                            )} />
+                        )}
+                        <div className="flex flex-col items-center gap-1 w-20 shrink-0">
+                            <div className={cn(
+                                'h-7 w-7 rounded-full flex items-center justify-center',
+                                reached ? cn(stage.color, 'text-white') : 'bg-muted text-muted-foreground',
+                            )}>
+                                <Icon className="h-4 w-4" />
+                            </div>
+                            <span className={cn(
+                                'text-[10px] leading-tight text-center',
+                                reached ? 'text-foreground font-medium' : 'text-muted-foreground',
+                            )}>
+                                {stage.label}
+                            </span>
+                            {reached && stamps[stage.key] && (
+                                <span className="text-[10px] text-muted-foreground tabular-nums">
+                                    {fmtStageTime(stamps[stage.key])}
+                                </span>
+                            )}
+                        </div>
+                    </React.Fragment>
+                );
+            })}
+        </div>
+    );
+};
+
+const SupplyOrderCard = ({ order, onFulfill, showName }) => {
+    const { toast } = useToast();
+    const current = stageIndexOf(order);
+    const delivered = isDelivered(order);
+    const total = order.totalAmount ?? order.amount ?? 0;
+    const next = SUPPLY_STAGES[current + 1];
+    const [isNotifying, setIsNotifying] = useState(false);
+
+    // Move the order one stage forward or back, stamping the time it entered
+    // each stage. Stepping back clears the stamp so the rail stays honest.
+    const goToStage = async (targetIndex) => {
+        const target = SUPPLY_STAGES[targetIndex];
+        const stamps = { ...(order.stageTimestamps || {}) };
+        const now = new Date().toISOString();
+        if (targetIndex > current) stamps[target.key] = now;
+        else delete stamps[SUPPLY_STAGES[current].key];
+
+        const reachedDelivered = target.key === 'delivered' && targetIndex > current;
+        if (reachedDelivered) setIsNotifying(true);
+
+        await onFulfill(order.id, {
+            fulfillmentStatus: target.key,
+            stageTimestamps: stamps,
+            // Kept in sync for anything still reading the old field.
+            fulfilledAt: target.key === 'delivered' ? now : null,
+        });
+
+        // Amazon-style "your order was delivered" email. The status change is
+        // already saved, so a mail failure must never undo it — just warn.
+        if (!reachedDelivered) return;
+        if (!order.email) {
+            setIsNotifying(false);
+            toast({
+                title: 'Marked delivered',
+                description: 'No email on this order, so no delivery notice was sent.',
+            });
+            return;
+        }
+        try {
+            const { error } = await supabase.functions.invoke('send-supply-order-email', {
+                body: {
+                    kind: 'delivered',
+                    to: order.email,
+                    customerName: order.exhibitorName || 'there',
+                    showName: showName || 'the show',
+                    orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
+                    items: (order.items || []).map(it => ({ name: it.name, amount: it.amount })),
+                    total,
+                    stableWith: order.stableWith || order.trainerName || '',
+                },
+            });
+            if (error) throw error;
+            toast({ title: 'Delivered', description: `Delivery email sent to ${order.email}.` });
+        } catch (err) {
+            toast({
+                title: 'Marked delivered, but email failed',
+                description: err.message || 'The customer was not notified.',
+                variant: 'destructive',
+            });
+        } finally {
+            setIsNotifying(false);
+        }
+    };
+
+    return (
+        <Card className={cn('border', delivered && 'opacity-70 border-emerald-300 dark:border-emerald-800')}>
             <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
                             <Clock className="h-3.5 w-3.5" /> {fmtOrderedAt(order.createdAt)}
-                            {fulfilled && (
-                                <Badge className="bg-emerald-600 text-white text-[10px]">Fulfilled</Badge>
-                            )}
+                            <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
+                                {SUPPLY_STAGES[current].label}
+                            </Badge>
                         </div>
                         <p className="font-semibold">{order.exhibitorName || 'Unknown'}</p>
                         <p className="text-sm text-muted-foreground">
@@ -1528,22 +1729,46 @@ const SupplyOrderCard = ({ order, onFulfill }) => {
                                 <Phone className="h-3.5 w-3.5" /> {order.phone}
                             </p>
                         )}
+                        {order.email && (
+                            <p className="text-sm text-muted-foreground flex items-center gap-1 break-all">
+                                <Mail className="h-3.5 w-3.5 shrink-0" /> {order.email}
+                            </p>
+                        )}
                     </div>
                     <div className="text-right">
                         <p className="text-lg font-bold tabular-nums">{fmtMoney(total)}</p>
-                        <Button
-                            size="sm"
-                            variant={fulfilled ? 'outline' : 'default'}
-                            className={cn('mt-2', !fulfilled && 'bg-emerald-600 hover:bg-emerald-700')}
-                            onClick={() => onFulfill(order.id, {
-                                fulfillmentStatus: fulfilled ? 'new' : 'fulfilled',
-                                fulfilledAt: fulfilled ? null : new Date().toISOString(),
-                            })}
-                        >
-                            {fulfilled ? <>Undo</> : <><CheckCircle2 className="h-4 w-4 mr-1" /> Mark Fulfilled</>}
-                        </Button>
+                        <div className="flex items-center justify-end gap-2 mt-2">
+                            {current > 0 && (
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-muted-foreground"
+                                    onClick={() => goToStage(current - 1)}
+                                    title={`Back to ${SUPPLY_STAGES[current - 1].label}`}
+                                >
+                                    <Undo2 className="h-4 w-4" />
+                                </Button>
+                            )}
+                            {next && (
+                                <Button
+                                    size="sm"
+                                    disabled={isNotifying}
+                                    className={cn('text-white', next.color, 'hover:opacity-90')}
+                                    onClick={() => goToStage(current + 1)}
+                                >
+                                    {isNotifying ? (
+                                        <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Notifying…</>
+                                    ) : (
+                                        <><next.icon className="h-4 w-4 mr-1" /> {next.advanceLabel}</>
+                                    )}
+                                </Button>
+                            )}
+                        </div>
                     </div>
                 </div>
+
+                <StageRail order={order} />
+
                 <div className="mt-3 border-t pt-2 space-y-1">
                     {(order.items || []).map((it, i) => (
                         <div key={i} className="flex justify-between text-sm">
@@ -1557,16 +1782,23 @@ const SupplyOrderCard = ({ order, onFulfill }) => {
     );
 };
 
-const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive }) => {
-    const pending = orders.filter(o => o.fulfillmentStatus !== 'fulfilled');
-    const done = orders.filter(o => o.fulfillmentStatus === 'fulfilled');
+const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName }) => {
+    const pending = orders.filter(o => !isDelivered(o));
+    const done = orders.filter(o => isDelivered(o));
+    // Count of orders sitting in each non-final stage, so the manager can see at a
+    // glance how many are still waiting to be picked vs already on the cart.
+    const countAt = (key) => orders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length;
 
     // Header row: manual refresh + a note that the list updates on its own while live.
     const RefreshBar = () => (
         <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex flex-wrap gap-2">
-                <Badge className="bg-amber-600 text-white">To fulfill: {pending.length}</Badge>
-                <Badge variant="outline">Fulfilled: {done.length}</Badge>
+                {SUPPLY_STAGES.slice(0, -1).map(stage => (
+                    <Badge key={stage.key} className={cn(stage.color, 'text-white')}>
+                        {stage.label}: {countAt(stage.key)}
+                    </Badge>
+                ))}
+                <Badge variant="outline">Delivered: {done.length}</Badge>
             </div>
             <div className="flex items-center gap-2">
                 {isLive && (
@@ -1603,13 +1835,13 @@ const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive 
             <RefreshBar />
             {pending.length > 0 && (
                 <div className="space-y-2">
-                    {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} />)}
+                    {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
                 </div>
             )}
             {done.length > 0 && (
                 <div className="space-y-2">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Fulfilled</p>
-                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} />)}
+                    <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
+                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
                 </div>
             )}
         </div>
@@ -1720,8 +1952,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             return remote.map(r => {
                 const lm = localById.get(r.id);
                 if (!lm) return r;
-                // Trust remote for status/check-in timestamps; keep local for other in-progress edits.
-                return { ...lm, status: r.status, checkedInAt: r.checkedInAt, checkedOutAt: r.checkedOutAt };
+                // Trust remote for anything saved immediately (status, check-in, and the
+                // hay & shavings delivery pipeline); keep local for other in-progress edits.
+                return {
+                    ...lm,
+                    status: r.status,
+                    checkedInAt: r.checkedInAt,
+                    checkedOutAt: r.checkedOutAt,
+                    fulfillmentStatus: r.fulfillmentStatus,
+                    stageTimestamps: r.stageTimestamps,
+                    fulfilledAt: r.fulfilledAt,
+                };
             });
         });
     }, [remoteBookingsRef]);
@@ -2830,6 +3071,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         onRefresh={() => refreshLiveOrders({ silent: false })}
                         isRefreshing={isRefreshingOrders}
                         isLive={publishStatus === 'published'}
+                        showName={show.project_name}
                     />
                 </TabsContent>
 

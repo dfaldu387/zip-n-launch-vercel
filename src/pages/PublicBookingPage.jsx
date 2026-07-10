@@ -274,7 +274,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = 
                         <CardTitle className="flex items-center gap-2 text-lg">
                             <ShoppingCart className="h-5 w-5 text-amber-600" /> Add-Ons & Supplies
                         </CardTitle>
-                        <CardDescription>Optional one-time purchases.</CardDescription>
+                        <CardDescription>Optional one-time purchases, ready when you arrive. You can also order these during the show.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {supplies.map(item => {

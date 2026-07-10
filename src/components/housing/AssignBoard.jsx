@@ -16,7 +16,7 @@ import {
     assignRvSpotToBooking, unassignRvSpot,
 } from '@/lib/rvAssignment';
 import { printStallingChart } from '@/lib/stallingChartPrint';
-import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
+import { gridCols, computeGridLabels, labelValue, renumberStalls } from '@/lib/barnGrid';
 import { STALL_LAYERS, buildLayerIndex, layerCell, layerLegend } from '@/lib/stallLayers';
 
 // ── Assignment Board (Stalls AND RV) ──
@@ -444,18 +444,24 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
 
     // Save a custom row/column label onto its barn (stalls only). Sparse arrays are
     // fine — unset slots fall back to the A,B,C / 1,2,3 defaults.
+    // Under row numbering the stall names are BUILT from these labels, so the barn
+    // must be renumbered whenever one changes. (A no-op in continuous mode.)
+    const withRenumber = (b) => ({ ...b, stalls: renumberStalls(b.stalls || [], b, gridCols(b)) });
+
     const setBarnLabel = (barnId, field, index, value) => {
         const next = (barns || []).map(b => {
             if (b.id !== barnId) return b;
             const arr = [...(b[field] || [])];
             arr[index] = value;
-            return { ...b, [field]: arr };
+            return withRenumber({ ...b, [field]: arr });
         });
         onApplyBarns?.(next);
     };
 
     const resetBarnLabels = (barnId) => {
-        const next = (barns || []).map(b => (b.id === barnId ? { ...b, rowLabels: [], colLabels: [] } : b));
+        const next = (barns || []).map(b =>
+            b.id === barnId ? withRenumber({ ...b, rowLabels: [], colLabels: [] }) : b,
+        );
         onApplyBarns?.(next);
     };
 

@@ -19,18 +19,57 @@ export const stallPrefix = (name) => {
     return (name || 'S').charAt(0).toUpperCase();
 };
 
+// How a barn names its stalls.
+//   continuous → W1, W2, W3 … counted straight through the barn (the original scheme)
+//   row        → B1, B2, B3 … the row label joined to the column label, so the stall
+//                name matches what's printed on the chart and stays put when the
+//                grid is reshaped.
+export const NUMBERING_CONTINUOUS = 'continuous';
+export const NUMBERING_ROW = 'row';
+export const numberingMode = (barn) => barn?.numberingMode || NUMBERING_CONTINUOUS;
+
+const isPhysical = (s) => {
+    const t = s?.type || 'stall';
+    return t === 'stall' || t === 'blocked';
+};
+
 // Number the physical boxes (stall + blocked) continuously — A1, A2, A3… —
 // skipping rooms/aisles/empty so stall numbers have no gaps.
-export const renumberStalls = (arr, prefix) => {
+const numberContinuous = (arr, prefix) => {
     let n = 0;
     return arr.map(s => {
-        const type = s.type || 'stall';
-        if (type === 'stall' || type === 'blocked') {
-            n += 1;
-            return { ...s, number: `${prefix}${n}` };
-        }
-        return { ...s, number: '' };
+        if (!isPhysical(s)) return { ...s, number: '' };
+        n += 1;
+        return { ...s, number: `${prefix}${n}` };
     });
+};
+
+// Name each box after its own row and column label — "B" + "3" → "B3". A row or
+// column the organizer left unlabeled falls back to the barn prefix / its 1-based
+// index, so a box always has a name.
+const numberByRowCol = (arr, barn, cols) => {
+    const c = Math.max(1, cols);
+    const prefix = stallPrefix(barn?.name);
+    const { rowLabels: defRows, colLabels: defCols } = computeGridLabels(arr, c);
+
+    return arr.map((s, i) => {
+        if (!isPhysical(s)) return { ...s, number: '' };
+        const r = Math.floor(i / c);
+        const col = i % c;
+        const rowName = labelValue(barn?.rowLabels, defRows, r) || prefix;
+        const colName = labelValue(barn?.colLabels, defCols, col) || String(col + 1);
+        return { ...s, number: `${rowName}${colName}` };
+    });
+};
+
+// `cols` is passed explicitly because a reshape numbers the NEW matrix while the
+// barn still carries its old layoutCols.
+export const renumberStalls = (arr, barn, cols) => {
+    const barnObj = typeof barn === 'string' ? { name: barn } : (barn || {});
+    if (numberingMode(barnObj) === NUMBERING_ROW) {
+        return numberByRowCol(arr, barnObj, cols ?? gridCols(barnObj));
+    }
+    return numberContinuous(arr, stallPrefix(barnObj.name));
 };
 
 // ── Geometry ──
@@ -134,7 +173,10 @@ const spliceLabels = (labels = [], at, deleteCount, insertCount) => {
 // Build the barn patch from a finished matrix.
 const finish = (barn, matrix, cols, extra = {}) => {
     const flat = matrix.flat();
-    const stalls = renumberStalls(flat, stallPrefix(barn.name));
+    // Number against the barn as it will be AFTER this reshape — `extra` carries the
+    // spliced row/column labels, and row-mode names are built from them.
+    const nextBarn = { ...barn, ...extra, layoutCols: cols };
+    const stalls = renumberStalls(flat, nextBarn, cols);
     return {
         layoutRows: matrix.length,
         layoutCols: cols,

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import {
-    Loader2, ShoppingCart, User, Phone, Plus, Minus, Info,
+    Loader2, ShoppingCart, User, Phone, Mail, Plus, Minus, Info,
     ArrowLeft, PartyPopper, Hash, Copy, Lock, CalendarClock, Clock,
 } from 'lucide-react';
 
@@ -20,6 +20,8 @@ import { supabase } from '@/lib/supabaseClient';
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
 const Divider = () => <div className="h-px bg-border my-2" />;
+
+const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
 // ───────────────────────── Quantity Stepper ─────────────────────────
 
@@ -72,6 +74,7 @@ const QuickSupplyOrderPage = () => {
         stableWith: '',
         name: '',
         phone: '',
+        email: '',
     });
 
     // Load show
@@ -146,7 +149,14 @@ const QuickSupplyOrderPage = () => {
     }, [supplies, quantities]);
 
     const hasSelection = orderSummary.lineItems.length > 0;
-    const canSubmit = hasSelection && details.stableWith.trim() && details.name.trim() && details.phone.trim();
+    const emailOk = isValidEmail(details.email);
+    // Email is required: it's how the rider gets a receipt, a delivery
+    // notification, and how the order is matched to a member account later.
+    const canSubmit = hasSelection
+        && details.stableWith.trim()
+        && details.name.trim()
+        && details.phone.trim()
+        && emailOk;
 
     const handleSubmit = async () => {
         if (!canSubmit) {
@@ -161,6 +171,7 @@ const QuickSupplyOrderPage = () => {
                 source: 'live_supply',
                 exhibitorName: details.name,
                 phone: details.phone,
+                email: details.email.trim().toLowerCase(),
                 // "Stable With / Under" doubles as trainer/group so the existing
                 // admin booking rows still show who this belongs to.
                 stableWith: details.stableWith,
@@ -179,9 +190,30 @@ const QuickSupplyOrderPage = () => {
             });
             if (error) throw error;
 
+            const bookingShortId = String(data || '').slice(0, 8).toUpperCase();
+
+            // Emailed receipt. The order is already saved, so a mail failure must
+            // not look like a failed order — log it and still show the confirmation.
+            try {
+                await supabase.functions.invoke('send-supply-order-email', {
+                    body: {
+                        kind: 'receipt',
+                        to: bookingPayload.email,
+                        customerName: bookingPayload.exhibitorName,
+                        showName: show?.project_name || 'the show',
+                        orderRef: bookingShortId,
+                        items: bookingPayload.items.map(it => ({ name: it.name, amount: it.amount })),
+                        total: bookingPayload.totalAmount,
+                        stableWith: bookingPayload.stableWith,
+                    },
+                });
+            } catch (mailErr) {
+                console.error('Receipt email failed:', mailErr);
+            }
+
             setConfirmation({
                 bookingId: data,
-                bookingShortId: String(data || '').slice(0, 8).toUpperCase(),
+                bookingShortId,
                 payload: bookingPayload,
             });
         } catch (err) {
@@ -267,11 +299,15 @@ const QuickSupplyOrderPage = () => {
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Phone</p>
                                             <p>{confirmation.payload.phone}</p>
                                         </div>
+                                        <div className="sm:col-span-2">
+                                            <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Email</p>
+                                            <p className="break-all">{confirmation.payload.email}</p>
+                                        </div>
                                     </div>
 
                                     <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md p-3 text-sm">
                                         <p className="text-amber-800 dark:text-amber-400 text-xs">
-                                            The facility team has been sent your order and will deliver to your stalls. Payment is arranged on-site — keep your order reference handy.
+                                            The facility team has been sent your order and will deliver to your stalls. A receipt is on its way to <strong>{confirmation.payload.email}</strong>, and we'll email you again the moment it's delivered. Payment is arranged on-site — keep your order reference handy.
                                         </p>
                                     </div>
                                 </CardContent>
@@ -431,6 +467,24 @@ const QuickSupplyOrderPage = () => {
                                             />
                                         </div>
                                     </div>
+                                </div>
+                                <div>
+                                    <Label>Email *</Label>
+                                    <div className="relative">
+                                        <Mail className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                        <Input
+                                            type="email"
+                                            value={details.email}
+                                            onChange={(e) => setDetails(d => ({ ...d, email: e.target.value }))}
+                                            placeholder="rider@example.com"
+                                            className="pl-9"
+                                        />
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        {details.email.trim() && !emailOk
+                                            ? <span className="text-destructive">Please enter a valid email address.</span>
+                                            : "We'll email your receipt and let you know when your order is delivered."}
+                                    </p>
                                 </div>
                             </CardContent>
                         </Card>
