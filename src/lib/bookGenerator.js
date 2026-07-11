@@ -8,6 +8,7 @@ import patternDiagram from '@/assets/pattern-diagram-sample.png';
 import { drawGenericScoreSheetPage, SCORESHEET_LAYOUT } from './genericScoreSheet';
 import { generateCustomLayoutPdf } from './customLayoutRenderer';
 import { getPatternSelectionForAssoc, isAssocKeyedEntry } from './patternSelectionHelpers';
+import { overlayCustomPatternPdfs } from './pdfUtils';
 
 export const generatePatternBookPdf = async (pbbData, options = {}) => {
     console.log('Generating PDF for', pbbData);
@@ -41,6 +42,10 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     // not receive the generic addPageHeader during the hub-mode finalize loop —
     // otherwise the two headers collide.
     const pagesWithOwnHeader = new Set();
+    // Uploaded custom-pattern PDFs to embed onto their placeholder pages after
+    // the jsPDF book is built (jsPDF can't import PDFs; pdf-lib does it as a
+    // post-step). Each entry records the placeholder page + content box.
+    const customPdfOverlays = [];
 
     // --- Helper Functions ---
     const addPageHeader = (text, rightText = null, logoBase64 = null) => {
@@ -100,8 +105,11 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         doc.setFont(fontFamily, 'normal');
         doc.setFontSize(10);
 
-        // 4 gap above title + 12 title line + 6 gap below title
-        let height = 4 + 12 + 6;
+        // 18 gap above title + 12 title line + 6 gap below title.
+        // The 18pt top gap must match the `yPos += 18` in
+        // renderPatternLanguageInline so the image reserves enough room and the
+        // "Pattern Language" heading never collides with the pattern above it.
+        let height = 18 + 12 + 6;
         const textWidth = pageWidth - margin * 2;
         const sorted = [...maneuvers].sort((a, b) => (a.step_no || 0) - (b.step_no || 0));
         for (const m of sorted) {
@@ -123,7 +131,10 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     const renderPatternLanguageInline = (maneuvers, titleBits = {}, fontFamily = 'helvetica') => {
         if (!Array.isArray(maneuvers) || maneuvers.length === 0) return;
 
-        yPos += 4;
+        // Clear separation from the pattern image above so the heading never
+        // visually collides with baked-in text at the image's bottom edge.
+        // Must match the 18pt reserved in estimateManeuversHeight().
+        yPos += 18;
         const { discipline, patternNumber } = titleBits;
         const langTitle = patternNumber
             ? `${discipline || 'Pattern'} \u2013 Pattern ${patternNumber} \u2013 Pattern Language`
@@ -1384,13 +1395,21 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                         yPos = placeholderY + 40;
                     }
                 } else if (patternSelection?.uploadedFileUrl) {
-                    // Uploaded PDF — can't embed inline, show notice
-                    const placeholderY = yPos + 150;
-                    doc.setFontSize(20);
-                    doc.setFont('helvetica', 'bold');
-                    doc.setTextColor(150, 150, 150);
-                    doc.text('Custom Pattern \u2014 See Attached PDF', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
-                    yPos = placeholderY + 40;
+                    const boxTop = yPos;
+                    const boxMaxH = pageHeight - yPos - 44;
+                    // Uploaded PDF: record the placeholder page + content box so the
+                    // actual pattern PDF is embedded here after generation (see
+                    // overlayCustomPatternPdfs). Fill from header (yPos) to footer
+                    // reserve (44pt), matching the image-upload sizing above.
+                    customPdfOverlays.push({
+                        pageIndex: doc.internal.getNumberOfPages(),
+                        url: patternSelection.uploadedFileUrl,
+                        x: PATTERN_IMAGE_MARGIN,
+                        top: boxTop,
+                        maxW: pageWidth - PATTERN_IMAGE_MARGIN * 2,
+                        maxH: boxMaxH,
+                    });
+                    yPos = boxTop + boxMaxH;
                 } else {
                     const placeholderY = yPos + 150;
                     doc.setFontSize(20);
@@ -1661,12 +1680,19 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                             yPos = placeholderY + 40;
                         }
                     } else if (patternSelection?.uploadedFileUrl) {
-                        const placeholderY = yPos + 150;
-                        doc.setFontSize(20);
-                        doc.setFont('times', 'bold');
-                        doc.setTextColor(150, 150, 150);
-                        doc.text('Custom Pattern \u2014 See Attached PDF', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
-                        yPos = placeholderY + 40;
+                        // Uploaded PDF: record placeholder page + box for pdf-lib
+                        // embedding after generation (see overlayCustomPatternPdfs).
+                        const boxTop = yPos;
+                        const boxMaxH = pageHeight - yPos - 44;
+                        customPdfOverlays.push({
+                            pageIndex: doc.internal.getNumberOfPages(),
+                            url: patternSelection.uploadedFileUrl,
+                            x: PATTERN_IMAGE_MARGIN,
+                            top: boxTop,
+                            maxW: pageWidth - PATTERN_IMAGE_MARGIN * 2,
+                            maxH: boxMaxH,
+                        });
+                        yPos = boxTop + boxMaxH;
                     } else {
                         const placeholderY = yPos + 150;
                         doc.setFontSize(20);
@@ -2031,6 +2057,18 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         const pageNum = i - 1; // TOC becomes page 1, first pattern page becomes page 2, etc.
         addPageHeader(pbbData.showName || 'Pattern Book');
         addPageFooter(pageNum);
+    }
+
+    // Embed any uploaded custom-pattern PDFs onto their placeholder pages.
+    // jsPDF can't import PDFs, so this is done as a pdf-lib post-step. Page count
+    // is preserved, so the TOC page numbers drawn above stay correct.
+    if (customPdfOverlays.length > 0) {
+        try {
+            const bookBytes = doc.output('arraybuffer');
+            return await overlayCustomPatternPdfs(bookBytes, customPdfOverlays, pageHeight);
+        } catch (e) {
+            console.error('Failed to embed custom pattern PDFs; returning book without embeds', e);
+        }
     }
 
     return doc.output('datauristring');

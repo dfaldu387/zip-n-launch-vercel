@@ -40,6 +40,76 @@ export const pdfToDataUrls = async (file) => {
     return results;
 };
 
+/**
+ * Post-process a jsPDF-generated pattern book: embed each uploaded custom-pattern
+ * PDF onto its placeholder page using pdf-lib, so the actual pattern appears in
+ * the book (crisp/vector) instead of a "See Attached PDF" notice.
+ *
+ * Each overlay's first page is scaled to fit its box (preserving aspect ratio),
+ * centered horizontally, and top-anchored. Coordinates come from jsPDF, which
+ * uses a top-left origin in points; pdf-lib uses a bottom-left origin, so Y is
+ * flipped with the known page height. Page count is never changed, so the book's
+ * TOC page numbers stay correct. (Only page 1 of a multi-page upload is embedded.)
+ *
+ * On a per-overlay failure (bad URL, CORS, unreadable PDF) it falls back to the
+ * original "See Attached PDF" text on that page so nothing silently disappears.
+ *
+ * @param {ArrayBuffer} bookBytes  jsPDF output from doc.output('arraybuffer')
+ * @param {Array<{pageIndex:number,url:string,x:number,top:number,maxW:number,maxH:number}>} overlays
+ * @param {number} pageHeightPt   book page height in points (jsPDF letter = 792)
+ * @returns {Promise<string>} data URI (data:application/pdf;base64,...)
+ */
+export const overlayCustomPatternPdfs = async (bookBytes, overlays, pageHeightPt) => {
+    const bookDoc = await PDFDocument.load(bookBytes);
+    const pages = bookDoc.getPages();
+    const srcCache = new Map();
+    let fallbackFont = null;
+
+    for (const ov of overlays) {
+        const page = pages[ov.pageIndex - 1];
+        if (!page) continue;
+        try {
+            let srcBytes = srcCache.get(ov.url);
+            if (!srcBytes) {
+                const resp = await fetch(ov.url);
+                if (!resp.ok) throw new Error(`fetch failed (${resp.status})`);
+                srcBytes = await resp.arrayBuffer();
+                srcCache.set(ov.url, srcBytes);
+            }
+            // Embed the first page of the uploaded pattern PDF.
+            const [embedded] = await bookDoc.embedPdf(srcBytes, [0]);
+            const scale = Math.min(ov.maxW / embedded.width, ov.maxH / embedded.height);
+            const drawW = embedded.width * scale;
+            const drawH = embedded.height * scale;
+            const drawX = ov.x + (ov.maxW - drawW) / 2;
+            const drawY = pageHeightPt - ov.top - drawH; // top-anchored (flip Y)
+            page.drawPage(embedded, { x: drawX, y: drawY, width: drawW, height: drawH });
+        } catch (e) {
+            console.error('Custom pattern PDF embed failed for', ov.url, e);
+            if (!fallbackFont) fallbackFont = await bookDoc.embedFont(StandardFonts.HelveticaBold);
+            const txt = 'Custom Pattern — See Attached PDF';
+            const size = 16;
+            const tw = fallbackFont.widthOfTextAtSize(txt, size);
+            page.drawText(txt, {
+                x: (page.getWidth() - tw) / 2,
+                y: pageHeightPt - ov.top - 160,
+                size,
+                font: fallbackFont,
+                color: rgb(0.59, 0.59, 0.59),
+            });
+        }
+    }
+
+    const out = await bookDoc.save();
+    const blob = new Blob([out], { type: 'application/pdf' });
+    return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+};
+
 // Normalize common OCR artifacts and encoding issues
 const normalizeText = (text) => {
     return text

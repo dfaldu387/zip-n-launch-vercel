@@ -5,6 +5,37 @@ import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { MODULE_STATUS, migrateLegacyStatus, migrateAllModuleStatuses, stampModuleStatusOnSave } from '@/lib/moduleStatusService';
 
+// Auto-heal: keep divisionDates in sync with each division's Go 1 date.
+// Older shows (and shows edited with the per-division date picker before the
+// sync fix) can have a stale divisionDates while divisionGos.go1Date holds the
+// newer, correct date. Consumers (Step 6 Organize Schedule, pattern book,
+// scoresheets) read divisionDates, so we normalize it from go1Date on load.
+// go1Date is the source of truth — it is never staler than divisionDates.
+const syncDivisionDatesFromGos = (disciplines) => {
+  if (!Array.isArray(disciplines)) return disciplines;
+  return disciplines.map(disc => {
+    const gos = disc?.divisionGos;
+    if (!gos || typeof gos !== 'object') return disc;
+    const newDivisionDates = { ...(disc.divisionDates || {}) };
+    let changed = false;
+    Object.keys(gos).forEach(divId => {
+      const go1Date = gos[divId]?.go1Date;
+      if (go1Date) {
+        if (newDivisionDates[divId] !== go1Date) {
+          newDivisionDates[divId] = go1Date;
+          changed = true;
+        }
+      } else if (divId in newDivisionDates) {
+        // Go 1 date was cleared — drop the stale divisionDates entry so the
+        // division no longer appears on a day it was removed from.
+        delete newDivisionDates[divId];
+        changed = true;
+      }
+    });
+    return changed ? { ...disc, divisionDates: newDivisionDates } : disc;
+  });
+};
+
 const initialFormData = {
   showName: '',
   showNumber: null,
@@ -113,6 +144,7 @@ export const useShowBuilder = (showId) => {
           setFormData(prev => ({
             ...initialFormData,
             ...showData.project_data,
+            disciplines: syncDivisionDatesFromGos(showData.project_data.disciplines ?? []),
             moduleStatuses: migratedModuleStatuses,
             showStatus: migratedShowStatus,
             id: showId,

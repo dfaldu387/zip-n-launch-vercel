@@ -365,6 +365,10 @@ import React, { useState, useMemo } from 'react';
                                     ...newDivisionGos[divisionId],
                                     go1Date: null
                                 };
+                                // Keep divisionDates in sync — clearing Go 1 clears the date.
+                                const newDivisionDates = { ...(disc.divisionDates || {}) };
+                                delete newDivisionDates[divisionId];
+                                return { ...disc, divisionGos: newDivisionGos, divisionDates: newDivisionDates };
                             } else if (dateType === 'go2') {
                                 newDivisionGos[divisionId] = {
                                     ...newDivisionGos[divisionId],
@@ -438,7 +442,7 @@ import React, { useState, useMemo } from 'react';
                                 if (open && selectedDivisions.length > 0) {
                                     const firstSelectedDiv = divisionsWithData.find(d => d.id === selectedDivisions[0]);
                                     if (firstSelectedDiv?.go1Date) {
-                                        setGo1DateForPopover(new Date(firstSelectedDiv.go1Date));
+                                        setGo1DateForPopover(parseLocalDate(firstSelectedDiv.go1Date));
                                     } else {
                                         setGo1DateForPopover(null);
                                     }
@@ -482,7 +486,7 @@ import React, { useState, useMemo } from 'react';
                                     if (open && selectedDivisions.length > 0) {
                                         const firstSelectedDiv = divisionsWithData.find(d => d.id === selectedDivisions[0]);
                                         if (firstSelectedDiv?.go2Date) {
-                                            setGo2DateForPopover(new Date(firstSelectedDiv.go2Date));
+                                            setGo2DateForPopover(parseLocalDate(firstSelectedDiv.go2Date));
                                         } else {
                                             setGo2DateForPopover(null);
                                         }

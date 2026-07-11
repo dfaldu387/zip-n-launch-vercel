@@ -298,10 +298,15 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
                     // Update the appropriate date based on go number
                     if (division.goNumber === 2) {
                         newDivisionGos[baseId] = { ...currentGoInfo, go2Date: dateString };
-                    } else {
-                        newDivisionGos[baseId] = { ...currentGoInfo, go1Date: dateString };
+                        return { ...disc, divisionGos: newDivisionGos };
                     }
-                    return { ...disc, divisionGos: newDivisionGos };
+                    newDivisionGos[baseId] = { ...currentGoInfo, go1Date: dateString };
+                    // Keep divisionDates in sync with the Go 1 date so Step 6
+                    // (Organize Schedule), the pattern book, and scoresheets all
+                    // read the same competition date. (Matches ScheduleOrganizer.)
+                    const newDivisionDates = { ...(disc.divisionDates || {}) };
+                    newDivisionDates[baseId] = dateString;
+                    return { ...disc, divisionGos: newDivisionGos, divisionDates: newDivisionDates };
                 }
                 return disc;
             })
@@ -323,6 +328,11 @@ const SortableDivisionItem = ({ division, pbbDiscipline, setFormData, formData, 
                             newDivisionGos[baseId] = { ...newDivisionGos[baseId], go2Date: null };
                         } else {
                             newDivisionGos[baseId] = { ...newDivisionGos[baseId], go1Date: null };
+                            // Clearing Go 1 also clears the synced divisionDates entry
+                            // so Step 6 / pattern book / scoresheets drop the removed date.
+                            const newDivisionDates = { ...(disc.divisionDates || {}) };
+                            delete newDivisionDates[baseId];
+                            return { ...disc, divisionGos: newDivisionGos, divisionDates: newDivisionDates };
                         }
                     }
                     return { ...disc, divisionGos: newDivisionGos };

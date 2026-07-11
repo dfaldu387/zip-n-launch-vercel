@@ -1070,28 +1070,25 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
       return groups.every(group => group.divisions && group.divisions.length > 0);
     }
 
-    // Check if any pattern is assigned to any group — a group counts as having a
-    // pattern when it has a selected patternId OR an uploaded file (custom upload
-    // OR a judge who uploaded their own pattern instead of picking from the list).
-    const hasPatternAssigned = groups.some(group => {
-      const selection = getPatternSelection(discipline.id, group.id);
-      return selection?.patternId || selection?.uploadedFileUrl;
-    });
+    // A discipline is complete only when EVERY assignable group is covered.
+    // A group counts as covered when it has a real pattern (patternId), a judge
+    // assignment (type 'judgeAssigned'), OR a custom pattern that has actually
+    // been UPLOADED. A custom request that was only *sent* (name/email filled but
+    // no file yet) does NOT count — the slot is still empty. This mirrors
+    // getPublishReadiness() in patternBookReadiness.js so the Step 5 badge and
+    // the publish gate never disagree.
+    const assignableGroups = groups.filter(g => g.divisions && g.divisions.length > 0);
+    if (assignableGroups.length === 0) return false;
 
-    // Also check that all custom request groups have valid name/email
-    const customRequestGroups = groups.filter(group => {
+    return assignableGroups.every(group => {
       const selection = getPatternSelection(discipline.id, group.id);
-      return selection?.type === 'customRequest';
+      const hasStandard = !!selection?.patternId;
+      const isJudgeAssigned = selection?.type === 'judgeAssigned';
+      const isCustomUploaded =
+        (selection?.type === 'customRequest' && selection?.requestStatus === 'uploaded') ||
+        !!selection?.uploadedFileUrl;
+      return hasStandard || isJudgeAssigned || isCustomUploaded;
     });
-    const customRequestsValid = customRequestGroups.every(group => {
-      const selection = getPatternSelection(discipline.id, group.id);
-      const hasName = !!selection.requestedFromName?.trim();
-      const hasValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(selection.requestedFromEmail || '');
-      return hasName && hasValidEmail;
-    });
-
-    // Discipline is complete if it has patterns or valid custom requests, and all custom requests are valid
-    return (hasPatternAssigned || (customRequestGroups.length > 0 && customRequestsValid)) && customRequestsValid;
   };
 
 
