@@ -1973,6 +1973,13 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         toc.forEach(item => {
             item.page = item.page + tocPageOffset;
         });
+        // Inserting the extra TOC pages shifted every content page forward by
+        // the same amount. Custom-pattern PDF overlays recorded their target
+        // page number BEFORE the insert (see customPdfOverlays.push above), so
+        // bump them by the same offset — otherwise the embedded pattern lands
+        // `tocPageOffset` pages too early, overlaying onto a TOC/earlier page.
+        // (This was the "downloaded pattern overlays two patterns off" bug.)
+        customPdfOverlays.forEach(ov => { ov.pageIndex += tocPageOffset; });
     }
 
     // Now render the TOC

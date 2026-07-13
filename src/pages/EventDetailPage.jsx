@@ -12,6 +12,13 @@ import { events } from '@/lib/eventsData';
 import { format } from 'date-fns';
 import { supabase } from '@/lib/supabaseClient';
 import { downloadPatternJpeg, printPatterns, downloadPatternBookPdf, buildBrandedPatternCanvas } from '@/lib/patternExport';
+import { Document, Page, pdfjs } from 'react-pdf';
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
+
+// Some patterns are organizer-uploaded PDFs (custom requests) rather than database
+// image-patterns. Render their first page inline with react-pdf — worker set once here.
+pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
 const EventDetailPage = () => {
   const { id } = useParams();
@@ -23,12 +30,17 @@ const EventDetailPage = () => {
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
   // Full-size image preview (pattern / score sheet) — works for logged-out visitors.
   const [previewImage, setPreviewImage] = useState(null);
-  // Rider-facing pattern filters: narrow the pattern list by show date and/or division.
+  // Rider-facing pattern filters: narrow the pattern list by discipline, show date and/or division.
+  const [patternDisciplineFilter, setPatternDisciplineFilter] = useState('all');
   const [patternDateFilter, setPatternDateFilter] = useState('all');
   const [patternDivisionFilter, setPatternDivisionFilter] = useState('all');
   // Print-ready branded previews (show name + date + divisions + EquiPatterns baked in),
   // keyed by pattern uid — what the rider sees on the page IS the document they download.
   const [brandedPreviews, setBrandedPreviews] = useState({});
+  // The record that actually holds the patterns (pattern-book project) — used to generate
+  // the WHOLE pattern book (handles custom PDF uploads) via PatternBookDownloadDialog.
+  const [patternBookProject, setPatternBookProject] = useState(null);
+  const [bookDialogOpen, setBookDialogOpen] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -78,28 +90,96 @@ const EventDetailPage = () => {
 
         if (project && project.project_data) {
           const projectDataObj = project.project_data;
-          
+
+          // A single real-world show can span TWO records — housing/stalls built in Horse
+          // Show Manager (project_type 'show') and the patterns built in Pattern Book
+          // Builder (project_type 'pattern_book'). Load the sibling record so this page can
+          // offer BOTH "Book Stalls" and "View Pattern Book" and render patterns even when
+          // they live in the other record. (Same matching as the Events list: link, else
+          // same name + venue + dates.)
+          const identityOf = (row) => {
+            const pd = row.project_data || {};
+            const g = pd.showDetails?.general || {};
+            const v = pd.showDetails?.venue || {};
+            const norm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+            const name = row.project_name || g.showName || '';
+            const loc = v.facilityName || v.address || pd.venueName || pd.venueAddress || '';
+            const sd = g.startDate || pd.startDate || '';
+            const ed = g.endDate || pd.endDate || '';
+            return { key: [norm(name), norm(loc), sd, ed].join('|'), sd, ed };
+          };
+          const primaryIdentity = identityOf(project);
+
+          let siblings = [];
+          try {
+            const { data: candidates } = await supabase
+              .from('projects')
+              .select('id, project_name, project_type, project_data, status, created_at')
+              .in('project_type', ['show', 'pattern_book']);
+            const primLinked = projectDataObj.linkedProjectId || projectDataObj.linkedShowProjectId;
+            siblings = (candidates || []).filter((c) => {
+              if (c.id === project.id) return false;
+              const ci = identityOf(c);
+              // (1) same name + venue + dates (dates required so blank rows never match)
+              if (ci.key === primaryIdentity.key && primaryIdentity.sd && primaryIdentity.ed) return true;
+              // (2) explicit link either direction, only when the dates line up
+              const cLinked = c.project_data?.linkedProjectId || c.project_data?.linkedShowProjectId;
+              const datesMatch = ci.sd === primaryIdentity.sd && ci.ed === primaryIdentity.ed;
+              if (datesMatch && (cLinked === project.id || primLinked === c.id)) return true;
+              return false;
+            });
+          } catch (e) {
+            console.warn('Sibling show lookup failed:', e);
+          }
+
+          const records = [project, ...siblings];
+          const isHousingPub = (p) => p.project_data?.moduleStatuses?.housing === 'published';
+          const isPatternPub = (p) =>
+            ['Final', 'Publication', 'published'].includes(p.status) ||
+            p.project_data?.moduleStatuses?.patternBook === 'published';
+          const housingRec = records.find(isHousingPub) || null;
+          const patternRec = records.find(isPatternPub) || null;
+          const patternPd = patternRec?.project_data || {};
+
+          // Keep Show Details from the primary (housing) record, but flag BOTH modules as
+          // published so both action buttons render.
+          const mergedProjectData = {
+            ...projectDataObj,
+            publicationDate: patternPd.publicationDate || projectDataObj.publicationDate,
+            moduleStatuses: {
+              ...(projectDataObj.moduleStatuses || {}),
+              housing: housingRec ? 'published' : projectDataObj.moduleStatuses?.housing,
+              patternBook: patternRec ? 'published' : projectDataObj.moduleStatuses?.patternBook,
+            },
+          };
+
           // Convert project to event-like format
           const eventFromProject = {
-            id: project.id,
+            id: (housingRec || project).id,           // housing id drives the /show/:id/book route
             name: project.project_name || 'Untitled Show',
             startDate: projectDataObj.startDate || project.created_at,
             endDate: projectDataObj.endDate || project.created_at,
             location: projectDataObj.showLocation || projectDataObj.location || projectDataObj.venueName || projectDataObj.venueAddress || 'Location TBD',
             status: project.status === 'Publication' ? 'upcoming' : 'recent',
-            pattern_book_id: project.id,
+            pattern_book_id: (patternRec || project).id,
             project: { id: project.id, status: project.status },
             isFromProjects: true,
             association: projectDataObj.associations ? Object.keys(projectDataObj.associations).join(', ') : null,
-            projectData: projectDataObj, // Store full project_data for display
+            projectData: mergedProjectData, // Store full project_data for display
           };
 
           setEvent(eventFromProject);
-          setProjectData(projectDataObj);
-          
-          // Fetch patterns and scoresheets data
-          if (projectDataObj.patternSelections || projectDataObj.disciplines) {
-            fetchPatternsAndScoresheets(projectDataObj);
+          setProjectData(mergedProjectData);
+
+          // Patterns come from whichever record actually holds them (the pattern book).
+          const patternBookRec =
+            patternRec && (patternPd.patternSelections || patternPd.disciplines)
+              ? patternRec
+              : project;
+          setPatternBookProject(patternBookRec); // full row → whole-book PDF generation
+          const patternSourcePd = patternBookRec.project_data || {};
+          if (patternSourcePd.patternSelections || patternSourcePd.disciplines) {
+            fetchPatternsAndScoresheets(patternSourcePd);
           }
         } else {
           // Fallback to static events data
@@ -124,96 +204,174 @@ const EventDetailPage = () => {
         const patterns = [];
         const scoresheets = [];
         
-        // Process disciplines and their pattern selections
-        if (projectDataObj.disciplines && projectDataObj.patternSelections) {
-          for (const discipline of projectDataObj.disciplines) {
-            if (!discipline.pattern && !discipline.scoresheet) continue;
-            
-            const disciplineKey = discipline.id || discipline.name;
-            const disciplineSelections = projectDataObj.patternSelections[disciplineKey] || 
-                                        projectDataObj.patternSelections[discipline.id] ||
-                                        projectDataObj.patternSelections[discipline.name];
-            
-            if (!disciplineSelections) continue;
-            
-            // Process pattern groups
-            if (discipline.patternGroups && Array.isArray(discipline.patternGroups)) {
-              for (const group of discipline.patternGroups) {
-                const groupKey = group.id || `pattern-group-${group.name}`;
-                const patternSelection = disciplineSelections[groupKey] || 
-                                       disciplineSelections[group.id] ||
-                                       disciplineSelections[group.name];
-                
-                if (patternSelection && patternSelection.patternId) {
-                  const numericPatternId = typeof patternSelection.patternId === 'number' 
-                    ? patternSelection.patternId 
-                    : parseInt(patternSelection.patternId);
-                  
-                  if (numericPatternId) {
-                    // Fetch pattern image
-                    const { data: patternMedia } = await supabase
-                      .from('tbl_pattern_media')
-                      .select('image_url')
-                      .eq('pattern_id', numericPatternId)
-                      .maybeSingle();
+        // Process disciplines and their pattern selections.
+        // patternSelections keys vary a lot across builder versions (numeric index,
+        // discipline.id, discipline.name, or a composite "Discipline-Name-ASSOC-timestamp"),
+        // and a group's selection may be a raw id string ("pattern-123-ALL") rather than an
+        // object. The simple lookups used before missed all of those, so patterns showed
+        // blank while scoresheets (matched a different way) still appeared. Resolve them the
+        // same robust way the Customer Portal dialog does.
+        const disciplines = projectDataObj.disciplines || [];
+        const patternSelections = projectDataObj.patternSelections || {};
 
-                    const { data: patternInfo } = await supabase
-                      .from('tbl_patterns')
-                      .select('pdf_file_name, pattern_version')
-                      .eq('id', numericPatternId)
-                      .maybeSingle();
+        const disciplineAssociationId = (discipline) =>
+          discipline.association_id ||
+          (discipline.selectedAssociations ? Object.keys(discipline.selectedAssociations).find(k => discipline.selectedAssociations[k]) : null) ||
+          (discipline.associations ? Object.keys(discipline.associations).find(k => discipline.associations[k]) : null);
 
-                    // Resolve the show date for this pattern so riders can filter by it.
-                    // Ungrouped divisions carry `date`; grouped ones store baseId/goNumber,
-                    // so the date is looked up in the discipline's divisionGos map.
-                    const resolveDivisionDate = (d) => {
-                      if (d?.date) return d.date;
-                      const baseId = d?.baseId || d?.id;
-                      const goInfo = discipline.divisionGos?.[baseId] || {};
-                      return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
-                    };
-                    const patternDate = (group.divisions || [])
-                      .map(resolveDivisionDate)
-                      .find(Boolean) || null;
+        const findDisciplineSelections = (discipline, index) => {
+          let sel = patternSelections[discipline.id]
+            || patternSelections[index]
+            || patternSelections[`${index}`]
+            || patternSelections[discipline.name];
+          const associationId = disciplineAssociationId(discipline);
+          if (!sel && discipline.name && associationId) {
+            const nameNorm = discipline.name.replace(/\s+/g, '-').toLowerCase();
+            const key = Object.keys(patternSelections).find(k => {
+              if (!isNaN(parseInt(k))) return false; // skip numeric index keys
+              const kn = k.toLowerCase();
+              return kn.includes(nameNorm) && kn.includes(String(associationId).toLowerCase());
+            });
+            if (key) sel = patternSelections[key];
+          }
+          return sel;
+        };
 
-                    patterns.push({
-                      uid: patterns.length, // stable id — matches branded-preview cache regardless of filtering
-                      discipline: discipline.name,
-                      group: group.name,
-                      divisions: group.divisions || [],
-                      patternId: numericPatternId,
-                      patternName: patternSelection.patternName || patternInfo?.pdf_file_name || `Pattern ${numericPatternId}`,
-                      imageUrl: patternMedia?.image_url || null,
-                      version: patternSelection.version || patternInfo?.pattern_version || null,
-                      date: patternDate,
-                    });
-                  }
-                }
-                
-                // Fetch scoresheet for this group
-                if (discipline.scoresheet && group.divisions && group.divisions.length > 0) {
-                  const division = group.divisions[0];
-                  const assocId = division.assocId || discipline.association_id;
-                  
-                  if (assocId) {
-                    const { data: scoresheetData } = await supabase
-                      .from('tbl_scoresheet')
-                      .select('id, image_url, file_name, discipline')
-                      .eq('association_abbrev', assocId)
-                      .ilike('discipline', `%${discipline.name}%`)
-                      .maybeSingle();
-                    
-                    if (scoresheetData) {
-                      scoresheets.push({
-                        discipline: discipline.name,
-                        group: group.name,
-                        divisions: group.divisions.map(d => d.division || d.name || d),
-                        scoresheetId: scoresheetData.id,
-                        imageUrl: scoresheetData.image_url || null,
-                        fileName: scoresheetData.file_name || null,
-                      });
-                    }
-                  }
+        const findGroupSelection = (disciplineSelections, group, groupIndex) => {
+          const groupId = group.id || `pattern-group-${groupIndex}`;
+          let sel = disciplineSelections[groupIndex]
+            || disciplineSelections[`${groupIndex}`]
+            || disciplineSelections[groupId]
+            || disciplineSelections[group.id]
+            || (Array.isArray(disciplineSelections) ? disciplineSelections[groupIndex] : null);
+          if (!sel) {
+            const key = Object.keys(disciplineSelections).find(k =>
+              k === groupId || k.includes('pattern-group') || k === `group-${groupIndex}`);
+            if (key) sel = disciplineSelections[key];
+          }
+          return sel;
+        };
+
+        const toNumericId = (raw) => {
+          if (raw == null) return null;
+          if (typeof raw === 'number') return raw;
+          if (typeof raw === 'string') {
+            const m = raw.match(/\d+/);
+            return m ? parseInt(m[0]) : null;
+          }
+          return null;
+        };
+
+        for (let i = 0; i < disciplines.length; i++) {
+          const discipline = disciplines[i];
+          const groups = Array.isArray(discipline.patternGroups) ? discipline.patternGroups : [];
+          const disciplineSelections = findDisciplineSelections(discipline, i);
+
+          for (let j = 0; j < groups.length; j++) {
+            const group = groups[j];
+
+            // ---- Pattern ----
+            const patternSelection = disciplineSelections ? findGroupSelection(disciplineSelections, group, j) : null;
+            const selObj = patternSelection && typeof patternSelection === 'object' ? patternSelection : null;
+            const rawPatternId = selObj
+              ? (selObj.patternId || selObj.id || selObj.pattern_id)
+              : patternSelection;
+            const numericPatternId = toNumericId(rawPatternId);
+            // Organizer-uploaded pattern (custom request) — a PDF or image file in storage,
+            // no database pattern id. This is how many 4-H / fair books are built.
+            const isCustomUpload = !!selObj && (selObj.type === 'customRequest' || selObj.uploadedFileUrl || selObj.uploadedFilePath);
+
+            // Resolve the show date for this pattern so riders can filter by it.
+            // Ungrouped divisions carry `date`; grouped ones store baseId/goNumber,
+            // so the date is looked up in the discipline's divisionGos map.
+            const resolveDivisionDate = (d) => {
+              if (d?.date) return d.date;
+              const baseId = d?.baseId || d?.id;
+              const goInfo = discipline.divisionGos?.[baseId] || {};
+              return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
+            };
+            const patternDate = (group.divisions || [])
+              .map(resolveDivisionDate)
+              .find(Boolean) || null;
+
+            if (numericPatternId) {
+              const { data: patternMedia } = await supabase
+                .from('tbl_pattern_media')
+                .select('image_url')
+                .eq('pattern_id', numericPatternId)
+                .maybeSingle();
+
+              const { data: patternInfo } = await supabase
+                .from('tbl_patterns')
+                .select('pdf_file_name, pattern_version')
+                .eq('id', numericPatternId)
+                .maybeSingle();
+
+              const selName = selObj ? selObj.patternName : null;
+              const rawName = selName || patternInfo?.pdf_file_name || `Pattern ${numericPatternId}`;
+
+              patterns.push({
+                uid: patterns.length, // stable id — matches branded-preview cache regardless of filtering
+                discipline: discipline.name,
+                group: group.name,
+                divisions: group.divisions || [],
+                patternId: numericPatternId,
+                patternName: rawName.replace(/\.pdf$/i, '').replace(/_/g, ' ').trim(),
+                imageUrl: patternMedia?.image_url || null,
+                version: (selObj && selObj.version) || patternInfo?.pattern_version || null,
+                date: patternDate,
+              });
+            } else if (isCustomUpload) {
+              let fileUrl = selObj.uploadedFileUrl || null;
+              if (!fileUrl && selObj.uploadedFilePath) {
+                fileUrl = supabase.storage.from('project_files').getPublicUrl(selObj.uploadedFilePath).data?.publicUrl || null;
+              }
+              if (fileUrl) {
+                const fileType = selObj.uploadedFileType || '';
+                const isPdf = /pdf/i.test(fileType) || /\.pdf(\?|$)/i.test(fileUrl);
+                const rawName = selObj.uploadedFileName || selObj.patternName || `${discipline.name} - ${group.name}`;
+                patterns.push({
+                  uid: patterns.length,
+                  discipline: discipline.name,
+                  group: group.name,
+                  divisions: group.divisions || [],
+                  patternId: null,
+                  patternName: rawName.replace(/\.(pdf|jpe?g|png|webp)$/i, '').replace(/_/g, ' ').trim(),
+                  // Images render inline through the existing branded flow; PDFs get a
+                  // react-pdf first-page thumbnail (imageUrl stays null for them).
+                  imageUrl: isPdf ? null : fileUrl,
+                  fileUrl,
+                  fileType,
+                  isPdf,
+                  isCustom: true,
+                  version: null,
+                  date: patternDate,
+                });
+              }
+            }
+
+            // ---- Scoresheet ----
+            if (discipline.scoresheet && group.divisions && group.divisions.length > 0) {
+              const division = group.divisions[0];
+              const assocId = division.assocId || disciplineAssociationId(discipline);
+
+              if (assocId) {
+                const { data: scoresheetData } = await supabase
+                  .from('tbl_scoresheet')
+                  .select('id, image_url, file_name, discipline')
+                  .eq('association_abbrev', assocId)
+                  .ilike('discipline', `%${discipline.name}%`)
+                  .maybeSingle();
+
+                if (scoresheetData) {
+                  scoresheets.push({
+                    discipline: discipline.name,
+                    group: group.name,
+                    divisions: group.divisions.map(d => d.division || d.name || d),
+                    scoresheetId: scoresheetData.id,
+                    imageUrl: scoresheetData.image_url || null,
+                    fileName: scoresheetData.file_name || null,
+                  });
                 }
               }
             }
@@ -261,6 +419,17 @@ const EventDetailPage = () => {
     generate();
     return () => { cancelled = true; };
   }, [patternsData, projectData, event]);
+
+  // Arriving via the "Published" link (…/#event-patterns) — once patterns have loaded,
+  // scroll them into view so the rider lands right on the pattern book.
+  useEffect(() => {
+    if (window.location.hash === '#event-patterns' && patternsData.length > 0) {
+      const t = setTimeout(() => {
+        document.getElementById('event-patterns')?.scrollIntoView({ behavior: 'smooth' });
+      }, 200);
+      return () => clearTimeout(t);
+    }
+  }, [patternsData]);
 
   const handleShare = (platform) => {
     toast({
@@ -329,22 +498,24 @@ const EventDetailPage = () => {
     ? format(new Date(projectData.publicationDate + 'T00:00:00'), 'PPP')
     : '';
 
-  // --- Pattern search/filter (by date + division) ---
+  // --- Pattern search/filter (by discipline + date + division) ---
   const divLabel = (div) =>
     typeof div === 'object' ? (div.division || div.name || div.id) : div;
   const formatPatternDate = (d) => {
     try { return format(new Date(d + 'T00:00:00'), 'PPP'); } catch { return d; }
   };
+  const patternDisciplineOptions = [...new Set(patternsData.map((p) => p.discipline).filter(Boolean))].sort();
   const patternDateOptions = [...new Set(patternsData.map((p) => p.date).filter(Boolean))].sort();
   const patternDivisionOptions = [
     ...new Set(patternsData.flatMap((p) => (p.divisions || []).map(divLabel)).filter(Boolean)),
   ].sort();
   const filteredPatterns = patternsData.filter((p) => {
+    const disciplineOk = patternDisciplineFilter === 'all' || p.discipline === patternDisciplineFilter;
     const dateOk = patternDateFilter === 'all' || p.date === patternDateFilter;
     const divOk =
       patternDivisionFilter === 'all' ||
       (p.divisions || []).map(divLabel).includes(patternDivisionFilter);
-    return dateOk && divOk;
+    return disciplineOk && dateOk && divOk;
   });
 
   // --- Download / print (single pattern + branded pattern book) ---
@@ -590,21 +761,36 @@ const EventDetailPage = () => {
                             <h3 className="font-semibold text-primary flex items-center">
                               <FileText className="h-5 w-5 mr-2" /> Patterns
                             </h3>
-                            {/* Whole-book actions — respect the active date/division filter */}
-                            {filteredPatterns.length > 0 && (
+                            {/* Whole-book action — generates the complete pattern book PDF
+                                (handles custom-uploaded PDFs), with layout + View/Download. */}
+                            {patternBookProject && (
                               <div className="flex items-center gap-2">
-                                <Button variant="outline" size="sm" onClick={handleDownloadBook}>
-                                  <BookOpen className="h-4 w-4 mr-1" /> Download Book (PDF)
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={handlePrintBook}>
-                                  <Printer className="h-4 w-4 mr-1" /> Print Book
+                                <Button variant="outline" size="sm" onClick={() => setBookDialogOpen(true)}>
+                                  <BookOpen className="h-4 w-4 mr-1" /> View / Download Full Book
                                 </Button>
                               </div>
                             )}
                           </div>
-                          {/* Search / filter: find your patterns by show date and/or division */}
-                          {(patternDateOptions.length > 0 || patternDivisionOptions.length > 0) && (
+                          {/* Search / filter: find your patterns by discipline, show date and/or division */}
+                          {(patternDisciplineOptions.length > 0 || patternDateOptions.length > 0 || patternDivisionOptions.length > 0) && (
                             <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                              {patternDisciplineOptions.length > 0 && (
+                                <div className="flex-1">
+                                  <label className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                                    <FileText className="h-3.5 w-3.5" /> Discipline
+                                  </label>
+                                  <select
+                                    value={patternDisciplineFilter}
+                                    onChange={(e) => setPatternDisciplineFilter(e.target.value)}
+                                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                                  >
+                                    <option value="all">All disciplines</option>
+                                    {patternDisciplineOptions.map((d) => (
+                                      <option key={d} value={d}>{d}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
                               {patternDateOptions.length > 0 && (
                                 <div className="flex-1">
                                   <label className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
@@ -639,12 +825,12 @@ const EventDetailPage = () => {
                                   </select>
                                 </div>
                               )}
-                              {(patternDateFilter !== 'all' || patternDivisionFilter !== 'all') && (
+                              {(patternDisciplineFilter !== 'all' || patternDateFilter !== 'all' || patternDivisionFilter !== 'all') && (
                                 <div className="flex items-end">
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => { setPatternDateFilter('all'); setPatternDivisionFilter('all'); }}
+                                    onClick={() => { setPatternDisciplineFilter('all'); setPatternDateFilter('all'); setPatternDivisionFilter('all'); }}
                                   >
                                     Clear
                                   </Button>
@@ -673,7 +859,31 @@ const EventDetailPage = () => {
                                     </div>
                                   </div>
                                 )}
-                                {pattern.imageUrl ? (
+                                {pattern.isPdf && pattern.fileUrl ? (
+                                  /* Organizer-uploaded PDF — first-page thumbnail, click to open full PDF. */
+                                  <a
+                                    href={pattern.fileUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="group relative block w-full mt-2"
+                                    title="Click to open the full PDF"
+                                  >
+                                    <div className="w-full h-48 overflow-hidden rounded border border-border bg-white flex items-start justify-center">
+                                      <Document
+                                        file={pattern.fileUrl}
+                                        loading={<div className="flex h-48 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
+                                        error={<div className="flex h-48 items-center justify-center text-xs text-muted-foreground"><FileText className="h-6 w-6 mr-1" /> PDF pattern</div>}
+                                      >
+                                        <Page pageNumber={1} width={300} renderAnnotationLayer={false} renderTextLayer={false} />
+                                      </Document>
+                                    </div>
+                                    <span className="absolute inset-0 flex items-center justify-center rounded bg-black/0 opacity-0 transition group-hover:bg-black/10 group-hover:opacity-100">
+                                      <span className="inline-flex items-center gap-1 rounded bg-black/70 px-2 py-1 text-xs font-medium text-white">
+                                        <ZoomIn className="h-3.5 w-3.5" /> Open PDF
+                                      </span>
+                                    </span>
+                                  </a>
+                                ) : pattern.imageUrl ? (
                                   <button
                                     type="button"
                                     onClick={() => setPreviewImage({ url: brandedPreviews[pattern.uid] || pattern.imageUrl, title: pattern.patternName })}
@@ -702,8 +912,16 @@ const EventDetailPage = () => {
                                     <ImageIcon className="h-8 w-8 text-muted-foreground" />
                                   </div>
                                 )}
-                                {/* Save to phone / print this single pattern (branded) */}
-                                {pattern.imageUrl && (
+                                {/* Save / print this single pattern */}
+                                {pattern.isPdf && pattern.fileUrl ? (
+                                  <div className="flex gap-2 mt-2">
+                                    <Button asChild variant="outline" size="sm" className="flex-1">
+                                      <a href={pattern.fileUrl} download target="_blank" rel="noopener noreferrer">
+                                        <Download className="h-4 w-4 mr-1" /> Download PDF
+                                      </a>
+                                    </Button>
+                                  </div>
+                                ) : pattern.imageUrl ? (
                                   <div className="flex gap-2 mt-2">
                                     <Button variant="outline" size="sm" className="flex-1" onClick={() => handleDownloadPattern(pattern)}>
                                       <Download className="h-4 w-4 mr-1" /> JPEG
@@ -712,7 +930,7 @@ const EventDetailPage = () => {
                                       <Printer className="h-4 w-4 mr-1" /> Print
                                     </Button>
                                   </div>
-                                )}
+                                ) : null}
                                 {/* Pattern name / group at the bottom; version intentionally hidden */}
                                 <div className="mt-2">
                                   <p className="font-medium text-foreground">{pattern.patternName}</p>
@@ -1049,6 +1267,16 @@ const EventDetailPage = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Whole pattern book — proper generator (includes custom-uploaded PDFs), with
+          layout choice + inline View and Download. Public/logged-out safe (no editing). */}
+      {patternBookProject && (
+        <PatternBookDownloadDialog
+          open={bookDialogOpen}
+          onOpenChange={setBookDialogOpen}
+          project={patternBookProject}
+        />
+      )}
     </div>
   );
 };

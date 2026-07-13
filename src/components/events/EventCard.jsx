@@ -91,18 +91,14 @@ export const EventCard = ({ event, onPatternBookClick }) => {
               <div className="flex items-center">
                 <BookOpen className="h-4 w-4 mr-2" />
                 {['published', 'Publication'].includes(event.project?.status) ? (
-                  <span
-                    className="text-green-600 dark:text-green-400 cursor-pointer hover:underline"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (onPatternBookClick && event.pattern_book_id) {
-                        onPatternBookClick(event.pattern_book_id);
-                      }
-                    }}
+                  /* Go to the event detail page (patterns-first, searchable) — NOT the old
+                     score-sheets-led popup. */
+                  <Link
+                    to={`/event-detail/${event.id}#event-patterns`}
+                    className="text-green-600 dark:text-green-400 hover:underline"
                   >
                     Published
-                  </span>
+                  </Link>
                 ) : ['approved', 'locked'].includes(event.project?.status) ? (
                   <span className="text-blue-600 dark:text-blue-400">Approved</span>
                 ) : (

@@ -113,17 +113,24 @@ const DisciplineGroupHeader = ({ discipline, classes, selectedIds, onBulkToggle 
 };
 
 // Get the assigned competition date for a class from formData disciplines.
-// Reads divisionDates first, then falls back to divisionGos[divId].go1Date
-// for shows whose dates were assigned before divisionDates was kept in sync.
+// IMPORTANT: divId (e.g. "4-H-Youth - Walk Trot 18-Under") is NOT unique across
+// disciplines — several disciplines share the same division names. Match the
+// owning discipline by disciplineId FIRST; only fall back to a divisionOrder
+// search when the class has no disciplineId. Matching by divisionOrder first
+// would pick whichever discipline happens to appear earliest and pull ITS date,
+// making a class show on the wrong day.
+// Within the correct discipline, go1Date is the source of truth (never staler
+// than divisionDates); divisionDates is only a legacy fallback.
 function getClassDate(classItem, formData) {
   const divId = classItem.divisionId || classItem.id;
-  const discipline = (formData.disciplines || []).find(d =>
-    d.id === classItem.disciplineId || (d.divisionOrder || []).includes(divId)
-  );
+  const disciplines = formData.disciplines || [];
+  const discipline =
+    (classItem.disciplineId && disciplines.find(d => d.id === classItem.disciplineId)) ||
+    disciplines.find(d => (d.divisionOrder || []).includes(divId));
   if (!discipline) return null;
   return (
-    discipline.divisionDates?.[divId] ||
     discipline.divisionGos?.[divId]?.go1Date ||
+    discipline.divisionDates?.[divId] ||
     null
   );
 }

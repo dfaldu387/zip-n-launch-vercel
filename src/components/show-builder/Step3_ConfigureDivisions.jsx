@@ -447,15 +447,23 @@ const ArenaContainer = ({ arena, dayId, dayDate, allClassItems, associationsData
 };
 
 // Get the assigned competition date for a class from formData disciplines.
-// Reads divisionDates first, then falls back to divisionGos[divId].go1Date.
+// IMPORTANT: divId is NOT unique across disciplines (many disciplines share the
+// same division names), so scope to the OWNING discipline. classId is normally
+// the composite "disciplineId::divisionId" — use that disciplineId to pick the
+// right discipline; only fall back to a divisionOrder search for a bare divId.
+// Looping all disciplines for the first one with a date pulls the wrong day.
+// Within the discipline, go1Date is the source of truth; divisionDates is a
+// legacy fallback.
 function getClassAssignedDate(classId, formData) {
-    // classId may be composite "disciplineId::divisionId" or plain "divisionId"
-    const divId = classId.includes('::') ? classId.split('::')[1] : classId;
-    for (const disc of formData.disciplines || []) {
-        const date = disc.divisionDates?.[divId] || disc.divisionGos?.[divId]?.go1Date;
-        if (date) return date;
-    }
-    return null;
+    const [discPart, divPart] = classId.includes('::')
+        ? classId.split('::')
+        : [null, classId];
+    const disciplines = formData.disciplines || [];
+    const disc =
+        (discPart && disciplines.find(d => d.id === discPart)) ||
+        disciplines.find(d => (d.divisionOrder || []).includes(divPart));
+    if (!disc) return null;
+    return disc.divisionGos?.[divPart]?.go1Date || disc.divisionDates?.[divPart] || null;
 }
 
 function formatDateShort(dateStr) {

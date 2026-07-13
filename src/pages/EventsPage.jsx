@@ -134,7 +134,12 @@ const EventsPage = () => {
             ['Final', 'Publication', 'published'].includes(p.status) ||
             p.project_data?.moduleStatuses?.patternBook === 'published';
 
-        const showEvents = (showsData || [])
+        // A single real-world show is often stored as TWO project rows — one built in
+        // Horse Show Manager (project_type 'show', housing/stalls) and one in the Pattern
+        // Book Builder (project_type 'pattern_book'). Left alone they draw two cards
+        // ("duplicated" show). Collapse them into ONE card here so View Details can offer
+        // every action (Book Stalls + View Pattern Book) for the same event.
+        const descriptors = (showsData || [])
             .filter(p => {
                 if (!isHousingPublished(p) && !isPatternPublished(p)) return false; // must be live somehow
                 const pd = p.project_data || {};
@@ -148,26 +153,77 @@ const EventsPage = () => {
                 const general = pd.showDetails?.general || {};
                 const venue = pd.showDetails?.venue || {};
                 return {
-                    id: p.id,
+                    p,
+                    pd,
                     name: p.project_name || general.showName || 'Untitled Show',
-                    start_date: general.startDate || pd.startDate,
-                    end_date: general.endDate || pd.endDate,
+                    sd: general.startDate || pd.startDate,
+                    ed: general.endDate || pd.endDate,
                     location: venue.facilityName || venue.address || pd.venueName || pd.venueAddress || '',
-                    thumbnail_url: deriveCoverUrl(pd),  // dedicated cover, else a Show Logo image they already uploaded
-                    coverColor: pd.coverColor || null,  // pattern books may have a saved cover color
-                    status: p.status,
-                    project: { status: p.status },
-                    pattern_book_id: p.id,
-                    _fromShow: true,                              // distinguishes a published project from a seeded event
-                    _housingPublished: isHousingPublished(p),     // drives the "Book Stalls" button on the detail page
-                    _patternPublished: isPatternPublished(p),     // drives the "View Pattern Book" button
+                    linkedId: pd.linkedProjectId || pd.linkedShowProjectId || null,
+                    isHousing: isHousingPublished(p),
+                    isPattern: isPatternPublished(p),
+                    isShowType: p.project_type === 'show',
                 };
             });
 
-        // Dedupe: don't list a show twice if it already has a matching events-table row.
+        // Union-find to group the records that are the same show.
+        const norm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+        const identityKey = (d) => [norm(d.name), norm(d.location), d.sd || '', d.ed || ''].join('|');
+        const parent = {};
+        const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+        const union = (a, b) => { if (parent[a] !== undefined && parent[b] !== undefined) parent[find(a)] = find(b); };
+        descriptors.forEach(d => { parent[d.p.id] = d.p.id; });
+
+        // (1) Same name + venue + dates → same show. Catches records built separately
+        //     without linking (like Larimer, both named identically with the same dates).
+        const seenIdentity = {};
+        descriptors.forEach(d => {
+            const k = identityKey(d);
+            if (seenIdentity[k]) union(d.p.id, seenIdentity[k]);
+            else seenIdentity[k] = d.p.id;
+        });
+        // (2) Explicit link (pattern book → its show) — but only when the dates match, so a
+        //     "duplicate for next year" link (which points at a DIFFERENT year) never merges.
+        const descById = Object.fromEntries(descriptors.map(d => [d.p.id, d]));
+        descriptors.forEach(d => {
+            const t = d.linkedId && descById[d.linkedId];
+            if (t && d.sd === t.sd && d.ed === t.ed) union(d.p.id, d.linkedId);
+        });
+
+        const groups = {};
+        descriptors.forEach(d => { (groups[find(d.p.id)] ||= []).push(d); });
+
+        const showEvents = Object.values(groups).map(members => {
+            // The housing/show record drives the detail + booking routes (/show/:id/book);
+            // the pattern-book record is what "View Pattern Book" must open.
+            const primary = members.find(m => m.isHousing) || members.find(m => m.isShowType) || members[0];
+            const patternMember = members.find(m => m.isPattern) || primary;
+            const anyPattern = members.some(m => m.isPattern);
+            return {
+                id: primary.p.id,
+                name: primary.name,
+                start_date: primary.sd,
+                end_date: primary.ed,
+                location: primary.location,
+                thumbnail_url: members.map(m => deriveCoverUrl(m.pd)).find(Boolean) || null,
+                coverColor: members.map(m => m.pd.coverColor).find(Boolean) || null,
+                status: primary.p.status,
+                // Show the green clickable "Published" when the book is live, whatever the
+                // housing record's own status is.
+                project: { status: anyPattern ? 'published' : primary.p.status },
+                pattern_book_id: patternMember.p.id,
+                _fromShow: true,                                 // distinguishes a published project from a seeded event
+                _housingPublished: members.some(m => m.isHousing),
+                _patternPublished: anyPattern,
+                _memberIds: members.map(m => m.p.id),            // every record that makes up this show (for the detail page)
+            };
+        });
+
+        // Dedupe: don't list a show twice if any of its records already has a matching events-table row.
         const eventIds = new Set(formattedEvents.map(e => e.id));
         const eventPatternBookIds = new Set(formattedEvents.map(e => e.pattern_book_id).filter(Boolean));
-        const dedupedShowEvents = showEvents.filter(s => !eventIds.has(s.id) && !eventPatternBookIds.has(s.id));
+        const dedupedShowEvents = showEvents.filter(s =>
+            !s._memberIds.some(id => eventIds.has(id) || eventPatternBookIds.has(id)));
 
         const mergedEvents = [...formattedEvents, ...dedupedShowEvents];
         setAllEvents(mergedEvents);
