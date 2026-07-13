@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers } from 'lucide-react';
+import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2 } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
     assignStallToBooking, unassignStall, applyPlanToBarns,
@@ -15,7 +15,7 @@ import {
     ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking,
     assignRvSpotToBooking, unassignRvSpot,
 } from '@/lib/rvAssignment';
-import { printStallingChart } from '@/lib/stallingChartPrint';
+import { printStallingChart, downloadStallingChartPdf } from '@/lib/stallingChartPrint';
 import { gridCols, computeGridLabels, labelValue, renumberStalls } from '@/lib/barnGrid';
 import { STALL_LAYERS, buildLayerIndex, layerCell, layerLegend } from '@/lib/stallLayers';
 
@@ -253,6 +253,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     const [fit, setFit] = useState(false);
     const [railOpen, setRailOpen] = useState(true);
     const [layer, setLayer] = useState('number');
+    const [isDownloadingChart, setIsDownloadingChart] = useState(false);
 
     // Selecting a booking and selecting a group are mutually exclusive.
     const pickBooking = (id) => { setSelectedGroupId(null); setSelectedBookingId(id); };
@@ -539,6 +540,27 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                             dateRange: meta.dateRange || '',
                         })}>
                         <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Chart
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 text-xs shrink-0" disabled={isDownloadingChart}
+                        title="Download the whole chart as a one-page PDF"
+                        onClick={async () => {
+                            setIsDownloadingChart(true);
+                            try {
+                                const ok = await downloadStallingChartPdf({
+                                    barns, rvAreas: rvWithSpots, bookings, supplies,
+                                    layer: mode === 'stalls' ? layer : 'number',
+                                    showName: meta.showName || 'Show',
+                                    facility: meta.facility || '',
+                                    dateRange: meta.dateRange || '',
+                                });
+                                if (!ok) toast({ title: 'Download failed', description: 'Could not build the chart PDF.', variant: 'destructive' });
+                            } finally {
+                                setIsDownloadingChart(false);
+                            }
+                        }}>
+                        {isDownloadingChart
+                            ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Building…</>
+                            : <><Download className="h-3.5 w-3.5 mr-1.5" /> Download PDF</>}
                     </Button>
                 </div>
             </div>

@@ -12,6 +12,8 @@
 import { ensureAllRvSpots } from '@/lib/rvAssignment';
 import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
 import { buildLayerIndex, layerCell, layerById, layerLegend } from '@/lib/stallLayers';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 const PALETTE = [
     '#2563eb', '#16a34a', '#db2777', '#d97706', '#7c3aed',
@@ -38,10 +40,10 @@ const groupNameOf = (b) => {
 // Room labels shown in non-stall boxes; aisle/empty print blank for a clean chart.
 const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack' };
 
-export function printStallingChart({
+function buildStallingChartHtml({
     barns = [], rvAreas = [], bookings = [], supplies = [],
     layer = 'number', showName = 'Show', facility = '', dateRange = '',
-}) {
+}, autoPrint = false) {
     // Stable color per booking that owns stalls (same order the board uses).
     const active = (bookings || []).filter(b => b && b.status !== 'cancelled');
     const stallBookings = active.filter(b => b.orderType !== 'live-supply');
@@ -230,12 +232,88 @@ export function printStallingChart({
         ${barnBlocks}
         ${rvBlocks}
         ${!barnBlocks && !rvBlocks ? '<p>Nothing to show yet.</p>' : ''}
-        <script>window.onload=function(){window.focus();window.print();}<\/script>
+        ${autoPrint ? '<script>window.onload=function(){window.focus();window.print();}<\/script>' : ''}
     </body></html>`;
 
+    return html;
+}
+
+// Open a clean print window (browser print / Save-as-PDF).
+export function printStallingChart(opts) {
+    const html = buildStallingChartHtml(opts, true);
     const w = window.open('', '_blank');
     if (!w) return false;
     w.document.write(html);
     w.document.close();
     return true;
+}
+
+// Download the chart as a PDF scaled to fit ONE page. Renders the same clean chart
+// HTML off-screen (in an isolated iframe so its styles don't touch the app), snapshots
+// it with html2canvas, then places that image on a single letter page — landscape or
+// portrait, whichever fits the chart better.
+export async function downloadStallingChartPdf(opts) {
+    const html = buildStallingChartHtml(opts, false);
+
+    // Off-screen iframe → style isolation + full-content layout.
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.left = '-10000px';
+    iframe.style.top = '0';
+    iframe.style.width = '1100px';   // fixed render width → predictable, readable layout
+    iframe.style.height = '100px';
+    iframe.style.border = '0';
+    iframe.style.background = '#ffffff';
+    document.body.appendChild(iframe);
+
+    try {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open();
+        doc.write(html);
+        doc.close();
+
+        // Let the browser lay out (and load web fonts) before snapshotting.
+        await new Promise((r) => setTimeout(r, 350));
+
+        const body = doc.body;
+        const fullW = Math.max(body.scrollWidth, 1100);
+        const fullH = body.scrollHeight;
+        iframe.style.height = fullH + 'px';
+
+        const canvas = await html2canvas(body, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            width: fullW,
+            height: fullH,
+            windowWidth: fullW,
+            windowHeight: fullH,
+        });
+
+        const imgW = canvas.width;
+        const imgH = canvas.height;
+        // Orientation that best fits the chart's shape.
+        const orientation = imgW >= imgH ? 'l' : 'p';
+        const pdf = new jsPDF(orientation, 'pt', 'letter');
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+        const margin = 18;
+        const availW = pageW - margin * 2;
+        const availH = pageH - margin * 2;
+        // Single-page fit: shrink (never enlarge) so the whole chart lands on one page.
+        const scale = Math.min(availW / imgW, availH / imgH);
+        const drawW = imgW * scale;
+        const drawH = imgH * scale;
+        const x = (pageW - drawW) / 2;
+        const y = margin;
+
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, drawW, drawH);
+        const safeName = (opts.showName || 'Show').replace(/[^\w\- ]+/g, '').trim() || 'Show';
+        pdf.save(`${safeName} - Stalling Chart.pdf`);
+        return true;
+    } catch (e) {
+        console.error('Failed to build stalling chart PDF:', e);
+        return false;
+    } finally {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    }
 }
