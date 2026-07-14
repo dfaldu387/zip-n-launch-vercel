@@ -20,14 +20,48 @@ function dataUriToBlob(dataUri) {
     return new Blob([bytes], { type: mime });
 }
 
-// In-memory PDF blob cache — key: `${projectId}::${updatedAt}::${layout}`
+// In-memory PDF blob cache — key: `${projectId}::${updatedAt}::${contentSig}::${layout}`
 // Prevents re-generating the same PDF when user clicks View/Download repeatedly.
 const pdfBlobCache = new Map();
 const PDF_CACHE_MAX = 20;
 
+// Small, stable string hash (djb2). Used to fold the actual pattern content into
+// the cache key so edits bust the cache even when `updated_at` never changes.
+function hashString(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(36);
+}
+
+// Signature of the pattern data that actually drives the rendered book. In the
+// builder/portal paths `updated_at` is often missing, so keying on it alone made
+// Layout B keep serving a stale blob after patterns were edited. Hashing the
+// pattern selections (and group patterns) guarantees any edit busts the cache.
+function getContentSignature(project) {
+    const pd = project?.project_data || {};
+    try {
+        return hashString(JSON.stringify({
+            selections: pd.patternSelections ?? null,
+            groups: (pd.disciplines || []).map((d) => ({
+                id: d?.disciplineId ?? d?.id,
+                groups: (d?.patternGroups || []).map((g) => ({
+                    id: g?.id,
+                    pattern: g?.pattern ?? g?.patternId ?? null,
+                    date: g?.date ?? null,
+                })),
+            })),
+        }));
+    } catch {
+        return '0';
+    }
+}
+
 function getCacheKey(project, layout) {
     const id = project?.id || 'anon';
     const updated = project?.updated_at || project?.project_data?.updated_at || '0';
+    const contentSig = getContentSignature(project);
     // Layout C varies by the latest published snapshot — include its publishedAt
     // so a fresh publish busts the cache even if the project's updated_at hasn't
     // persisted yet.
@@ -37,7 +71,7 @@ function getCacheKey(project, layout) {
         const latest = versions[versions.length - 1];
         if (latest) layoutTag = `layout-c::${latest.versionLabel}::${latest.publishedAt || ''}`;
     }
-    return `${id}::${updated}::${layoutTag}`;
+    return `${id}::${updated}::${contentSig}::${layoutTag}`;
 }
 
 function putCache(key, blob) {

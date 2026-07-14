@@ -809,7 +809,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             maxLines: 3,
             startSize: 44,
             minSize: 22,
-            font: 'times',
+            font: 'helvetica',
             style: 'bold',
         });
         const associations = Array.isArray(pbbData.associations) ? pbbData.associations : [];
@@ -822,7 +822,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             (associations.length > 0 ? 24 : 0);
         let cursorY = band2Top + (bandH - blockH) / 2 + titleFit.size;
 
-        doc.setFont('times', 'bold');
+        doc.setFont('helvetica', 'bold');
         doc.setFontSize(titleFit.size);
         doc.text(titleFit.lines, pageWidth / 2, cursorY, { align: 'center' });
         cursorY += (titleFit.lines.length - 1) * titleFit.size * 1.15 + 20;
@@ -832,7 +832,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         doc.line(pageWidth / 2 - 100, cursorY, pageWidth / 2 + 100, cursorY);
         cursorY += 24;
 
-        doc.setFont('times', 'italic');
+        doc.setFont('helvetica', 'italic');
         doc.setFontSize(20);
         if (hasDates) {
             const dateText = `${format(parseLocalDate(pbbData.startDate), 'MMMM d')} – ${format(parseLocalDate(pbbData.endDate), 'd, yyyy')}`;
@@ -842,14 +842,14 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
 
         if (pbbData.venueAddress) {
             doc.setFontSize(14);
-            doc.setFont('times', 'normal');
+            doc.setFont('helvetica', 'normal');
             doc.text(pbbData.venueAddress, pageWidth / 2, cursorY, { align: 'center', maxWidth: pageWidth - 120 });
             cursorY += 22;
         }
 
         if (associations.length > 0) {
             doc.setFontSize(13);
-            doc.setFont('times', 'bold');
+            doc.setFont('helvetica', 'bold');
             const assocText = associations.map(a => formatAssociationName(a.id)).join(' • ');
             doc.text(assocText, pageWidth / 2, cursorY, { align: 'center' });
         }
@@ -963,7 +963,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
         addNewPage();
         
         // Header
-        doc.setFont('times', 'bold');
+        doc.setFont('helvetica', 'bold');
         doc.setFontSize(14);
         doc.setTextColor(100, 100, 100);
         doc.text('(Patterns located in the Rule Book)', pageWidth / 2, margin + 20, { align: 'center' });
@@ -982,7 +982,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             }
             
             // Discipline Header
-            doc.setFont('times', 'bold');
+            doc.setFont('helvetica', 'bold');
             doc.setFontSize(16);
             doc.setTextColor(0, 0, 0);
             doc.text(discipline.name, margin, yPos);
@@ -999,7 +999,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             yPos += 20;
             
             // List Classes
-            doc.setFont('times', 'normal');
+            doc.setFont('helvetica', 'normal');
             doc.setFontSize(10);
             
             for (const [groupIndex, group] of (discipline.patternGroups || []).entries()) {
@@ -1588,7 +1588,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 if (skipCoverAndToc) {
                     // Hub mode: compact single-line header
                     doc.setTextColor(0, 0, 0);
-                    doc.setFont('times', 'bold');
+                    doc.setFont('helvetica', 'bold');
                     doc.setFontSize(10);
                     const headerLine = `${assocName.toUpperCase()}  •  ${discipline.name.toUpperCase()}  •  ${dateStrB}`;
                     doc.text(headerLine, margin, yPos, { maxWidth: pageWidth - margin * 2 });
@@ -1596,11 +1596,11 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 } else {
                 // Line 1: Association (bold) + date (right-aligned)
                 doc.setTextColor(0, 0, 0);
-                doc.setFont('times', 'bold');
+                doc.setFont('helvetica', 'bold');
                 doc.setFontSize(11);
                 doc.text(assocName.toUpperCase(), margin, yPos);
                 if (dateStrB) {
-                    doc.setFont('times', 'normal');
+                    doc.setFont('helvetica', 'normal');
                     doc.setFontSize(9);
                     doc.setTextColor(100, 100, 100);
                     doc.text(dateStrB, pageWidth - margin, yPos, { align: 'right' });
@@ -1610,7 +1610,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
 
                 // Line 2: Discipline name
                 doc.setFontSize(10);
-                doc.setFont('times', 'bold');
+                doc.setFont('helvetica', 'bold');
                 const disciplineTextB = discipline.name.toUpperCase();
                 const disciplineMaxWidthB = pageWidth - margin * 2;
                 const disciplineLinesB = doc.splitTextToSize(disciplineTextB, disciplineMaxWidthB);
@@ -1621,7 +1621,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 const customLabelB = group.customLabel;
                 if (customLabelB) {
                     doc.setFontSize(9);
-                    doc.setFont('times', 'italic');
+                    doc.setFont('helvetica', 'italic');
                     doc.setTextColor(80, 80, 80);
                     doc.text(customLabelB, margin, yPos);
                     doc.setTextColor(0, 0, 0);
@@ -1632,7 +1632,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 const divisionsB = group.divisions?.map(d => formatDivisionWithGo(d)).join(' / ') || '';
                 if (divisionsB) {
                     doc.setFontSize(9);
-                    doc.setFont('times', 'normal');
+                    doc.setFont('helvetica', 'normal');
                     const maxWidthB = pageWidth - margin * 2;
                     const divisionLinesB = doc.splitTextToSize(divisionsB, maxWidthB);
                     const linesToDisplayB = divisionLinesB.slice(0, 2);
@@ -1648,7 +1648,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 if (isJudgeAssigned) {
                     const placeholderY = yPos + 150;
                     doc.setFontSize(20);
-                    doc.setFont('times', 'bold');
+                    doc.setFont('helvetica', 'bold');
                     doc.setTextColor(150, 150, 150);
                     doc.text(`Pattern to be selected by Judge: ${patternSelection?.judgeName || 'TBD'}`, pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                     yPos = placeholderY + 40;
@@ -1674,7 +1674,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                         } catch (_e) {
                             const placeholderY = yPos + 150;
                             doc.setFontSize(20);
-                            doc.setFont('times', 'bold');
+                            doc.setFont('helvetica', 'bold');
                             doc.setTextColor(150, 150, 150);
                             doc.text('Custom Pattern \u2014 Uploaded (PDF)', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                             yPos = placeholderY + 40;
@@ -1696,7 +1696,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     } else {
                         const placeholderY = yPos + 150;
                         doc.setFontSize(20);
-                        doc.setFont('times', 'bold');
+                        doc.setFont('helvetica', 'bold');
                         doc.setTextColor(150, 150, 150);
                         doc.text('Custom Pattern \u2014 Awaiting Upload', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                         yPos = placeholderY + 40;
@@ -1720,7 +1720,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 } else if (hasNoPattern) {
                     const placeholderY = yPos + 150;
                     doc.setFontSize(20);
-                    doc.setFont('times', 'bold');
+                    doc.setFont('helvetica', 'bold');
                     doc.setTextColor(150, 150, 150);
                     doc.text('Pattern Coming Soon', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                     yPos = placeholderY + 40;
@@ -1744,7 +1744,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                 const maneuversForB = (numericPatternId && patternManeuversMap.has(numericPatternId))
                     ? patternManeuversMap.get(numericPatternId)
                     : null;
-                const maneuversHeightB = estimateManeuversHeight(maneuversForB, 'times');
+                const maneuversHeightB = estimateManeuversHeight(maneuversForB, 'helvetica');
 
                 if (patternImageBase64) {
                     try {
@@ -1775,7 +1775,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                         console.error('Failed to add pattern image:', e);
                         const placeholderY = yPos + 150;
                         doc.setFontSize(20);
-                        doc.setFont('times', 'bold');
+                        doc.setFont('helvetica', 'bold');
                         doc.setTextColor(150, 150, 150);
                         doc.text('Pattern Coming Soon', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                         yPos = placeholderY + 40;
@@ -1784,7 +1784,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     // No image found for this pattern
                     const placeholderY = yPos + 150;
                     doc.setFontSize(20);
-                    doc.setFont('times', 'bold');
+                    doc.setFont('helvetica', 'bold');
                     doc.setTextColor(150, 150, 150);
                     doc.text('Pattern Coming Soon', pageWidth / 2, placeholderY, { align: 'center', maxWidth: pageWidth - margin * 2 });
                     yPos = placeholderY + 40;
@@ -1795,7 +1795,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
                     renderPatternLanguageInline(maneuversForB, {
                         discipline: discipline.name,
                         patternNumber: extractPatternNumber(patternSelection?.patternName),
-                    }, 'times');
+                    }, 'helvetica');
                 }
 
                 } // end else (real pattern)
@@ -1986,11 +1986,11 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
     doc.setPage(tocStartPage);
 
     {
-        // Layout B switches to an italic serif font family; the layout structure
-        // (heading + table) is shared, only the grouping differs (built above).
-        const tocFontFamily = selectedLayout === 'layout-b' ? 'times' : 'helvetica';
-        const tocHeaderStyle = selectedLayout === 'layout-b' ? 'bolditalic' : 'bold';
-        const tocRowStyle = selectedLayout === 'layout-b' ? 'italic' : 'normal';
+        // Layout B now shares Layout A's font/styling (Robert's request); the
+        // layout structure (heading + table) is shared, only the grouping differs.
+        const tocFontFamily = 'helvetica';
+        const tocHeaderStyle = 'bold';
+        const tocRowStyle = 'normal';
         yPos = margin + 30;
         doc.setTextColor(40, 40, 40);
         // Auto-fit the TOC header so long show names don't get cut off on

@@ -15,10 +15,14 @@ import { buildLayerIndex, layerCell, layerById, layerLegend } from '@/lib/stallL
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
+// Ordered so the first 12 colours are all clearly distinct (no two greens / teals /
+// reds) — spread across the wheel and varied in lightness. MUST stay identical to the
+// PALETTE in components/housing/AssignBoard.jsx so a person reads the same colour on the
+// board, the RV view and the printout.
 const PALETTE = [
-    '#2563eb', '#16a34a', '#db2777', '#d97706', '#7c3aed',
-    '#0891b2', '#dc2626', '#4f46e5', '#059669', '#ca8a04',
-    '#be123c', '#0d9488', '#9333ea', '#c2410c', '#1d4ed8',
+    '#2563eb', '#e11d48', '#16a34a', '#f59e0b', '#7c3aed',
+    '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569',
+    '#0d9488', '#a21caf', '#ca8a04', '#4f46e5', '#92400e',
 ];
 
 const NO_GROUP = '__none__';
@@ -28,6 +32,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => (
 ));
 
 const rvCols = (area) => Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
+
+// Hex + 2-digit alpha, so a faded (muted) stall still hints at its owner's colour —
+// same rule the on-screen board uses.
+const withAlpha = (hex, aa) => `${hex}${aa}`;
 
 // Same rule the board uses: a manual group wins, else the trainer / ranch name.
 const groupNameOf = (b) => {
@@ -78,16 +86,18 @@ function buildStallingChartHtml({
         if (!sides) return '';
         const p = [];
         const b = [];
-        if (sides.top) { p.push(`inset 0 3px 0 0 ${color}`); b.push(`border-top-color:${color}`); }
-        if (sides.bottom) { p.push(`inset 0 -3px 0 0 ${color}`); b.push(`border-bottom-color:${color}`); }
-        if (sides.left) { p.push(`inset 3px 0 0 0 ${color}`); b.push(`border-left-color:${color}`); }
-        if (sides.right) { p.push(`inset -3px 0 0 0 ${color}`); b.push(`border-right-color:${color}`); }
+        // A white inner line beside the group colour so the outline still reads on top
+        // of a dark, solid-filled box (identical to the board's outlineShadow).
+        if (sides.top) { p.push(`inset 0 3px 0 0 ${color}`, `inset 0 4px 0 0 rgba(255,255,255,0.75)`); b.push(`border-top-color:${color}`); }
+        if (sides.bottom) { p.push(`inset 0 -3px 0 0 ${color}`, `inset 0 -4px 0 0 rgba(255,255,255,0.75)`); b.push(`border-bottom-color:${color}`); }
+        if (sides.left) { p.push(`inset 3px 0 0 0 ${color}`, `inset 4px 0 0 0 rgba(255,255,255,0.75)`); b.push(`border-left-color:${color}`); }
+        if (sides.right) { p.push(`inset -3px 0 0 0 ${color}`, `inset -4px 0 0 0 rgba(255,255,255,0.75)`); b.push(`border-right-color:${color}`); }
         return p.length ? `box-shadow:${p.join(', ')};${b.join(';')};` : '';
     };
 
     // Build the HTML for one box (stall or RV spot). RV spots carry no `type` and no
     // layer, so they render as free/taken with their number.
-    const cellHtml = (unit, { outline = '', tag = '', useLayer = false } = {}) => {
+    const cellHtml = (unit, { outline = '', useLayer = false } = {}) => {
         const type = unit.type || 'stall';
         if (type !== 'stall') {
             // Blocked shows its number; office/feed/wash/tack show their name; aisle &
@@ -100,23 +110,23 @@ function buildStallingChartHtml({
 
         const base = colorByBooking[owner.id] || '#2563eb';
         const info = useLayer ? layerCell(layer, { unit, index }) : { text: unit.number, sub: '', tone: 'booked' };
-        // Boxes print white so names stay readable and ink stays cheap. Ownership is
-        // carried by the coloured border and the bar along the bottom. Pre-bedded stalls
-        // get an amber wash; a stall with nothing to say on this layer pales.
+        // Match the on-screen board: fill the box with the owner's colour and print the
+        // name in white so the chart reads the same everywhere. Pre-bedded stalls are
+        // amber; a stall with nothing to show on this layer fades to a light wash of the
+        // owner's colour with dark text.
         const warm = info.tone === 'warm';
         const pale = info.tone === 'muted';
+        const fill = warm ? '#f59e0b' : pale ? withAlpha(base, '55') : base;
         const main = esc(info.text || unit.number);
         const sub = info.sub && info.sub !== info.text ? `<span class="num2">${esc(info.sub)}</span>` : '';
-        const cls = `cell taken${warm ? ' warm' : ''}${pale ? ' pale' : ''}`;
-        return `<div class="${cls}" style="border-color:${base};${outline}">
-            ${tag}
+        const cls = `cell taken${pale ? ' pale' : ''}`;
+        return `<div class="${cls}" style="background:${fill};border-color:${fill};${outline}">
             <span class="name">${main}</span>
             ${sub}
-            <span class="owner" style="background:${base}"></span>
         </div>`;
     };
 
-    const containerBlock = (name, cols, units, rowLabels = [], colLabels = [], useLayer = false) => {
+    const containerBlock = (name, cols, units, rowLabels = [], colLabels = [], useLayer = false, hideName = false) => {
         const total = units.filter(u => (u.type || 'stall') === 'stall').length;
         const assigned = units.filter(u => (u.type || 'stall') === 'stall' && u.bookingId).length;
         const rowCount = Math.ceil(units.length / cols);
@@ -146,7 +156,7 @@ function buildStallingChartHtml({
                 const unit = units[idx];
                 if (!unit) { cells += `<div class="cell free"></div>`; continue; }
                 const gid = unit.bookingId ? groupIdByBooking[unit.bookingId] : null;
-                let outline = '', tag = '';
+                let outline = '';
                 if (gid) {
                     const sides = {
                         top: gOf(idx - cols) !== gid,
@@ -154,24 +164,36 @@ function buildStallingChartHtml({
                         left: ci === 0 || gOf(idx - 1) !== gid,
                         right: ci === cols - 1 || gOf(idx + 1) !== gid,
                     };
+                    // Group identity is carried by the coloured block + the top legend
+                    // (Robert's pick — a long name never fit inside one narrow box), so we
+                    // draw only the group outline here, no on-box name tag.
                     outline = outlineStyle(sides, colorByGroup[gid]);
-                    // The group's name, printed once at the top-left box of its block.
-                    if (sides.top && sides.left) {
-                        tag = `<span class="gtag" style="background:${colorByGroup[gid]}">${esc(groupLabel[gid])}</span>`;
-                    }
                 }
-                cells += cellHtml(unit, { outline, tag, useLayer });
+                cells += cellHtml(unit, { outline, useLayer });
             }
         }
         return `<section class="barn">
-            <h2>${esc(name)} <span class="meta">${assigned}/${total} assigned</span></h2>
+            ${hideName ? '' : `<h2>${esc(name)} <span class="meta">${assigned}/${total} assigned</span></h2>`}
             <div class="grid" style="grid-template-columns:26px repeat(${cols}, 1fr)">${cells}</div>
         </section>`;
     };
 
-    const barnBlocks = (barns || [])
-        .map(barn => containerBlock(barn.name, gridCols(barn), barn.stalls || [], barn.rowLabels || [], barn.colLabels || [], true))
+    // A single-barn chart (the common case) shows the barn name big at the top-right
+    // of the page instead of above the grid — Robert: "move West Pavilion up to the
+    // top right". Multi-barn charts keep the name above each grid so they stay labelled.
+    const barnList = barns || [];
+    const singleBarn = barnList.length === 1;
+    const barnBlocks = barnList
+        .map(barn => containerBlock(barn.name, gridCols(barn), barn.stalls || [], barn.rowLabels || [], barn.colLabels || [], true, singleBarn))
         .join('');
+
+    let venueLabel = '';
+    if (singleBarn && barnList[0]) {
+        const st = (barnList[0].stalls || []).filter(u => (u.type || 'stall') === 'stall');
+        const t = st.length;
+        const a = st.filter(u => u.bookingId).length;
+        venueLabel = `<div class="venue"><span class="venue-name">${esc(barnList[0].name)}</span><span class="venue-meta">${a}/${t} assigned</span></div>`;
+    }
 
     const rvMat = ensureAllRvSpots(rvAreas);
     const rvBlocks = rvMat
@@ -194,44 +216,53 @@ function buildStallingChartHtml({
     <style>
         *{box-sizing:border-box}
         body{font-family:system-ui,Arial,sans-serif;color:#111;padding:24px;margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-        h1{font-size:20px;margin:0 0 2px}
-        .sub{color:#555;font-size:12px;margin:0 0 4px}
-        .layer{display:inline-block;font-size:11px;font-weight:700;color:#0f172a;background:#e2e8f0;border-radius:999px;padding:2px 9px;margin:4px 0}
-        .note{color:#64748b;font-size:10px;margin:2px 0 0;max-width:70ch}
-        .legend{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 18px;font-size:11px}
-        .lg{display:inline-flex;align-items:center;gap:5px}
-        .lg i{width:12px;height:12px;border-radius:3px;display:inline-block}
-        .barn{margin:0 0 22px;break-inside:avoid}
-        .barn h2{font-size:14px;margin:0 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px}
-        .barn h2 .meta{font-weight:normal;color:#777;font-size:11px;margin-left:8px}
-        .grid{display:grid;gap:4px;max-width:100%}
-        .hcell{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#64748b;font-family:ui-monospace,monospace}
+        .head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+        .venue{text-align:right;flex-shrink:0}
+        .venue-name{display:block;font-size:28px;font-weight:800;line-height:1.1;color:#0f172a}
+        .venue-meta{display:block;font-size:13px;color:#777;margin-top:3px}
+        h1{font-size:30px;margin:0 0 3px}
+        .sub{color:#555;font-size:15px;margin:0 0 5px}
+        .layer{display:inline-block;font-size:14px;font-weight:700;color:#0f172a;background:#e2e8f0;border-radius:999px;padding:3px 12px;margin:5px 0}
+        .note{color:#64748b;font-size:13px;margin:3px 0 0;max-width:80ch}
+        .legend{display:flex;flex-wrap:wrap;gap:16px;margin:14px 0 22px;font-size:15px}
+        .lg{display:inline-flex;align-items:center;gap:7px}
+        .lg i{width:16px;height:16px;border-radius:3px;display:inline-block}
+        .barn{margin:0 0 26px;break-inside:avoid}
+        .barn h2{font-size:26px;font-weight:800;text-align:right;margin:0 0 10px;border-bottom:2px solid #ddd;padding-bottom:6px}
+        .barn h2 .meta{font-weight:normal;color:#777;font-size:14px;margin-left:8px}
+        .grid{display:grid;gap:6px;max-width:100%}
+        .hcell{display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#475569;font-family:ui-monospace,monospace}
         .hcell.corner{background:transparent}
-        .hcell.rlabel{min-height:46px}
+        .hcell.rlabel{min-height:58px}
         .hcell.rlabel.thin{min-height:0}
-        .aisle{height:7px;align-self:center;background:#f1f5f9;border:1px dashed #e2e8f0;border-radius:3px}
-        .cell{position:relative;min-height:46px;border:1px solid #cbd5e1;border-radius:5px;padding:3px;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden}
-        .cell .num{font-size:9px;font-family:ui-monospace,monospace;color:#64748b;font-weight:700}
-        .cell .num2{font-size:8px;font-family:ui-monospace,monospace;color:#64748b;font-weight:700;margin-top:2px}
-        .cell.taken{background:#fff;padding-bottom:6px}
-        .cell.taken .name{font-size:10px;font-weight:700;text-align:center;line-height:1.15;word-break:break-word;color:#0f172a}
-        .cell.taken.pale{background:#f8fafc}
-        .cell.taken.pale .name{color:#94a3b8}
-        .cell.taken.warm{background:#fef3c7}
-        .cell .owner{position:absolute;left:0;right:0;bottom:0;height:3px}
+        .aisle{height:16px;align-self:center;background:#e2e8f0;border:1px dashed #cbd5e1;border-radius:3px}
+        .cell{position:relative;min-height:58px;border:1px solid #cbd5e1;border-radius:5px;padding:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden}
+        .cell .num{font-size:13px;font-family:ui-monospace,monospace;color:#475569;font-weight:700}
+        .cell .num2{font-size:11px;font-family:ui-monospace,monospace;color:#64748b;font-weight:700;margin-top:2px}
+        .cell.taken{padding-bottom:6px}
+        .cell.taken .name{font-size:14px;font-weight:700;text-align:center;line-height:1.15;word-break:break-word;color:#fff}
+        .cell.taken .num2{color:rgba(255,255,255,0.85)}
+        .cell.taken.pale .name{color:#0f172a}
+        .cell.taken.pale .num2{color:#475569}
         .cell.free{background:#f8fafc}
-        .cell.room{background:#f1f5f9;color:#94a3b8;font-size:8px;justify-content:center;font-family:ui-monospace,monospace;text-transform:uppercase}
-        .gtag{position:absolute;top:0;left:0;font-size:6px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:#fff;padding:1px 3px;border-bottom-right-radius:4px;max-width:100%;overflow:hidden;white-space:nowrap}
+        .cell.room{background:#f1f5f9;color:#94a3b8;font-size:11px;justify-content:center;font-family:ui-monospace,monospace;text-transform:uppercase}
+        .footer{text-align:center;margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b}
         @media print{ body{padding:0} .barn{margin-bottom:16px} }
     </style></head><body>
-        <h1>${esc(showName)} — Stalling Chart</h1>
-        ${subtitle ? `<p class="sub">${subtitle}</p>` : ''}
-        <div class="layer">Showing: ${esc(layerInfo.label)}</div>
-        ${note ? `<p class="note">${esc(note)}</p>` : ''}
+        <div class="head">
+            <div class="head-left">
+                <h1>${esc(showName)} — Stalling Chart</h1>
+                ${subtitle ? `<p class="sub">${subtitle}</p>` : ''}
+                <div class="layer">Showing: ${esc(layerInfo.label)}</div>
+                ${note ? `<p class="note">${esc(note)}</p>` : ''}
+            </div>
+            ${venueLabel}
+        </div>
         ${legendItems ? `<div class="legend">${legendItems}</div>` : ''}
         ${barnBlocks}
         ${rvBlocks}
         ${!barnBlocks && !rvBlocks ? '<p>Nothing to show yet.</p>' : ''}
+        <div class="footer">Stalling Managed Through EquiPatterns.com</div>
         ${autoPrint ? '<script>window.onload=function(){window.focus();window.print();}<\/script>' : ''}
     </body></html>`;
 
@@ -304,7 +335,9 @@ export async function downloadStallingChartPdf(opts) {
         const drawW = imgW * scale;
         const drawH = imgH * scale;
         const x = (pageW - drawW) / 2;
-        const y = margin;
+        // Center vertically too so a short chart doesn't float at the top with a
+        // big white band below it (Robert: "center stall chart … for max visibility").
+        const y = Math.max(margin, (pageH - drawH) / 2);
 
         pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, drawW, drawH);
         const safeName = (opts.showName || 'Show').replace(/[^\w\- ]+/g, '').trim() || 'Show';

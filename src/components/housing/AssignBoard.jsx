@@ -30,10 +30,14 @@ import { STALL_LAYERS, buildLayerIndex, layerCell, layerLegend } from '@/lib/sta
 //   · aisle rows collapse into a thin walkway strip instead of a wall of "aisl"
 //   · a layer switch that changes only the TEXT inside each box (name, bags, …)
 
+// Ordered so the first 12 colours are all clearly distinct (no two greens / teals /
+// reds) — spread across the wheel and varied in lightness. MUST stay identical to the
+// PALETTE in lib/stallingChartPrint.js so a person reads the same colour on the board,
+// the RV view and the printout.
 const PALETTE = [
-    '#2563eb', '#16a34a', '#db2777', '#d97706', '#7c3aed',
-    '#0891b2', '#dc2626', '#4f46e5', '#059669', '#ca8a04',
-    '#be123c', '#0d9488', '#9333ea', '#c2410c', '#1d4ed8',
+    '#2563eb', '#e11d48', '#16a34a', '#f59e0b', '#7c3aed',
+    '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569',
+    '#0d9488', '#a21caf', '#ca8a04', '#4f46e5', '#92400e',
 ];
 
 // Marker stored on a booking to say "keep this one out of every group", as opposed
