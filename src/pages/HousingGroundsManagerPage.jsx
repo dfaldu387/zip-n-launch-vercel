@@ -1444,7 +1444,18 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
 
 // ── Booking Row ──
 
-const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall }) => {
+const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall, onUpdateStallCount }) => {
+    // Bookings stay LOCKED by default so a stray click can't change or delete
+    // them. Editing is an explicit, two-step action: press Edit → change fields →
+    // Save (or Cancel to discard). Deleting is also two-step: press ✕ → confirm.
+    const [isEditing, setIsEditing] = useState(false);
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    // Expand a row to reveal the full booking detail (contacts, horses, stalls).
+    const [expanded, setExpanded] = useState(false);
+    // While editing we buffer changes locally and only commit them on Save, so
+    // nothing is adjusted until the admin confirms.
+    const [draft, setDraft] = useState(null);
+
     const stallOptions = useMemo(() => {
         const options = [];
         for (const barn of barns) {
@@ -1460,28 +1471,125 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
     const assignedStalls = useMemo(() => getAssignedStallsForBooking(booking, barns), [booking, barns]);
     const isMultiStall = (booking.items || []).some(it => it.type === 'stall' && (it.qty || 0) > 1) || requestedStalls > 1;
 
+    const startEdit = () => {
+        setDraft({
+            exhibitorName: booking.exhibitorName || '',
+            horseName: booking.horseName || '',
+            trainerName: booking.trainerName || '',
+            nights: booking.nights || 0,
+            status: booking.status || 'pending',
+            stallCount: requestedStalls,
+            paymentStatus: booking.paymentStatus || 'unpaid',
+            paidAmount,
+        });
+        setConfirmDelete(false);
+        setIsEditing(true);
+    };
+
+    const cancelEdit = () => {
+        setDraft(null);
+        setIsEditing(false);
+    };
+
+    const saveEdit = () => {
+        if (!draft) { setIsEditing(false); return; }
+        // Commit only the fields that actually changed.
+        if (draft.exhibitorName !== (booking.exhibitorName || '')) onUpdate('exhibitorName', draft.exhibitorName);
+        if (draft.horseName !== (booking.horseName || '')) onUpdate('horseName', draft.horseName);
+        if (draft.trainerName !== (booking.trainerName || '')) onUpdate('trainerName', draft.trainerName);
+        if ((draft.nights || 0) !== (booking.nights || 0)) onUpdate('nights', draft.nights || 0);
+        if (draft.status !== (booking.status || 'pending')) {
+            onUpdate('status', draft.status);
+            onStatusChange?.(booking.id, draft.status); // immediate save to DB
+        }
+        if ((draft.stallCount ?? requestedStalls) !== requestedStalls) {
+            onUpdateStallCount?.(draft.stallCount ?? requestedStalls);
+        }
+        if (draft.paymentStatus !== (booking.paymentStatus || 'unpaid')) onUpdate('paymentStatus', draft.paymentStatus);
+        if (Number(draft.paidAmount || 0) !== paidAmount) onUpdate('paidAmount', Number(draft.paidAmount || 0));
+        setDraft(null);
+        setIsEditing(false);
+    };
+
+    const setDraftField = (field, value) => setDraft(d => ({ ...d, [field]: value }));
+
+    // Shared read-only cell for locked mode.
+    const ReadCell = ({ children, muted }) => (
+        <div className={cn('h-7 flex items-center text-xs truncate px-0.5', muted && 'text-muted-foreground italic')}>
+            {children}
+        </div>
+    );
+
+    // Detail values shown in the expandable panel.
+    const horseNames = (booking.horseNames && booking.horseNames.length)
+        ? booking.horseNames
+        : (booking.horseName ? [booking.horseName] : []);
+    const horseCount = booking.horseCount != null ? booking.horseCount : horseNames.length;
+    // Extra stalls beyond the horse count — the number that later drives invoicing.
+    const extraStalls = Math.max(assignedStalls.length - horseCount, 0);
+
+    // Payment: what the booking currently totals, what's been paid, what's still owed.
+    // A booking flagged "paid" with no explicit amount is treated as paid in full;
+    // if stalls are later added, the total rises and a balance appears automatically.
+    const bookingTotal = Number(booking.totalAmount != null ? booking.totalAmount : (booking.amount || 0));
+    const paidAmount = booking.paidAmount != null
+        ? Number(booking.paidAmount)
+        : (booking.paymentStatus === 'paid' ? bookingTotal : 0);
+    const balanceDue = Math.max(0, bookingTotal - paidAmount);
+
     return (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-background border text-sm">
+        <div className={cn(
+            'rounded-lg border text-sm',
+            isEditing ? 'bg-amber-50/60 dark:bg-amber-900/10 border-amber-300 dark:border-amber-700' : 'bg-background'
+        )}>
+          <div className="flex items-start gap-2 p-3">
+            {/* Expand/collapse chevron — reveals full booking detail below. */}
+            <Button
+                variant="ghost" size="icon"
+                className="h-7 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                title={expanded ? 'Hide details' : 'Show details'}
+                onClick={() => setExpanded(v => !v)}
+            >
+                {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </Button>
             <div className="flex-1 grid grid-cols-2 md:grid-cols-6 gap-2">
-                <Input
-                    value={booking.exhibitorName || ''}
-                    onChange={(e) => onUpdate('exhibitorName', e.target.value)}
-                    className="h-7 text-xs"
-                    placeholder="Exhibitor name"
-                />
-                <Input
-                    value={booking.horseName || ''}
-                    onChange={(e) => onUpdate('horseName', e.target.value)}
-                    className="h-7 text-xs"
-                    placeholder="Horse name"
-                />
-                <Input
-                    value={booking.trainerName || ''}
-                    onChange={(e) => onUpdate('trainerName', e.target.value)}
-                    className="h-7 text-xs"
-                    placeholder="Trainer"
-                    title={[booking.trainerEmail, booking.trainerPhone].filter(Boolean).join(' · ') || undefined}
-                />
+                {/* Exhibitor */}
+                {isEditing ? (
+                    <Input
+                        value={draft.exhibitorName}
+                        onChange={(e) => setDraftField('exhibitorName', e.target.value)}
+                        className="h-7 text-xs"
+                        placeholder="Exhibitor name"
+                    />
+                ) : (
+                    <ReadCell muted={!booking.exhibitorName}>{booking.exhibitorName || 'No exhibitor'}</ReadCell>
+                )}
+
+                {/* Horse */}
+                {isEditing ? (
+                    <Input
+                        value={draft.horseName}
+                        onChange={(e) => setDraftField('horseName', e.target.value)}
+                        className="h-7 text-xs"
+                        placeholder="Horse name"
+                    />
+                ) : (
+                    <ReadCell muted={!booking.horseName}>{booking.horseName || '—'}</ReadCell>
+                )}
+
+                {/* Trainer */}
+                {isEditing ? (
+                    <Input
+                        value={draft.trainerName}
+                        onChange={(e) => setDraftField('trainerName', e.target.value)}
+                        className="h-7 text-xs"
+                        placeholder="Trainer"
+                    />
+                ) : (
+                    <ReadCell muted={!booking.trainerName}>{booking.trainerName || '—'}</ReadCell>
+                )}
+
+                {/* Stalls */}
                 {isMultiStall || (booking.items || []).length > 0 ? (
                     <div className="flex items-center gap-1 flex-wrap min-h-[28px]">
                         {assignedStalls.length === 0 && requestedStalls > 0 && (
@@ -1500,7 +1608,7 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
                             <Badge variant="outline" className="text-[10px]">+{assignedStalls.length - 6}</Badge>
                         )}
                     </div>
-                ) : (
+                ) : isEditing ? (
                     <Select
                         value={booking.stallId || '__none__'}
                         onValueChange={(val) => {
@@ -1521,34 +1629,257 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
                             ))}
                         </SelectContent>
                     </Select>
+                ) : (
+                    <ReadCell muted={!booking.stallId}>
+                        {booking.stallId
+                            ? (stallOptions.find(s => s.id === booking.stallId)?.label || 'Assigned')
+                            : 'Unassigned'}
+                    </ReadCell>
                 )}
-                <Input
-                    type="number"
-                    value={booking.nights || ''}
-                    onChange={(e) => onUpdate('nights', parseInt(e.target.value) || 0)}
-                    className="h-7 text-xs"
-                    placeholder="Nights"
-                />
-                <Select
-                    value={booking.status || 'pending'}
-                    onValueChange={(val) => {
-                        onUpdate('status', val);
-                        onStatusChange?.(booking.id, val); // immediate save to DB
-                    }}
-                >
-                    <SelectTrigger className="h-7 text-xs">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {BOOKING_STATUSES.map(s => (
-                            <SelectItem key={s} value={s} className="text-xs capitalize">{s.replace('_', ' ')}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
+
+                {/* Nights */}
+                {isEditing ? (
+                    <Input
+                        type="number"
+                        value={draft.nights || ''}
+                        onChange={(e) => setDraftField('nights', parseInt(e.target.value) || 0)}
+                        className="h-7 text-xs"
+                        placeholder="Nights"
+                    />
+                ) : (
+                    <ReadCell muted={!booking.nights}>{booking.nights ? `${booking.nights} nights` : '—'}</ReadCell>
+                )}
+
+                {/* Status */}
+                {isEditing ? (
+                    <Select
+                        value={draft.status}
+                        onValueChange={(val) => setDraftField('status', val)}
+                    >
+                        <SelectTrigger className="h-7 text-xs">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {BOOKING_STATUSES.map(s => (
+                                <SelectItem key={s} value={s} className="text-xs capitalize">{s.replace('_', ' ')}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                ) : (
+                    <div className="h-7 flex items-center">
+                        <Badge className={cn('text-[10px] capitalize', STATUS_COLORS[booking.status || 'pending'])}>
+                            {(booking.status || 'pending').replace('_', ' ')}
+                        </Badge>
+                    </div>
+                )}
             </div>
-            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10 mt-0.5" onClick={onRemove}>
-                <X className="h-3 w-3" />
-            </Button>
+
+            {/* Action buttons — Edit / Save+Cancel, and two-step delete */}
+            <div className="flex items-center gap-1 mt-0.5">
+                {isEditing ? (
+                    <>
+                        <Button
+                            variant="ghost" size="icon"
+                            className="h-6 w-6 text-emerald-600 hover:bg-emerald-500/10"
+                            title="Save changes"
+                            onClick={saveEdit}
+                        >
+                            <Check className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                            variant="ghost" size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:bg-muted"
+                            title="Cancel — discard changes"
+                            onClick={cancelEdit}
+                        >
+                            <X className="h-3.5 w-3.5" />
+                        </Button>
+                    </>
+                ) : (
+                    <>
+                        <Button
+                            variant="ghost" size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-muted"
+                            title="Edit this booking"
+                            onClick={startEdit}
+                        >
+                            <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                            variant="ghost" size="icon"
+                            className="h-6 w-6 text-destructive hover:bg-destructive/10"
+                            title="Delete this booking"
+                            onClick={() => setConfirmDelete(true)}
+                        >
+                            <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                    </>
+                )}
+            </div>
+          </div>
+
+          {/* Edit-mode sub-bar — change how many stalls this booking is booked for.
+              This is the quota that caps stall assignment; raising it here is what
+              lets the admin add stalls (and later invoice the difference). */}
+          {isEditing && (
+            <div className="border-t px-3 py-2.5 bg-amber-50/60 dark:bg-amber-900/10 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                <div className="flex items-center gap-2">
+                    <span className="font-medium">Stalls booked</span>
+                    <div className="flex items-center gap-1">
+                        <Button
+                            type="button" variant="outline" size="icon" className="h-6 w-6"
+                            disabled={(draft.stallCount ?? 0) <= assignedStalls.length}
+                            onClick={() => setDraftField('stallCount', Math.max(assignedStalls.length, (draft.stallCount ?? 0) - 1))}
+                            title={assignedStalls.length ? `Can't go below ${assignedStalls.length} already-assigned` : 'Decrease'}
+                        >
+                            <Minus className="h-3 w-3" />
+                        </Button>
+                        <Input
+                            type="number"
+                            min={assignedStalls.length}
+                            value={draft.stallCount ?? 0}
+                            onChange={(e) => setDraftField('stallCount', Math.max(assignedStalls.length, parseInt(e.target.value, 10) || 0))}
+                            className="h-6 w-16 text-xs text-center"
+                        />
+                        <Button
+                            type="button" variant="outline" size="icon" className="h-6 w-6"
+                            onClick={() => setDraftField('stallCount', (draft.stallCount ?? 0) + 1)}
+                            title="Increase"
+                        >
+                            <Plus className="h-3 w-3" />
+                        </Button>
+                    </div>
+                </div>
+                <span className="text-muted-foreground">
+                    {assignedStalls.length} assigned
+                    {(draft.stallCount ?? 0) > requestedStalls && (
+                        <span className="text-amber-600 font-medium"> · +{(draft.stallCount ?? 0) - requestedStalls} added (was {requestedStalls})</span>
+                    )}
+                    {(draft.stallCount ?? 0) < requestedStalls && (
+                        <span className="text-amber-600 font-medium"> · {requestedStalls - (draft.stallCount ?? 0)} removed (was {requestedStalls})</span>
+                    )}
+                </span>
+
+                {/* Payment — mark how much has been paid; the balance is what to invoice. */}
+                <div className="flex items-center gap-2 border-l pl-4">
+                    <span className="font-medium">Payment</span>
+                    <Select
+                        value={draft.paymentStatus || 'unpaid'}
+                        onValueChange={(val) => {
+                            // Keep the paid amount in step with the qualitative status.
+                            if (val === 'paid') setDraft(d => ({ ...d, paymentStatus: 'paid', paidAmount: bookingTotal }));
+                            else if (val === 'unpaid') setDraft(d => ({ ...d, paymentStatus: 'unpaid', paidAmount: 0 }));
+                            else setDraftField('paymentStatus', val);
+                        }}
+                    >
+                        <SelectTrigger className="h-6 w-24 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="unpaid" className="text-xs">Unpaid</SelectItem>
+                            <SelectItem value="partial" className="text-xs">Partial</SelectItem>
+                            <SelectItem value="paid" className="text-xs">Paid</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    {draft.paymentStatus === 'partial' && (
+                        <div className="flex items-center gap-1">
+                            <span className="text-muted-foreground">Paid $</span>
+                            <Input
+                                type="number" min={0}
+                                value={draft.paidAmount ?? 0}
+                                onChange={(e) => setDraftField('paidAmount', Math.max(0, parseFloat(e.target.value) || 0))}
+                                className="h-6 w-20 text-xs text-center"
+                            />
+                        </div>
+                    )}
+                    <span className="text-muted-foreground">
+                        of {fmtMoney(bookingTotal)}
+                        {Math.max(0, bookingTotal - Number(draft.paidAmount || 0)) > 0 && (
+                            <span className="text-amber-600 font-medium"> · {fmtMoney(bookingTotal - Number(draft.paidAmount || 0))} owed</span>
+                        )}
+                    </span>
+                </div>
+
+                <span className="text-muted-foreground/70 italic">Press ✓ Save to apply</span>
+            </div>
+          )}
+
+          {/* Expandable detail panel — full contact, horses and stalls. Read-only;
+              editing is still done via the two-step Edit button above. */}
+          {expanded && (
+            <div className="border-t px-3 py-3 bg-muted/30 text-xs space-y-2.5">
+                {/* Contacts */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {booking.email ? (
+                        <span className="inline-flex items-center gap-1"><Mail className="h-3 w-3 text-muted-foreground" /> {booking.email}</span>
+                    ) : null}
+                    {booking.phone ? (
+                        <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3 text-muted-foreground" /> {booking.phone}</span>
+                    ) : null}
+                    {!booking.email && !booking.phone && (
+                        <span className="text-muted-foreground italic">No exhibitor contact on file</span>
+                    )}
+                </div>
+                {(booking.trainerName || booking.trainerEmail || booking.trainerPhone) && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" /> Trainer: {booking.trainerName || '—'}</span>
+                        {booking.trainerEmail ? <span className="inline-flex items-center gap-1"><Mail className="h-3 w-3" /> {booking.trainerEmail}</span> : null}
+                        {booking.trainerPhone ? <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3" /> {booking.trainerPhone}</span> : null}
+                    </div>
+                )}
+
+                {/* Horses & stalls */}
+                <div className="grid gap-2 sm:grid-cols-3">
+                    <div>
+                        <p className="font-medium text-muted-foreground mb-0.5">Horses ({horseCount})</p>
+                        <p>{horseNames.length ? horseNames.join(', ') : <span className="italic text-muted-foreground">None listed</span>}</p>
+                    </div>
+                    <div>
+                        <p className="font-medium text-muted-foreground mb-0.5">Stalls ({assignedStalls.length}{requestedStalls ? ` of ${requestedStalls}` : ''})</p>
+                        <div className="flex flex-wrap gap-1">
+                            {assignedStalls.length
+                                ? assignedStalls.map(s => (
+                                    <Badge key={s.id} className="bg-emerald-600 text-white text-[10px] font-mono" title={`${s.barnName} · Stall ${s.number}`}>{s.number}</Badge>
+                                ))
+                                : <span className="italic text-muted-foreground">Unassigned</span>}
+                        </div>
+                    </div>
+                    <div>
+                        <p className="font-medium text-muted-foreground mb-0.5">Extra stalls beyond horses</p>
+                        <p className={cn('font-semibold', extraStalls > 0 ? 'text-amber-600' : 'text-muted-foreground')}>
+                            {extraStalls > 0 ? `+${extraStalls}` : '0'}
+                        </p>
+                    </div>
+                </div>
+
+                {/* Meta */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
+                    <span>Payment: <span className="capitalize font-medium text-foreground">{(booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
+                    <span>Paid: <span className="font-medium text-foreground">{fmtMoney(paidAmount)}</span> of {fmtMoney(bookingTotal)}</span>
+                    {balanceDue > 0 && (
+                        <span className="font-semibold text-amber-600">Balance due: {fmtMoney(balanceDue)}</span>
+                    )}
+                    <span>Nights: <span className="font-medium text-foreground">{booking.nights || 0}</span></span>
+                    {booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{booking.source}</span></span> : null}
+                    {booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtOrderedAt(booking.createdAt)}</span></span> : null}
+                </div>
+            </div>
+          )}
+
+            {/* Two-step delete — confirmation dialog naming exactly which booking. */}
+            <ConfirmationDialog
+                isOpen={confirmDelete}
+                onClose={() => setConfirmDelete(false)}
+                onConfirm={() => { setConfirmDelete(false); onRemove(); }}
+                title="Delete this booking?"
+                description={
+                    `You're about to permanently delete the booking for `
+                    + `"${booking.exhibitorName || 'this exhibitor'}"`
+                    + (assignedStalls.length ? ` — ${assignedStalls.length} stall${assignedStalls.length === 1 ? '' : 's'} assigned` : '')
+                    + (booking.status ? ` (${booking.status.replace('_', ' ')})` : '')
+                    + `. This can't be undone.`
+                }
+                confirmText="Delete booking"
+                cancelText="Keep booking"
+            />
         </div>
     );
 };
@@ -2167,6 +2498,59 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     const updateBooking = (bookingId, field, value) => {
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
+    };
+
+    // Change how many stalls a booking is booked for (its quota). The quota lives on
+    // the stall line-items' qty, so we rewrite those items to hit the new total and
+    // recompute the booking amount. This is what lifts the assignment cap — and the
+    // gap between "booked" and "already paid for" is what later drives invoicing.
+    const updateBookingStallCount = (bookingId, newTotalRaw) => {
+        const newTotal = Math.max(0, parseInt(newTotalRaw, 10) || 0);
+        const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+        setBookings(prev => prev.map(b => {
+            if (b.id !== bookingId) return b;
+            const items = [...(b.items || [])];
+            const nights = Math.max(1, Number(b.nights) || 1);
+            const stallIdxs = items.reduce((acc, it, i) => { if (it.type === 'stall') acc.push(i); return acc; }, []);
+            const rebuild = (it, qty) => {
+                const barn = barns.find(x => x.id === it.refId);
+                const unitPrice = it.unitPrice != null ? it.unitPrice : (barn?.pricePerNight || 0);
+                return {
+                    ...it, qty, unitPrice, nights,
+                    amount: qty * unitPrice * nights,
+                    name: barn ? `${barn.name} × ${qty}` : String(it.name || 'Stalls').replace(/×\s*\d+/, `× ${qty}`),
+                    detail: `${money(unitPrice)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${qty}`,
+                };
+            };
+            if (stallIdxs.length === 0) {
+                // No stall line yet — attach one to the booking's assigned barn, else the first barn.
+                if (newTotal <= 0) return b;
+                const assigned = getAssignedStallsForBooking(b, barns);
+                const barn = (assigned[0] && barns.find(x => x.id === assigned[0].barnId)) || barns[0];
+                if (!barn) return b; // nothing to attach to
+                const unitPrice = barn.pricePerNight || 0;
+                items.push({
+                    type: 'stall', refId: barn.id, qty: newTotal, nights, unitPrice,
+                    amount: newTotal * unitPrice * nights,
+                    name: `${barn.name} × ${newTotal}`,
+                    detail: `${money(unitPrice)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${newTotal}`,
+                });
+            } else if (stallIdxs.length === 1) {
+                const idx = stallIdxs[0];
+                if (newTotal <= 0) items.splice(idx, 1);
+                else items[idx] = rebuild(items[idx], newTotal);
+            } else {
+                // Multi-barn booking — apply the change to the last stall line, keeping the others.
+                const current = stallIdxs.reduce((s, i) => s + (Number(items[i].qty) || 0), 0);
+                const lastIdx = stallIdxs[stallIdxs.length - 1];
+                const others = current - (Number(items[lastIdx].qty) || 0);
+                const newLast = Math.max(0, newTotal - others);
+                if (newLast <= 0) items.splice(lastIdx, 1);
+                else items[lastIdx] = rebuild(items[lastIdx], newLast);
+            }
+            const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+            return { ...b, items, amount: totalAmount, totalAmount };
+        }));
     };
 
     const removeBooking = (bookingId) => {
@@ -3011,6 +3395,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onRemove={() => removeBooking(booking.id)}
                                             onStatusChange={onUpdateBookingStatus}
                                             onAssignStall={(stallId) => assignSingleStall(booking, stallId)}
+                                            onUpdateStallCount={(n) => updateBookingStallCount(booking.id, n)}
                                         />
                                     </div>
                                     <Button

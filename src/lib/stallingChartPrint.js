@@ -51,6 +51,7 @@ const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack'
 function buildStallingChartHtml({
     barns = [], rvAreas = [], bookings = [], supplies = [],
     layer = 'number', showName = 'Show', facility = '', dateRange = '',
+    perBarnPages = false,
 }, autoPrint = false) {
     // Stable color per booking that owns stalls (same order the board uses).
     const active = (bookings || []).filter(b => b && b.status !== 'cancelled');
@@ -248,7 +249,9 @@ function buildStallingChartHtml({
         .cell.room{background:#f1f5f9;color:#94a3b8;font-size:11px;justify-content:center;font-family:ui-monospace,monospace;text-transform:uppercase}
         .footer{text-align:center;margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b}
         @media print{ body{padding:0} .barn{margin-bottom:16px} }
-    </style></head><body>
+        /* One barn per page: start every barn after the first on a fresh page. */
+        @media print{ body.perbarn .barn + .barn{ break-before:page; page-break-before:always; } }
+    </style></head><body class="${perBarnPages ? 'perbarn' : ''}">
         <div class="head">
             <div class="head-left">
                 <h1>${esc(showName)} — Stalling Chart</h1>
@@ -279,14 +282,16 @@ export function printStallingChart(opts) {
     return true;
 }
 
-// Download the chart as a PDF scaled to fit ONE page. Renders the same clean chart
-// HTML off-screen (in an isolated iframe so its styles don't touch the app), snapshots
-// it with html2canvas, then places that image on a single letter page — landscape or
-// portrait, whichever fits the chart better.
-export async function downloadStallingChartPdf(opts) {
+// Build the chart PDF (does NOT save). Renders the clean chart HTML off-screen (in an
+// isolated iframe so its styles don't touch the app), snapshots it with html2canvas,
+// and lays it out. With perBarnPages + ≥2 blocks, each barn/RV block gets its own page,
+// enlarged to fill the sheet; otherwise the whole chart is fit onto one page. Returns
+// { pdf, safeName } or null on failure. Both Download and Print reuse this so the
+// printed sheets are IDENTICAL to the downloaded PDF (the browser's HTML print can't
+// scale a tall barn to fit a page, which is why we print the PDF instead).
+async function renderChartPdf(opts) {
     const html = buildStallingChartHtml(opts, false);
 
-    // Off-screen iframe → style isolation + full-content layout.
     const iframe = document.createElement('iframe');
     iframe.style.position = 'fixed';
     iframe.style.left = '-10000px';
@@ -310,6 +315,43 @@ export async function downloadStallingChartPdf(opts) {
         const fullW = Math.max(body.scrollWidth, 1100);
         const fullH = body.scrollHeight;
         iframe.style.height = fullH + 'px';
+        const safeName = (opts.showName || 'Show').replace(/[^\w\- ]+/g, '').trim() || 'Show';
+
+        // One barn per page: snapshot each barn/RV block on its own landscape page,
+        // enlarged to fill the sheet for readability (Robert: "each barn on a single
+        // page"). Only kicks in when there are ≥2 blocks — a single barn already fits
+        // one page the normal way (and keeps the title/legend header with it).
+        const blocks = Array.from(doc.querySelectorAll('.barn'));
+        if (opts.perBarnPages && blocks.length > 1) {
+            const pdf = new jsPDF('l', 'pt', 'letter');
+            const pageW = pdf.internal.pageSize.getWidth();
+            const pageH = pdf.internal.pageSize.getHeight();
+            const margin = 24;
+            const titleH = 22;
+            const availW = pageW - margin * 2;
+            const availH = pageH - margin * 2 - titleH;
+            for (let i = 0; i < blocks.length; i++) {
+                const el = blocks[i];
+                const w = Math.max(el.scrollWidth, 1);
+                const h = Math.max(el.scrollHeight, 1);
+                const c = await html2canvas(el, {
+                    scale: 2, backgroundColor: '#ffffff',
+                    width: w, height: h, windowWidth: w, windowHeight: h,
+                });
+                if (i > 0) pdf.addPage('letter', 'l');
+                // Small page title so each sheet is self-identifying.
+                pdf.setFontSize(13);
+                pdf.setTextColor(15, 23, 42);
+                pdf.text(`${opts.showName || 'Show'} — Stalling Chart`, margin, margin + 12);
+                const scale = Math.min(availW / c.width, availH / c.height); // enlarge to fit
+                const drawW = c.width * scale;
+                const drawH = c.height * scale;
+                const x = (pageW - drawW) / 2;
+                const y = margin + titleH + Math.max(0, (availH - drawH) / 2);
+                pdf.addImage(c.toDataURL('image/png'), 'PNG', x, y, drawW, drawH);
+            }
+            return { pdf, safeName };
+        }
 
         const canvas = await html2canvas(body, {
             scale: 2,
@@ -340,13 +382,34 @@ export async function downloadStallingChartPdf(opts) {
         const y = Math.max(margin, (pageH - drawH) / 2);
 
         pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, drawW, drawH);
-        const safeName = (opts.showName || 'Show').replace(/[^\w\- ]+/g, '').trim() || 'Show';
-        pdf.save(`${safeName} - Stalling Chart.pdf`);
-        return true;
+        return { pdf, safeName };
     } catch (e) {
         console.error('Failed to build stalling chart PDF:', e);
-        return false;
+        return null;
     } finally {
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
     }
+}
+
+// Download the chart as a PDF (one barn per page when perBarnPages is set).
+export async function downloadStallingChartPdf(opts) {
+    const r = await renderChartPdf(opts);
+    if (!r) return false;
+    r.pdf.save(`${r.safeName} - Stalling Chart.pdf`);
+    return true;
+}
+
+// Print the chart via the SAME PDF engine, so each barn lands cleanly on its own page
+// (unlike browser HTML print, which can't scale a tall barn to fit). Opens the PDF in a
+// new tab with the print dialog queued.
+export async function printStallingChartPdf(opts) {
+    const r = await renderChartPdf(opts);
+    if (!r) return false;
+    r.pdf.autoPrint();
+    const url = r.pdf.output('bloburl');
+    const w = window.open(url, '_blank');
+    if (!w) { // popup blocked — fall back to a direct download so nothing is lost
+        r.pdf.save(`${r.safeName} - Stalling Chart.pdf`);
+    }
+    return true;
 }

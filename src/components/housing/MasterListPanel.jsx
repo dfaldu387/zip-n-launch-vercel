@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList } from 'lucide-react';
+import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users } from 'lucide-react';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 
 // ── Phase 1: Master List ──
@@ -53,6 +53,18 @@ const fmtDate = (iso) => {
     const [y, m, d] = String(iso).split('-').map(Number);
     if (!y || !m || !d) return String(iso);
     return `${MONTHS[m - 1]} ${d}`;
+};
+
+// ISO timestamp → "Jul 14, 11:08 PM" for the "Booked" line in the detail panel.
+const fmtDateTime = (iso) => {
+    if (!iso) return '';
+    try {
+        return new Date(iso).toLocaleString(undefined, {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        });
+    } catch {
+        return String(iso);
+    }
 };
 
 // Build one flat row per booking with everything the table + export need.
@@ -128,6 +140,13 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
     const [statusFilter, setStatusFilter] = useState('all');
     const [assignFilter, setAssignFilter] = useState('all'); // all | assigned | partial | unassigned
     const [sort, setSort] = useState({ key: 'name', dir: 'asc' });
+    // Rows the user has expanded (independent — several can be open at once).
+    const [expandedIds, setExpandedIds] = useState(() => new Set());
+    const toggleExpanded = (id) => setExpandedIds(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+    });
 
     const rows = useMemo(
         () => (bookings || []).filter(Boolean).map(b => buildRow(b, barns)),
@@ -340,9 +359,24 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                             {filtered.map(r => {
                                 const full = r.stalls > 0 && r.assignedCount >= r.stalls;
                                 const partial = r.assignedCount > 0 && r.assignedCount < r.stalls;
+                                const isOpen = expandedIds.has(r.booking.id);
+                                const extraStalls = Math.max(r.assignedCount - r.horses, 0);
                                 return (
-                                    <tr key={r.booking.id} className="border-b last:border-0 hover:bg-muted/30">
-                                        <td className="px-3 py-2 font-medium">{r.name}</td>
+                                    <React.Fragment key={r.booking.id}>
+                                    <tr className={cn('border-b last:border-0 hover:bg-muted/30', isOpen && 'bg-muted/20')}>
+                                        <td className="px-3 py-2 font-medium">
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleExpanded(r.booking.id)}
+                                                className="inline-flex items-center gap-1.5 text-left hover:text-primary"
+                                                title={isOpen ? 'Hide details' : 'Show details'}
+                                            >
+                                                {isOpen
+                                                    ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                                    : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                                                {r.name}
+                                            </button>
+                                        </td>
                                         <td className="px-3 py-2 text-muted-foreground">
                                             {r.trainer || (r.trainerEmail || r.trainerPhone ? '' : '—')}
                                             {(r.trainerEmail || r.trainerPhone) && (
@@ -397,6 +431,74 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                             </Badge>
                                         </td>
                                     </tr>
+                                    {isOpen && (
+                                        <tr className="border-b bg-muted/30">
+                                            <td colSpan={COLUMNS.length} className="px-4 py-3 text-xs">
+                                                <div className="space-y-2.5">
+                                                    {/* Contacts */}
+                                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                                                        {r.email ? <span className="inline-flex items-center gap-1"><Mail className="h-3 w-3 text-muted-foreground" /> {r.email}</span> : null}
+                                                        {r.phone ? <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3 text-muted-foreground" /> {r.phone}</span> : null}
+                                                        {!r.email && !r.phone && <span className="text-muted-foreground italic">No exhibitor contact on file</span>}
+                                                    </div>
+                                                    {(r.trainer || r.trainerEmail || r.trainerPhone) && (
+                                                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
+                                                            <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" /> Trainer: {r.trainer || '—'}</span>
+                                                            {r.trainerEmail ? <span className="inline-flex items-center gap-1"><Mail className="h-3 w-3" /> {r.trainerEmail}</span> : null}
+                                                            {r.trainerPhone ? <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3" /> {r.trainerPhone}</span> : null}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Horses, stalls, extra */}
+                                                    <div className="grid gap-2 sm:grid-cols-3">
+                                                        <div>
+                                                            <p className="font-medium text-muted-foreground mb-0.5">Horses ({r.horses})</p>
+                                                            <p>{r.horseNamesArr.length ? r.horseNamesArr.join(', ') : <span className="italic text-muted-foreground">None listed</span>}</p>
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium text-muted-foreground mb-0.5">Stalls ({r.assignedCount}{r.stalls ? ` of ${r.stalls}` : ''})</p>
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {r.stallNumbersArr.length
+                                                                    ? r.stallNumbersArr.map((num, i) => (
+                                                                        <Badge key={i} className="bg-emerald-600 text-white text-[10px] font-mono">{num}</Badge>
+                                                                    ))
+                                                                    : <span className="italic text-muted-foreground">Unassigned</span>}
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium text-muted-foreground mb-0.5">Extra stalls beyond horses</p>
+                                                            <p className={cn('font-semibold', extraStalls > 0 ? 'text-amber-600' : 'text-muted-foreground')}>
+                                                                {extraStalls > 0 ? `+${extraStalls}` : '0'}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Supplies */}
+                                                    {r.supplies.length > 0 && (
+                                                        <div>
+                                                            <p className="font-medium text-muted-foreground mb-0.5">Supplies / Pre-Orders</p>
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {r.supplies.map((s, i) => (
+                                                                    <Badge key={i} variant="outline" className="text-[10px] font-normal">
+                                                                        {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
+                                                                    </Badge>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Meta */}
+                                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
+                                                        <span>Payment: <span className="capitalize font-medium text-foreground">{(r.booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
+                                                        {(r.arrivalLabel || r.departureLabel) ? <span>Dates: <span className="font-medium text-foreground">{r.arrivalLabel || '?'} – {r.departureLabel || '?'}</span></span> : null}
+                                                        {r.booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{r.booking.source}</span></span> : null}
+                                                        {r.booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtDateTime(r.booking.createdAt)}</span></span> : null}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                    </React.Fragment>
                                 );
                             })}
                         </tbody>

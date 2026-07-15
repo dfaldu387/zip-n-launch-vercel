@@ -15,7 +15,8 @@ import {
     ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking,
     assignRvSpotToBooking, unassignRvSpot,
 } from '@/lib/rvAssignment';
-import { printStallingChart, downloadStallingChartPdf } from '@/lib/stallingChartPrint';
+import { printStallingChartPdf, downloadStallingChartPdf } from '@/lib/stallingChartPrint';
+import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { gridCols, computeGridLabels, labelValue, renumberStalls } from '@/lib/barnGrid';
 import { STALL_LAYERS, buildLayerIndex, layerCell, layerLegend } from '@/lib/stallLayers';
 
@@ -258,6 +259,9 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     const [railOpen, setRailOpen] = useState(true);
     const [layer, setLayer] = useState('number');
     const [isDownloadingChart, setIsDownloadingChart] = useState(false);
+    const [isPrintingChart, setIsPrintingChart] = useState(false);
+    const [perBarnPages, setPerBarnPages] = useState(true); // print/download each barn on its own page
+    const [removal, setRemoval] = useState(null); // pending stall/spot removal awaiting confirmation
 
     // Selecting a booking and selecting a group are mutually exclusive.
     const pickBooking = (id) => { setSelectedGroupId(null); setSelectedBookingId(id); };
@@ -430,6 +434,35 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
         fillGroupFrom(group, barn, startIdx);
     };
 
+    // Which booking currently owns a unit (null if free).
+    const unitOwner = (unitId) => {
+        for (const c of cfg.containers) {
+            const u = (c.units || []).find(x => x.id === unitId);
+            if (u) return u.bookingId || null;
+        }
+        return null;
+    };
+
+    // Enforce the booking's cap: never assign more units than the booking was
+    // booked for. To add more, the booking must be updated on the Bookings tab
+    // first. Reassigning a unit the booking already owns doesn't change its count,
+    // so it's always allowed.
+    const tryAssign = (unitId, bookingId) => {
+        if (unitOwner(unitId) === bookingId) { cfg.assign(unitId, bookingId); return; }
+        const b = bookingById[bookingId];
+        const req = b ? cfg.requested(b) : 0;
+        const have = b ? cfg.assignedFor(b).length : 0;
+        if (req > 0 && have >= req) {
+            toast({
+                title: `${cfg.unitWord.charAt(0).toUpperCase() + cfg.unitWord.slice(1)} limit reached`,
+                description: `${b?.exhibitorName || 'This booking'} is booked for ${req} ${cfg.unitWord}${req === 1 ? '' : 's'} — already assigned. Update the booking to add more.`,
+                variant: 'destructive',
+            });
+            return;
+        }
+        cfg.assign(unitId, bookingId);
+    };
+
     const handleUnitClick = (unit) => {
         // A whole group is selected → autofill it from this stall.
         if (mode === 'stalls' && selectedGroup) {
@@ -441,10 +474,17 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
             return;
         }
         const owner = unit.bookingId || null;
-        if (owner && owner === selectedBookingId) { cfg.unassign(unit.id); return; }   // toggle off
-        if (selectedBookingId) { cfg.assign(unit.id, selectedBookingId); return; }       // assign / reassign
-        if (owner) { cfg.unassign(unit.id); return; }                                    // clear when nothing selected
+        if (owner && owner === selectedBookingId) { requestUnassign(unit); return; }    // toggle off (confirm)
+        if (selectedBookingId) { tryAssign(unit.id, selectedBookingId); return; }       // assign / reassign (capped)
+        if (owner) { requestUnassign(unit); return; }                                    // clear when nothing selected (confirm)
         toast({ title: 'Pick a booking first', description: `Select a name on the left, then click ${cfg.unitWord}s to assign.` });
+    };
+
+    // Two-step removal: taking a stall/spot away from a booking is easy to do by
+    // accident, so ask before clearing it (mirrors the locked-booking behaviour).
+    const requestUnassign = (unit) => {
+        const ownerName = (unit.bookingId && bookingById[unit.bookingId]?.exhibitorName) || 'this booking';
+        setRemoval({ unitId: unit.id, number: unit.number, ownerName });
     };
 
     // Save a custom row/column label onto its barn (stalls only). Sparse arrays are
@@ -476,7 +516,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
         if (!over) return;
         const bookingId = active.data.current?.bookingId;
         const unitId = over.data.current?.unitId;
-        if (bookingId && unitId) cfg.assign(unitId, bookingId);
+        if (bookingId && unitId) tryAssign(unitId, bookingId);
     };
 
     const activeBooking = activeBookingId ? bookingById[activeBookingId] : null;
@@ -535,18 +575,36 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                         onClick={() => setFit(f => !f)}>
                         <Maximize2 className="h-3.5 w-3.5" /> Fit
                     </Button>
-                    <Button variant="outline" size="sm" className="h-8 text-xs shrink-0 ml-1"
-                        onClick={() => printStallingChart({
-                            barns, rvAreas: rvWithSpots, bookings, supplies,
-                            layer: mode === 'stalls' ? layer : 'number',
-                            showName: meta.showName || 'Show',
-                            facility: meta.facility || '',
-                            dateRange: meta.dateRange || '',
-                        })}>
-                        <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Chart
+                    {(barns || []).length > 1 && (
+                        <Button variant={perBarnPages ? 'default' : 'outline'} size="sm" className="h-8 text-xs gap-1.5 shrink-0 ml-1"
+                            title="Put each barn on its own page when printing / downloading"
+                            onClick={() => setPerBarnPages(v => !v)}>
+                            <Layers className="h-3.5 w-3.5" /> 1 barn / page
+                        </Button>
+                    )}
+                    <Button variant="outline" size="sm" className="h-8 text-xs shrink-0 ml-1" disabled={isPrintingChart}
+                        title={perBarnPages ? 'Print with each barn on its own page' : 'Print the whole chart'}
+                        onClick={async () => {
+                            setIsPrintingChart(true);
+                            try {
+                                await printStallingChartPdf({
+                                    barns, rvAreas: rvWithSpots, bookings, supplies,
+                                    layer: mode === 'stalls' ? layer : 'number',
+                                    showName: meta.showName || 'Show',
+                                    facility: meta.facility || '',
+                                    dateRange: meta.dateRange || '',
+                                    perBarnPages,
+                                });
+                            } finally {
+                                setIsPrintingChart(false);
+                            }
+                        }}>
+                        {isPrintingChart
+                            ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Preparing…</>
+                            : <><Printer className="h-3.5 w-3.5 mr-1.5" /> Print Chart</>}
                     </Button>
                     <Button variant="outline" size="sm" className="h-8 text-xs shrink-0" disabled={isDownloadingChart}
-                        title="Download the whole chart as a one-page PDF"
+                        title={perBarnPages ? 'Download a PDF with each barn on its own page' : 'Download the whole chart as a one-page PDF'}
                         onClick={async () => {
                             setIsDownloadingChart(true);
                             try {
@@ -556,6 +614,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                     showName: meta.showName || 'Show',
                                     facility: meta.facility || '',
                                     dateRange: meta.dateRange || '',
+                                    perBarnPages,
                                 });
                                 if (!ok) toast({ title: 'Download failed', description: 'Could not build the chart PDF.', variant: 'destructive' });
                             } finally {
@@ -719,6 +778,17 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                     </div>
                 )}
             </DragOverlay>
+
+            {/* Two-step removal — confirm before clearing a stall/spot from a booking. */}
+            <ConfirmationDialog
+                isOpen={!!removal}
+                onClose={() => setRemoval(null)}
+                onConfirm={() => { if (removal) cfg.unassign(removal.unitId); setRemoval(null); }}
+                title={`Remove ${cfg.unitWord} ${removal?.number || ''}?`}
+                description={`This ${cfg.unitWord} is assigned to "${removal?.ownerName || 'this booking'}". Removing it frees the ${cfg.unitWord} and leaves that booking short one.`}
+                confirmText={`Remove ${cfg.unitWord}`}
+                cancelText="Keep it"
+            />
         </DndContext>
     );
 };
