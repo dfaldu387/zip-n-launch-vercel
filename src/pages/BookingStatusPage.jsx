@@ -6,7 +6,7 @@ import { format, parseISO } from 'date-fns';
 import {
     Loader2, ArrowLeft, Calendar, Phone, Mail, Hash, Home, Car,
     DollarSign, AlertCircle, Copy, RefreshCw, CheckCircle2, XCircle,
-    Clock, LogIn, LogOut, BellRing,
+    Clock, LogIn, LogOut, BellRing, CreditCard,
 } from 'lucide-react';
 
 import Navigation from '@/components/Navigation';
@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { cn } from '@/lib/utils';
+import { startStallCheckout } from '@/lib/housingCheckout';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -35,6 +36,7 @@ const BookingStatusPage = () => {
     const [data, setData] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [notFound, setNotFound] = useState(false);
+    const [isPaying, setIsPaying] = useState(false);
 
     const load = useCallback(async ({ silent = false } = {}) => {
         if (!bookingId) return;
@@ -66,6 +68,32 @@ const BookingStatusPage = () => {
         document.addEventListener('visibilitychange', onVisible);
         return () => document.removeEventListener('visibilitychange', onVisible);
     }, [load]);
+
+    // Returning from Stripe (success_url carries ?session_id=…) → confirm + refresh.
+    // The webhook has already written the payment; we just reload to show it.
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get('session_id')) return;
+        toast({ title: 'Payment received', description: 'Thank you! Your balance has been updated.' });
+        window.history.replaceState({}, '', window.location.pathname);
+        // Give the webhook a moment, then refresh the booking.
+        setTimeout(() => load({ silent: true }), 1500);
+    }, [load, toast]);
+
+    const payBalance = async () => {
+        if (!data?.show?.id || !data?.booking?.id) return;
+        setIsPaying(true);
+        try {
+            await startStallCheckout({
+                showId: data.show.id,
+                bookingId: data.booking.id,
+                customerEmail: data.booking.email,
+            });
+        } catch (e) {
+            toast({ title: 'Could not open payment', description: e.message, variant: 'destructive' });
+            setIsPaying(false);
+        }
+    };
 
     const copyLink = async () => {
         try {
@@ -310,12 +338,39 @@ const BookingStatusPage = () => {
                                     </div>
                                 )}
 
-                                {/* Payment status */}
-                                {booking.paymentStatus && (
-                                    <div className="text-xs text-muted-foreground">
-                                        Payment: <Badge variant="outline" className="capitalize">{booking.paymentStatus.replace('_', ' ')}</Badge>
-                                    </div>
-                                )}
+                                {/* Payment status + pay balance */}
+                                {(() => {
+                                    const total = Number(booking.totalAmount ?? booking.amount ?? 0);
+                                    const paid = Number(booking.paidAmount ?? (booking.paymentStatus === 'paid' ? total : 0));
+                                    const balanceDue = Math.max(0, total - paid);
+                                    if (total <= 0) return null;
+                                    return (
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted-foreground">
+                                                {booking.paymentStatus && (
+                                                    <span>Payment: <Badge variant="outline" className="capitalize">{booking.paymentStatus.replace('_', ' ')}</Badge></span>
+                                                )}
+                                                <span>Paid: <span className="font-medium text-foreground">{money(paid)}</span> of {money(total)}</span>
+                                            </div>
+                                            {balanceDue > 0 ? (
+                                                <div className="rounded-lg border border-amber-400 bg-amber-500/10 p-3 space-y-2">
+                                                    <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                                                        Balance due: {money(balanceDue)}
+                                                    </p>
+                                                    <Button className="w-full" onClick={payBalance} disabled={isPaying}>
+                                                        {isPaying
+                                                            ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Opening payment…</>
+                                                            : <><CreditCard className="h-4 w-4 mr-2" /> Pay {money(balanceDue)} now</>}
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                <div className="rounded-lg border border-emerald-500 bg-emerald-500/10 p-2.5 text-sm font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                                                    <CheckCircle2 className="h-4 w-4" /> Paid in full
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
 
                                 {/* Preferences (read-only) */}
                                 {booking.preferences && (

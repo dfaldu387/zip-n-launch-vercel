@@ -38,6 +38,7 @@ import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
 import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls } from '@/lib/stallAssignment';
 import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
+import { sendStallInvoice } from '@/lib/housingCheckout';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
     numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS,
@@ -2202,6 +2203,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const [moveOutDate, setMoveOutDate] = useState(() => pd.stallingService?.moveOutDate || '');
     const [datesLocked, setDatesLocked] = useState(() => pd.stallingService?.datesLocked || false);
 
+    // Billing mode for the whole show — how stalls are sold online:
+    //   'invoice_after' — admin confirms, then an invoice is generated for payment (default)
+    //   'at_booking'    — exhibitor pre-pays online at the moment they book
+    // Read by the public booking flow (pay now vs request) and by invoicing.
+    const [billingMode, setBillingMode] = useState(() => pd.stallingService?.billingMode || 'invoice_after');
+    const [invoicingId, setInvoicingId] = useState(null); // booking currently being emailed a Stripe invoice
+
     // Two-way sync: fees typed on the Fee Structure page (source !== 'housing') are
     // carried here so they show + can be edited from Housing too. Non-housing-category
     // fees (entry, office, admin…) pass through untouched; only stall/RV/supply-type
@@ -2820,10 +2828,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [bookings, barns, rvAreas, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked }, opts);
+        await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked]);
+    }, [onSave, barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
     const handleSave = () => persist();
 
@@ -2837,7 +2845,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked]);
+    }, [barns, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
     return (
         <div className="space-y-6">
@@ -3224,6 +3232,46 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 Set fees here — they match the Fee Structure page. Stalls are added in the Inventory tab; RV/camping & supplies are added right here.
                             </p>
 
+                            {/* Billing mode — how stalls are sold online for this show. */}
+                            <div className="rounded-lg border bg-muted/20 p-3 space-y-2.5">
+                                <div className="flex items-center gap-2">
+                                    <DollarSign className="h-4 w-4 text-emerald-600" />
+                                    <h4 className="text-sm font-semibold">Billing</h4>
+                                    <span className="text-[11px] text-muted-foreground">How exhibitors pay for stalls online</span>
+                                </div>
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    {[
+                                        { id: 'invoice_after', title: 'Invoice after confirmation', desc: 'Admin confirms the booking, then an invoice is generated for the exhibitor to pay.' },
+                                        { id: 'at_booking', title: 'Bill at booking', desc: 'Exhibitor pre-pays online at the moment they book, before admin confirms.' },
+                                    ].map(opt => {
+                                        const active = billingMode === opt.id;
+                                        return (
+                                            <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => setBillingMode(opt.id)}
+                                                className={cn(
+                                                    'text-left rounded-lg border p-3 transition',
+                                                    active
+                                                        ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500'
+                                                        : 'border-border hover:border-emerald-400/60 hover:bg-muted/40'
+                                                )}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span className={cn('h-3.5 w-3.5 rounded-full border-2 shrink-0',
+                                                        active ? 'border-emerald-500 bg-emerald-500' : 'border-muted-foreground/40')} />
+                                                    <span className="text-sm font-medium">{opt.title}</span>
+                                                </div>
+                                                <p className="text-[11px] text-muted-foreground mt-1 ml-5">{opt.desc}</p>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Online card payment (Stripe) is wired up in a later step — this setting decides which flow the public booking page will use.
+                                </p>
+                            </div>
+
                             {/* Stall Fees */}
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
@@ -3369,6 +3417,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         <p className="text-xs text-muted-foreground">
                             {filteredBookings.length} of {bookings.length} bookings
                         </p>
+                        <Badge
+                            variant="outline"
+                            className="text-[10px] gap-1 border-emerald-400/60 text-emerald-700 dark:text-emerald-300"
+                            title="Set this in the Fees tab → Billing"
+                        >
+                            <DollarSign className="h-3 w-3" />
+                            {billingMode === 'at_booking' ? 'Bill at booking' : 'Invoice after confirm'}
+                        </Badge>
                     </div>
 
                     {filteredBookings.length === 0 ? (
@@ -3398,6 +3454,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onUpdateStallCount={(n) => updateBookingStallCount(booking.id, n)}
                                         />
                                     </div>
+                                    {(() => {
+                                        const bTotal = Number(booking.totalAmount ?? booking.amount ?? 0);
+                                        const bPaid = Number(booking.paidAmount ?? (booking.paymentStatus === 'paid' ? bTotal : 0));
+                                        const bDue = Math.max(0, bTotal - bPaid);
+                                        return (
+                                    <div className="flex flex-col gap-1">
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -3427,6 +3489,43 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     >
                                         <FileText className="h-3 w-3 mr-1" /> Invoice
                                     </Button>
+                                    {bDue > 0 && booking.email && (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 px-2 text-xs border-emerald-400/60 text-emerald-700 dark:text-emerald-300"
+                                            disabled={invoicingId === booking.id}
+                                            title={`Email a Stripe invoice for ${fmtMoney(bDue)} to ${booking.email}`}
+                                            onClick={async () => {
+                                                setInvoicingId(booking.id);
+                                                try {
+                                                    const res = await sendStallInvoice({ showId: show.id, bookingId: booking.id });
+                                                    // Copy the payable link so the admin always has it,
+                                                    // even if Stripe's email doesn't reach the exhibitor.
+                                                    let copied = false;
+                                                    if (res.hostedInvoiceUrl) {
+                                                        try { await navigator.clipboard.writeText(res.hostedInvoiceUrl); copied = true; } catch { /* ignore */ }
+                                                    }
+                                                    toast({
+                                                        title: 'Invoice created',
+                                                        description: `${fmtMoney(res.amount)} invoice for ${res.email}. ${copied ? 'Payable link copied to clipboard.' : ''}`,
+                                                    });
+                                                    if (res.hostedInvoiceUrl) window.open(res.hostedInvoiceUrl, '_blank');
+                                                } catch (e) {
+                                                    toast({ title: 'Could not send invoice', description: e.message, variant: 'destructive' });
+                                                } finally {
+                                                    setInvoicingId(null);
+                                                }
+                                            }}
+                                        >
+                                            {invoicingId === booking.id
+                                                ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Sending…</>
+                                                : <><Mail className="h-3 w-3 mr-1" /> Email Invoice</>}
+                                        </Button>
+                                    )}
+                                    </div>
+                                        );
+                                    })()}
                                 </div>
                             ))}
                         </div>
@@ -4014,7 +4113,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
@@ -4034,6 +4133,7 @@ const HousingGroundsManagerPage = () => {
                     moveInDate: moveInDate ?? selectedShow.project_data?.stallingService?.moveInDate ?? '',
                     moveOutDate: moveOutDate ?? selectedShow.project_data?.stallingService?.moveOutDate ?? '',
                     datesLocked: datesLocked ?? selectedShow.project_data?.stallingService?.datesLocked ?? false,
+                    billingMode: billingMode ?? selectedShow.project_data?.stallingService?.billingMode ?? 'invoice_after',
                 },
                 fees: [...manualFees, ...housingFees],
             }, 'housing');

@@ -56,6 +56,54 @@ async function stripeGet(endpoint: string): Promise<any> {
   return response.json();
 }
 
+// Add a payment to a housing booking inside project_data and flip its
+// paymentStatus. Additive, so a later top-up (pay-the-difference) adds on. Shared
+// by both the checkout (pay now) and invoice (pay later) flows.
+async function markStallBookingPaid(
+  adminClient: any,
+  showId: string,
+  bookingId: string,
+  paidDollars: number
+): Promise<void> {
+  if (!showId || !bookingId) return;
+  const { data: project } = await adminClient
+    .from("projects")
+    .select("project_data")
+    .eq("id", showId)
+    .single();
+
+  const pd = project?.project_data || {};
+  const svc = pd.stallingService || {};
+  let found = false;
+  const bookings = (svc.bookings || []).map((b: any) => {
+    if (b.id !== bookingId) return b;
+    found = true;
+    const total = Number(b.totalAmount ?? b.amount ?? 0);
+    const prevPaid = Number(
+      b.paidAmount ?? (b.paymentStatus === "paid" ? total : 0)
+    );
+    const newPaid = prevPaid + paidDollars;
+    return {
+      ...b,
+      paidAmount: newPaid,
+      paymentStatus: newPaid >= total - 0.01 ? "paid" : "partial",
+      paidAt: new Date().toISOString(),
+    };
+  });
+
+  if (!found) {
+    console.error("Booking not found for payment:", bookingId);
+    return;
+  }
+  const updated = { ...pd, stallingService: { ...svc, bookings } };
+  const { error } = await adminClient
+    .from("projects")
+    .update({ project_data: updated })
+    .eq("id", showId);
+  if (error) console.error("Error updating booking payment:", error);
+  else console.log(`Booking ${bookingId} payment recorded (+$${paidDollars})`);
+}
+
 serve(async (req: Request): Promise<Response> => {
   // Log all headers for debugging
   const headers: Record<string, string> = {};
@@ -108,6 +156,20 @@ serve(async (req: Request): Promise<Response> => {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object;
+
+        // ── Housing / stall booking payment (guest checkout, no supabase user) ──
+        if (session.metadata?.type === "stall_booking") {
+          const paidDollars = (session.amount_total || 0) / 100;
+          console.log(`stall_booking checkout paid: +$${paidDollars}`);
+          await markStallBookingPaid(
+            adminClient,
+            session.metadata.showId,
+            session.metadata.bookingId,
+            paidDollars
+          );
+          break;
+        }
+
         const userId = session.metadata?.supabase_user_id;
 
         console.log("checkout.session.completed - userId:", userId, "mode:", session.mode, "subscription:", session.subscription);
@@ -276,6 +338,23 @@ serve(async (req: Request): Promise<Response> => {
             .eq("id", profile.id);
 
           console.log(`Subscription ${event.type} for user ${profile.id}`);
+        }
+        break;
+      }
+
+      case "invoice.paid":
+      case "invoice.payment_succeeded": {
+        const invoice = event.data.object;
+        // Only our housing invoices carry this metadata; subscription invoices don't.
+        if (invoice.metadata?.type === "stall_booking") {
+          const paidDollars = (invoice.amount_paid || 0) / 100;
+          console.log(`stall_booking invoice paid: +$${paidDollars}`);
+          await markStallBookingPaid(
+            adminClient,
+            invoice.metadata.showId,
+            invoice.metadata.bookingId,
+            paidDollars
+          );
         }
         break;
       }

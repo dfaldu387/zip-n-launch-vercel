@@ -20,6 +20,7 @@ import { useToast } from '@/components/ui/use-toast';
 
 const Divider = () => <div className="h-px bg-border my-2" />;
 import { supabase } from '@/lib/supabaseClient';
+import { startStallCheckout } from '@/lib/housingCheckout';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -621,6 +622,7 @@ const PublicBookingPage = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [step, setStep] = useState(1);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [confirmation, setConfirmation] = useState(null);
 
     const [selection, setSelection] = useState({
         stalls: {},
@@ -674,6 +676,29 @@ const PublicBookingPage = () => {
         };
         if (showId) loadShow();
     }, [showId, toast]);
+
+    // How this show sells stalls online: 'at_booking' (pre-pay now) or 'invoice_after'.
+    const billingMode = show?.project_data?.stallingService?.billingMode || 'invoice_after';
+
+    // Returning from Stripe (success_url carries ?session_id=…) → show the paid
+    // confirmation. The webhook has already marked the booking paid server-side; here
+    // we just restore the booking we stashed before redirecting and clean the URL.
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get('session_id')) return;
+        try {
+            const stashed = sessionStorage.getItem('pendingStallBooking');
+            if (stashed) {
+                const b = JSON.parse(stashed);
+                setConfirmation({ ...b, paid: true });
+                sessionStorage.removeItem('pendingStallBooking');
+            } else {
+                setConfirmation({ paid: true, bookingShortId: '', payload: {} });
+            }
+        } catch { /* ignore */ }
+        // Strip the query so a refresh doesn't re-trigger this.
+        window.history.replaceState({}, '', window.location.pathname);
+    }, []);
 
     const inventory = useMemo(() => {
         const stalling = show?.project_data?.stallingService || {};
@@ -911,8 +936,6 @@ const PublicBookingPage = () => {
         return true;
     };
 
-    const [confirmation, setConfirmation] = useState(null);
-
     const handleSubmit = async () => {
         setIsSubmitting(true);
         try {
@@ -951,11 +974,37 @@ const PublicBookingPage = () => {
 
             if (error) throw error;
 
-            setConfirmation({
+            const conf = {
                 bookingId: data,
                 bookingShortId: String(data || '').slice(0, 8).toUpperCase(),
                 payload: bookingPayload,
-            });
+            };
+
+            // Bill-at-booking → send them straight to Stripe to pre-pay. Stash the
+            // booking so we can show a paid confirmation when they return. If checkout
+            // can't start, fall back to the normal (unpaid) confirmation below.
+            if (billingMode === 'at_booking' && orderSummary.subtotal > 0) {
+                try {
+                    sessionStorage.setItem('pendingStallBooking', JSON.stringify(conf));
+                    await startStallCheckout({
+                        showId,
+                        bookingId: data,
+                        customerEmail: details.email,
+                    });
+                    return; // browser is redirecting to Stripe
+                } catch (payErr) {
+                    sessionStorage.removeItem('pendingStallBooking');
+                    toast({
+                        title: 'Could not open payment',
+                        description: `${payErr.message}. Your reservation is saved — you can pay from the confirmation.`,
+                        variant: 'destructive',
+                    });
+                    setConfirmation({ ...conf, payFailed: true });
+                    return;
+                }
+            }
+
+            setConfirmation(conf);
         } catch (err) {
             toast({
                 title: 'Could not save reservation',
@@ -998,14 +1047,54 @@ const PublicBookingPage = () => {
                             <Card className="border-2 border-emerald-500">
                                 <CardHeader className="text-center pb-4">
                                     <div className="mx-auto h-16 w-16 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mb-3">
-                                        <PartyPopper className="h-8 w-8 text-emerald-600" />
+                                        {confirmation.paid
+                                            ? <CheckCircle2 className="h-8 w-8 text-emerald-600" />
+                                            : <PartyPopper className="h-8 w-8 text-emerald-600" />}
                                     </div>
-                                    <CardTitle className="text-2xl">Reservation Received!</CardTitle>
+                                    <CardTitle className="text-2xl">
+                                        {confirmation.paid ? 'Payment Received!' : 'Reservation Received!'}
+                                    </CardTitle>
                                     <CardDescription>
-                                        Thank you, {confirmation.payload.exhibitorName}. Your reservation for <strong>{show?.project_name}</strong> has been recorded.
+                                        {confirmation.paid ? (
+                                            <>Thank you{confirmation.payload?.exhibitorName ? `, ${confirmation.payload.exhibitorName}` : ''}. Your reservation for <strong>{show?.project_name}</strong> is confirmed and <strong>paid</strong>.</>
+                                        ) : (
+                                            <>Thank you, {confirmation.payload?.exhibitorName}. Your reservation for <strong>{show?.project_name}</strong> has been recorded.</>
+                                        )}
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-5">
+                                    {/* Payment status / pay-now */}
+                                    {confirmation.paid ? (
+                                        <div className="rounded-lg border border-emerald-500 bg-emerald-500/10 p-3 text-sm font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                                            <CheckCircle2 className="h-4 w-4" /> Paid in full — {money(confirmation.payload?.totalAmount)}
+                                        </div>
+                                    ) : billingMode === 'at_booking' ? (
+                                        <div className="rounded-lg border border-amber-400 bg-amber-500/10 p-3 space-y-2">
+                                            <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                                                {confirmation.payFailed ? 'Payment didn’t start — your spot is held. Pay now to confirm it.' : 'Payment required to confirm your reservation.'}
+                                            </p>
+                                            <Button
+                                                className="w-full"
+                                                onClick={async () => {
+                                                    try {
+                                                        sessionStorage.setItem('pendingStallBooking', JSON.stringify(confirmation));
+                                                        await startStallCheckout({ showId, bookingId: confirmation.bookingId, customerEmail: confirmation.payload?.email });
+                                                    } catch (e) {
+                                                        sessionStorage.removeItem('pendingStallBooking');
+                                                        toast({ title: 'Could not open payment', description: e.message, variant: 'destructive' });
+                                                    }
+                                                }}
+                                            >
+                                                Pay {money(confirmation.payload?.totalAmount)} now
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
+                                            The organizer will confirm your reservation and send an invoice for payment.
+                                        </div>
+                                    )}
+
+                                    {confirmation.bookingShortId && (
                                     <div className="bg-muted/50 rounded-lg p-4 flex items-center justify-between">
                                         <div>
                                             <p className="text-xs text-muted-foreground uppercase font-semibold mb-1 flex items-center gap-1">
@@ -1017,7 +1106,9 @@ const PublicBookingPage = () => {
                                             <Copy className="h-3.5 w-3.5 mr-1" /> Copy
                                         </Button>
                                     </div>
+                                    )}
 
+                                    {confirmation.payload?.arrivalDate && (
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                                         <div>
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Dates</p>
@@ -1039,7 +1130,9 @@ const PublicBookingPage = () => {
                                             <p>{confirmation.payload.phone}</p>
                                         </div>
                                     </div>
+                                    )}
 
+                                    {(confirmation.payload?.items || []).length > 0 && (
                                     <div>
                                         <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Items Reserved</p>
                                         <div className="space-y-1 text-sm border rounded-md divide-y">
@@ -1051,13 +1144,7 @@ const PublicBookingPage = () => {
                                             ))}
                                         </div>
                                     </div>
-
-                                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md p-3 text-sm">
-                                        <p className="font-semibold text-amber-900 dark:text-amber-300 mb-1">⚠️ Payment is not collected yet</p>
-                                        <p className="text-amber-800 dark:text-amber-400 text-xs">
-                                            The show organizer will contact you at <strong>{confirmation.payload.email}</strong> to arrange payment and confirm your stalls. Save your booking reference above.
-                                        </p>
-                                    </div>
+                                    )}
                                 </CardContent>
                             </Card>
 
