@@ -1,135 +1,144 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { Toaster } from '@/components/ui/toaster';
 import ErrorBoundary from '@/components/ErrorBoundary';
-import HomePage from '@/pages/HomePage';
-import CustomizePage from '@/pages/CustomizePage';
-import ContributorPortalPage from '@/pages/ContributorPortalPage';
-import ContributorsPage from '@/pages/ContributorsPage';
-import EventsPage from '@/pages/EventsPage';
-import ScoreSheetsPage from '@/pages/ScoreSheetsPage';
-import QRCodePage from '@/pages/QRCodePage';
-import SponsorshipPage from '@/pages/SponsorshipPage';
-import SocialMediaPage from '@/pages/SocialMediaPage';
-import EventDetailPage from '@/pages/EventDetailPage';
-import DatabaseSchemaPage from '@/pages/DatabaseSchemaPage';
-import AdminPage from '@/pages/AdminPage';
-import PatternHubPage from '@/pages/PatternHubPage';
-import ProductDetailPage from '@/pages/ProductDetailPage';
-import SuccessPage from '@/pages/SuccessPage';
-import PatternBookBuilderPage from '@/pages/PatternBookBuilderPage';
-import ShowScheduleAnalyticsPage from '@/pages/ShowScheduleAnalyticsPage';
-import DataLearningCenterPage from '@/pages/DataLearningCenterPage';
-import SponsorshipAnalyticsPage from '@/pages/SponsorshipAnalyticsPage';
-import FutureIdeasPage from '@/pages/FutureIdeasPage';
-import FeeDocumentationPage from '@/pages/FeeDocumentationPage';
-import AITrainingManualPage from '@/pages/AITrainingManualPage';
-import SponsorshipIntelligencePage from '@/pages/SponsorshipIntelligencePage';
-import AssetLibraryPage from '@/pages/AssetLibraryPage';
-import CustomPatternSetPage from '@/pages/CustomPatternSetPage';
-import PatternUploadWizardPage from '@/pages/PatternUploadWizardPage';
-import ScoreSheetGeneratorPage from '@/pages/ScoreSheetGeneratorPage';
-import ScoreSheetQRDownloadPage from '@/pages/ScoreSheetQRDownloadPage';
-import ScoreSheetResultsPage from '@/pages/ScoreSheetResultsPage';
-import AIScoreSheetManagerPage from '@/pages/AIScoreSheetManagerPage';
-import AdminPatternReviewPage from '@/pages/AdminPatternReviewPage';
-import AIPatternGeneratorStudioPage from '@/pages/AIPatternGeneratorStudioPage';
-import MediaLibraryPage from '@/pages/MediaLibraryPage';
-import MediaAssignmentsPage from '@/pages/MediaAssignmentsPage';
-import AdminSiteBrandingPage from '@/pages/AdminSiteBrandingPage';
-import AdminMarketingContentPage from '@/pages/AdminMarketingContentPage';
 import { MediaConfigProvider } from '@/contexts/MediaConfigContext';
-import PastEventsPage from '@/pages/PastEventsPage';
-import StorePage from '@/pages/StorePage';
-import AssetIntelligenceCenterPage from '@/pages/AssetIntelligenceCenterPage';
-import CollaborationHubPage from '@/pages/CollaborationHubPage';
 import { ThemeProvider } from "@/components/ThemeProvider";
 import AuthModal from '@/components/AuthModal';
 import SupportWidget from '@/components/SupportWidget';
-import CustomerAssetLibraryPage from '@/pages/CustomerAssetLibraryPage';
-import CustomerPortalPage from '@/pages/CustomerPortalPage';
-import ArchivePatternsPage from '@/pages/ArchivePatternsPage';
-import PatternUploadLandingPage from '@/pages/PatternUploadLandingPage';
-import PatternUploadRequestPage from '@/pages/PatternUploadRequestPage';
-import PatternJudgeRequestPage from '@/pages/PatternJudgeRequestPage';
-import HorseShowManagerPage from '@/pages/HorseShowManagerPage';
-import CreateShowPage from '@/pages/CreateShowPage';
-import ShowStructurePage from '@/pages/ShowStructurePage';
-import HousingGroundsManagerPage from '@/pages/HousingGroundsManagerPage';
-import EmployeeArenaSchedulingManagerPage from '@/pages/EmployeeArenaSchedulingManagerPage';
-import AwardsPresenterManagerPage from '@/pages/AwardsPresenterManagerPage';
-import EmployeeManagementPage from '@/pages/EmployeeManagementPage';
-import ContractManagementPage from '@/pages/ContractManagementPage';
-import TravelManagementPage from '@/pages/TravelManagementPage';
-import UpdatePasswordPage from '@/pages/UpdatePasswordPage';
-import ProfilePage from '@/pages/ProfilePage';
-import JudgesPortalPage from '@/pages/JudgesPortalPage';
-import StaffPortalPage from '@/pages/StaffPortalPage';
 import AdminRoute from '@/components/AdminRoute';
 import RoleBasedRoute from '@/components/RoleBasedRoute';
 import MembershipRoute from '@/components/MembershipRoute';
-import NotAuthorizedPage from '@/pages/NotAuthorizedPage';
-import AdminUserManagementPage from '@/pages/AdminUserManagementPage';
-import AdminDisciplineManagementPage from '@/pages/AdminDisciplineManagementPage';
-import AdminAssociationManagementPage from '@/pages/AdminAssociationManagementPage';
-import AssociationAssetsPage from '@/pages/AssociationAssetsPage';
-import AdminShowManagementPage from '@/pages/AdminShowManagementPage';
-import AdminEventsManagementPage from '@/pages/AdminEventsManagementPage';
-import AdminSponsorshipPackagesPage from '@/pages/AdminSponsorshipPackagesPage';
-import PublicShowPage from '@/pages/PublicShowPage';
-import PublicBookingPage from '@/pages/PublicBookingPage';
-import QuickSupplyOrderPage from '@/pages/QuickSupplyOrderPage';
-import PublicShowsListPage from '@/pages/PublicShowsListPage';
-import CheckInPage from '@/pages/CheckInPage';
-import BookingStatusPage from '@/pages/BookingStatusPage';
-import FindBookingPage from '@/pages/FindBookingPage';
-import AdminDivisionManagementPage from '@/pages/AdminDivisionManagementPage';
-import AdminDivisionLevelManagementPage from '@/pages/AdminDivisionLevelManagementPage';
-import ApprovalsDashboardPage from '@/pages/ApprovalsDashboardPage';
-import ShowDashboardPage from '@/pages/ShowDashboardPage';
-import EquiPatternsDashboard from '@/pages/EquiPatternsDashboard';
-import PatternLibraryPage from '@/pages/PatternLibraryPage';
-import ScoreSheetLibraryPage from '@/pages/ScoreSheetLibraryPage';
-import PacketBuilderPage from '@/pages/PacketBuilderPage';
-import DistributionPage from '@/pages/DistributionPage';
-import JudgeKioskPage from '@/pages/KioskViews/JudgeKioskPage';
-import ScribeKioskPage from '@/pages/KioskViews/ScribeKioskPage';
-import AnnouncerKioskPage from '@/pages/KioskViews/AnnouncerKioskPage';
-import AuditReportsPage from '@/pages/AuditReportsPage';
-import AdminRoleManagementPage from '@/pages/AdminRoleManagementPage';
-import AdminPatternExtractorPage from '@/pages/AdminPatternExtractorPage';
-import ManualPatternEntryPage from '@/pages/ManualPatternEntryPage';
-import AdminTrackingUserPage from '@/pages/AdminTrackingUserPage';
-import AdminPatternLevelManagementPage from '@/pages/AdminPatternLevelManagementPage';
-import AccountSecurityPage from '@/pages/AccountSecurityPage';
-import PolicyPage from '@/pages/PolicyPage';
-import SupportPage from '@/pages/SupportPage';
-import ScoresheetUploadPage from '@/pages/ScoresheetUploadPage';
-import PricingPage from '@/pages/PricingPage';
-import BillingHistoryPage from '@/pages/BillingHistoryPage';
-import AdminBillingReportPage from '@/pages/AdminBillingReportPage';
-import EquipmentManagementPage from '@/pages/EquipmentManagementPage';
-import DisciplinePlannerPage from '@/pages/DisciplinePlannerPage';
-import ArenaSessionsPage from '@/pages/ArenaSessionsPage';
-import EquipmentRequirementsPage from '@/pages/EquipmentRequirementsPage';
-import DistributionPlanPage from '@/pages/DistributionPlanPage';
-import EquipmentCheckInOutPage from '@/pages/EquipmentCheckInOutPage';
-import EquipmentPlanningHubPage from '@/pages/EquipmentPlanningHubPage';
-import LocationsPage from '@/pages/LocationsPage';
-import ReconciliationPage from '@/pages/ReconciliationPage';
-import EquipmentReportsPage from '@/pages/EquipmentReportsPage';
-import CreateHorseShowWizardPage from '@/pages/CreateHorseShowWizardPage';
-import ShowWorkspacePage from '@/pages/ShowWorkspacePage';
-// ScheduleBuilderPage removed — merged into CreateShowPage
-import ShowFinancialDashboardPage from '@/pages/ShowFinancialDashboardPage';
-// ShowFinancialPickerPage removed — using LinkToExistingShow in dashboard
-
-import EmployeeBudgetingToolPage from '@/pages/EmployeeBudgetingToolPage';
-import VenueArenaSetupPage from '@/pages/VenueArenaSetupPage';
-import EmployeeSchedulingPage from '@/pages/EmployeeSchedulingPage';
-import AwardsManagementPage from '@/pages/AwardsManagementPage';
-import ResultsManagementPage from '@/pages/ResultsManagementPage';
 import { AnalyticsProvider } from '@/components/AnalyticsProvider';
+
+// Pages are lazy-loaded so each route ships as its own chunk. This keeps the
+// initial download small — a visitor only fetches the code for the page they
+// open, instead of the whole app (all ~130 pages) up front.
+const HomePage = lazy(() => import('@/pages/HomePage'));
+const CustomizePage = lazy(() => import('@/pages/CustomizePage'));
+const ContributorPortalPage = lazy(() => import('@/pages/ContributorPortalPage'));
+const ContributorsPage = lazy(() => import('@/pages/ContributorsPage'));
+const EventsPage = lazy(() => import('@/pages/EventsPage'));
+const ScoreSheetsPage = lazy(() => import('@/pages/ScoreSheetsPage'));
+const QRCodePage = lazy(() => import('@/pages/QRCodePage'));
+const SponsorshipPage = lazy(() => import('@/pages/SponsorshipPage'));
+const SocialMediaPage = lazy(() => import('@/pages/SocialMediaPage'));
+const EventDetailPage = lazy(() => import('@/pages/EventDetailPage'));
+const DatabaseSchemaPage = lazy(() => import('@/pages/DatabaseSchemaPage'));
+const AdminPage = lazy(() => import('@/pages/AdminPage'));
+const PatternHubPage = lazy(() => import('@/pages/PatternHubPage'));
+const ProductDetailPage = lazy(() => import('@/pages/ProductDetailPage'));
+const SuccessPage = lazy(() => import('@/pages/SuccessPage'));
+const PatternBookBuilderPage = lazy(() => import('@/pages/PatternBookBuilderPage'));
+const ShowScheduleAnalyticsPage = lazy(() => import('@/pages/ShowScheduleAnalyticsPage'));
+const DataLearningCenterPage = lazy(() => import('@/pages/DataLearningCenterPage'));
+const SponsorshipAnalyticsPage = lazy(() => import('@/pages/SponsorshipAnalyticsPage'));
+const FutureIdeasPage = lazy(() => import('@/pages/FutureIdeasPage'));
+const FeeDocumentationPage = lazy(() => import('@/pages/FeeDocumentationPage'));
+const AITrainingManualPage = lazy(() => import('@/pages/AITrainingManualPage'));
+const SponsorshipIntelligencePage = lazy(() => import('@/pages/SponsorshipIntelligencePage'));
+const AssetLibraryPage = lazy(() => import('@/pages/AssetLibraryPage'));
+const CustomPatternSetPage = lazy(() => import('@/pages/CustomPatternSetPage'));
+const PatternUploadWizardPage = lazy(() => import('@/pages/PatternUploadWizardPage'));
+const ScoreSheetGeneratorPage = lazy(() => import('@/pages/ScoreSheetGeneratorPage'));
+const ScoreSheetQRDownloadPage = lazy(() => import('@/pages/ScoreSheetQRDownloadPage'));
+const ScoreSheetResultsPage = lazy(() => import('@/pages/ScoreSheetResultsPage'));
+const AIScoreSheetManagerPage = lazy(() => import('@/pages/AIScoreSheetManagerPage'));
+const AdminPatternReviewPage = lazy(() => import('@/pages/AdminPatternReviewPage'));
+const AIPatternGeneratorStudioPage = lazy(() => import('@/pages/AIPatternGeneratorStudioPage'));
+const MediaLibraryPage = lazy(() => import('@/pages/MediaLibraryPage'));
+const MediaAssignmentsPage = lazy(() => import('@/pages/MediaAssignmentsPage'));
+const AdminSiteBrandingPage = lazy(() => import('@/pages/AdminSiteBrandingPage'));
+const AdminMarketingContentPage = lazy(() => import('@/pages/AdminMarketingContentPage'));
+const PastEventsPage = lazy(() => import('@/pages/PastEventsPage'));
+const StorePage = lazy(() => import('@/pages/StorePage'));
+const AssetIntelligenceCenterPage = lazy(() => import('@/pages/AssetIntelligenceCenterPage'));
+const CollaborationHubPage = lazy(() => import('@/pages/CollaborationHubPage'));
+const CustomerAssetLibraryPage = lazy(() => import('@/pages/CustomerAssetLibraryPage'));
+const CustomerPortalPage = lazy(() => import('@/pages/CustomerPortalPage'));
+const ArchivePatternsPage = lazy(() => import('@/pages/ArchivePatternsPage'));
+const PatternUploadLandingPage = lazy(() => import('@/pages/PatternUploadLandingPage'));
+const PatternUploadRequestPage = lazy(() => import('@/pages/PatternUploadRequestPage'));
+const PatternJudgeRequestPage = lazy(() => import('@/pages/PatternJudgeRequestPage'));
+const HorseShowManagerPage = lazy(() => import('@/pages/HorseShowManagerPage'));
+const CreateShowPage = lazy(() => import('@/pages/CreateShowPage'));
+const ShowStructurePage = lazy(() => import('@/pages/ShowStructurePage'));
+const HousingGroundsManagerPage = lazy(() => import('@/pages/HousingGroundsManagerPage'));
+const EmployeeArenaSchedulingManagerPage = lazy(() => import('@/pages/EmployeeArenaSchedulingManagerPage'));
+const AwardsPresenterManagerPage = lazy(() => import('@/pages/AwardsPresenterManagerPage'));
+const EmployeeManagementPage = lazy(() => import('@/pages/EmployeeManagementPage'));
+const ContractManagementPage = lazy(() => import('@/pages/ContractManagementPage'));
+const TravelManagementPage = lazy(() => import('@/pages/TravelManagementPage'));
+const UpdatePasswordPage = lazy(() => import('@/pages/UpdatePasswordPage'));
+const ProfilePage = lazy(() => import('@/pages/ProfilePage'));
+const JudgesPortalPage = lazy(() => import('@/pages/JudgesPortalPage'));
+const StaffPortalPage = lazy(() => import('@/pages/StaffPortalPage'));
+const NotAuthorizedPage = lazy(() => import('@/pages/NotAuthorizedPage'));
+const AdminUserManagementPage = lazy(() => import('@/pages/AdminUserManagementPage'));
+const AdminDisciplineManagementPage = lazy(() => import('@/pages/AdminDisciplineManagementPage'));
+const AdminAssociationManagementPage = lazy(() => import('@/pages/AdminAssociationManagementPage'));
+const AssociationAssetsPage = lazy(() => import('@/pages/AssociationAssetsPage'));
+const AdminShowManagementPage = lazy(() => import('@/pages/AdminShowManagementPage'));
+const AdminEventsManagementPage = lazy(() => import('@/pages/AdminEventsManagementPage'));
+const AdminSponsorshipPackagesPage = lazy(() => import('@/pages/AdminSponsorshipPackagesPage'));
+const PublicShowPage = lazy(() => import('@/pages/PublicShowPage'));
+const PublicBookingPage = lazy(() => import('@/pages/PublicBookingPage'));
+const QuickSupplyOrderPage = lazy(() => import('@/pages/QuickSupplyOrderPage'));
+const PublicShowsListPage = lazy(() => import('@/pages/PublicShowsListPage'));
+const CheckInPage = lazy(() => import('@/pages/CheckInPage'));
+const BookingStatusPage = lazy(() => import('@/pages/BookingStatusPage'));
+const FindBookingPage = lazy(() => import('@/pages/FindBookingPage'));
+const AdminDivisionManagementPage = lazy(() => import('@/pages/AdminDivisionManagementPage'));
+const AdminDivisionLevelManagementPage = lazy(() => import('@/pages/AdminDivisionLevelManagementPage'));
+const ApprovalsDashboardPage = lazy(() => import('@/pages/ApprovalsDashboardPage'));
+const ShowDashboardPage = lazy(() => import('@/pages/ShowDashboardPage'));
+const EquiPatternsDashboard = lazy(() => import('@/pages/EquiPatternsDashboard'));
+const PatternLibraryPage = lazy(() => import('@/pages/PatternLibraryPage'));
+const ScoreSheetLibraryPage = lazy(() => import('@/pages/ScoreSheetLibraryPage'));
+const PacketBuilderPage = lazy(() => import('@/pages/PacketBuilderPage'));
+const DistributionPage = lazy(() => import('@/pages/DistributionPage'));
+const JudgeKioskPage = lazy(() => import('@/pages/KioskViews/JudgeKioskPage'));
+const ScribeKioskPage = lazy(() => import('@/pages/KioskViews/ScribeKioskPage'));
+const AnnouncerKioskPage = lazy(() => import('@/pages/KioskViews/AnnouncerKioskPage'));
+const AuditReportsPage = lazy(() => import('@/pages/AuditReportsPage'));
+const AdminRoleManagementPage = lazy(() => import('@/pages/AdminRoleManagementPage'));
+const AdminPatternExtractorPage = lazy(() => import('@/pages/AdminPatternExtractorPage'));
+const ManualPatternEntryPage = lazy(() => import('@/pages/ManualPatternEntryPage'));
+const AdminTrackingUserPage = lazy(() => import('@/pages/AdminTrackingUserPage'));
+const AdminPatternLevelManagementPage = lazy(() => import('@/pages/AdminPatternLevelManagementPage'));
+const AccountSecurityPage = lazy(() => import('@/pages/AccountSecurityPage'));
+const PolicyPage = lazy(() => import('@/pages/PolicyPage'));
+const SupportPage = lazy(() => import('@/pages/SupportPage'));
+const ScoresheetUploadPage = lazy(() => import('@/pages/ScoresheetUploadPage'));
+const PricingPage = lazy(() => import('@/pages/PricingPage'));
+const BillingHistoryPage = lazy(() => import('@/pages/BillingHistoryPage'));
+const AdminBillingReportPage = lazy(() => import('@/pages/AdminBillingReportPage'));
+const EquipmentManagementPage = lazy(() => import('@/pages/EquipmentManagementPage'));
+const DisciplinePlannerPage = lazy(() => import('@/pages/DisciplinePlannerPage'));
+const ArenaSessionsPage = lazy(() => import('@/pages/ArenaSessionsPage'));
+const EquipmentRequirementsPage = lazy(() => import('@/pages/EquipmentRequirementsPage'));
+const DistributionPlanPage = lazy(() => import('@/pages/DistributionPlanPage'));
+const EquipmentCheckInOutPage = lazy(() => import('@/pages/EquipmentCheckInOutPage'));
+const EquipmentPlanningHubPage = lazy(() => import('@/pages/EquipmentPlanningHubPage'));
+const LocationsPage = lazy(() => import('@/pages/LocationsPage'));
+const ReconciliationPage = lazy(() => import('@/pages/ReconciliationPage'));
+const EquipmentReportsPage = lazy(() => import('@/pages/EquipmentReportsPage'));
+const CreateHorseShowWizardPage = lazy(() => import('@/pages/CreateHorseShowWizardPage'));
+const ShowWorkspacePage = lazy(() => import('@/pages/ShowWorkspacePage'));
+const ShowFinancialDashboardPage = lazy(() => import('@/pages/ShowFinancialDashboardPage'));
+const EmployeeBudgetingToolPage = lazy(() => import('@/pages/EmployeeBudgetingToolPage'));
+const VenueArenaSetupPage = lazy(() => import('@/pages/VenueArenaSetupPage'));
+const EmployeeSchedulingPage = lazy(() => import('@/pages/EmployeeSchedulingPage'));
+const AwardsManagementPage = lazy(() => import('@/pages/AwardsManagementPage'));
+const ResultsManagementPage = lazy(() => import('@/pages/ResultsManagementPage'));
+
+// Shown while a route's chunk is being fetched.
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center">
+    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+  </div>
+);
 
 function App() {
   return (
@@ -138,6 +147,7 @@ function App() {
             <AnalyticsProvider>
               <div className="min-h-screen">
                 <ErrorBoundary>
+                <Suspense fallback={<PageLoader />}>
                 <Routes>
                   <Route path="/" element={<HomePage />} />
                   <Route path="/update-password" element={<UpdatePasswordPage />} />
@@ -171,7 +181,7 @@ function App() {
                   <Route path="/show/:showId/order-supplies" element={<QuickSupplyOrderPage />} />
                   <Route path="/booking/:bookingId" element={<BookingStatusPage />} />
                   <Route path="/find-booking" element={<FindBookingPage />} />
-                  
+
                   {/* EquiPatterns Routes */}
                   <Route path="/dashboard" element={<RoleBasedRoute requiredPermission="ep_dashboard:view"><EquiPatternsDashboard /></RoleBasedRoute>} />
                   <Route path="/library/patterns" element={<RoleBasedRoute requiredPermission="ep_patterns:manage"><PatternLibraryPage /></RoleBasedRoute>} />
@@ -286,6 +296,7 @@ function App() {
                   {/* Catch-all: any unknown URL redirects to home instead of a blank page */}
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
+                </Suspense>
                 </ErrorBoundary>
                 <Toaster />
                 <AuthModal />

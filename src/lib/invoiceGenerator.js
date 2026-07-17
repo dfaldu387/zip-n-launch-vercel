@@ -159,7 +159,10 @@ function buildLineItems(booking, assignedStalls = []) {
                     description += `\nAssigned: ${stallsInThisBarn.map(s => s.number || s.stallNumber).join(', ')}`;
                 }
                 description += `\n${count} stall${count !== 1 ? 's' : ''} × ${nights} night${nights !== 1 ? 's' : ''}`;
-                if (it.detail) description += `\n${it.detail}`;
+                // Detail is rebuilt from the live price so it can't go stale against
+                // the Unit Price column (a booking made before the fee was set stored
+                // "$0.00/night" in it.detail — recompute instead of trusting it).
+                description += `\n${fmtMoney(price)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${count}`;
                 rows.push({
                     description,
                     qty: count * nights,
@@ -190,6 +193,21 @@ function buildLineItems(booking, assignedStalls = []) {
     }
 
     return rows;
+}
+
+/**
+ * The live amount a booking currently owes: assigned stalls × nights × current
+ * price/night, plus any non-stall items. Ignores the stored booking.totalAmount
+ * (which freezes at booking time and goes stale when the fee is set/changed
+ * afterward) so the figure always matches the invoice PDF.
+ *
+ * @param {object} booking          Booking object (with items[], nights, etc.)
+ * @param {Array}  [assignedStalls] Assigned stall objects carrying { barnId, pricePerNight }
+ * @returns {number} total owed
+ */
+export function computeBookingTotal(booking, assignedStalls = []) {
+    return buildLineItems(booking || {}, assignedStalls)
+        .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
 }
 
 function drawTotals(doc, { subtotal, total, amountPaid = 0, balanceDue = null }) {

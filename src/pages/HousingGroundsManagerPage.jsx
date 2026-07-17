@@ -37,7 +37,7 @@ import AssignBoard from '@/components/housing/AssignBoard';
 import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
 import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls } from '@/lib/stallAssignment';
-import { downloadInvoicePdf } from '@/lib/invoiceGenerator';
+import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
@@ -1532,7 +1532,14 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
     // Payment: what the booking currently totals, what's been paid, what's still owed.
     // A booking flagged "paid" with no explicit amount is treated as paid in full;
     // if stalls are later added, the total rises and a balance appears automatically.
-    const bookingTotal = Number(booking.totalAmount != null ? booking.totalAmount : (booking.amount || 0));
+    // The total is recomputed live (stalls × nights × current price/night) — the
+    // same logic the invoice uses — so it never shows the stale stored totalAmount,
+    // which is $0 for bookings made before the stall fee was set.
+    const pricedStalls = assignedStalls.map(s => ({
+        ...s,
+        pricePerNight: barns.find(b => b.id === s.barnId)?.pricePerNight || 0,
+    }));
+    const bookingTotal = computeBookingTotal(booking, pricedStalls);
     const paidAmount = booking.paidAmount != null
         ? Number(booking.paidAmount)
         : (booking.paymentStatus === 'paid' ? bookingTotal : 0);
@@ -3455,7 +3462,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         />
                                     </div>
                                     {(() => {
-                                        const bTotal = Number(booking.totalAmount ?? booking.amount ?? 0);
+                                        // Recompute live (stalls × nights × current price) so the balance and
+                                        // the "Email invoice" button below reflect the real amount owed — not
+                                        // the stale stored total, which is $0 for pre-fee bookings.
+                                        const bPricedStalls = getAssignedStallsForBooking(booking, barns)
+                                            .map(s => ({ ...s, pricePerNight: barns.find(b => b.id === s.barnId)?.pricePerNight || 0 }));
+                                        const bTotal = computeBookingTotal(booking, bPricedStalls);
                                         const bPaid = Number(booking.paidAmount ?? (booking.paymentStatus === 'paid' ? bTotal : 0));
                                         const bDue = Math.max(0, bTotal - bPaid);
                                         return (
@@ -3500,17 +3512,19 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 setInvoicingId(booking.id);
                                                 try {
                                                     const res = await sendStallInvoice({ showId: show.id, bookingId: booking.id });
-                                                    // Copy the payable link so the admin always has it,
-                                                    // even if Stripe's email doesn't reach the exhibitor.
+                                                    // The exhibitor is emailed the payable invoice by Stripe — the
+                                                    // admin only triggers it, they don't pay. We copy the pay link to
+                                                    // the clipboard as a backup the admin can forward manually, but we
+                                                    // never open the payment page here (that looked like the admin
+                                                    // was being asked to pay).
                                                     let copied = false;
                                                     if (res.hostedInvoiceUrl) {
                                                         try { await navigator.clipboard.writeText(res.hostedInvoiceUrl); copied = true; } catch { /* ignore */ }
                                                     }
                                                     toast({
-                                                        title: 'Invoice created',
-                                                        description: `${fmtMoney(res.amount)} invoice for ${res.email}. ${copied ? 'Payable link copied to clipboard.' : ''}`,
+                                                        title: 'Invoice emailed to exhibitor',
+                                                        description: `${fmtMoney(res.amount)} invoice sent to ${res.email}. They can pay online from the email.${copied ? ' Pay link also copied to your clipboard.' : ''}`,
                                                     });
-                                                    if (res.hostedInvoiceUrl) window.open(res.hostedInvoiceUrl, '_blank');
                                                 } catch (e) {
                                                     toast({ title: 'Could not send invoice', description: e.message, variant: 'destructive' });
                                                 } finally {
