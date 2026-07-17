@@ -8,11 +8,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 // "Pay online" button. When they pay, the stripe-webhook (invoice.paid) marks the
 // booking paid — the same way checkout does.
 //
-// Like stalls-create-checkout, the amount is computed SERVER-SIDE (outstanding
-// balance) so it can't be tampered with. Requires the booking to have an email.
-//
-// Called by the admin (authenticated), so we DON'T need to disable JWT here — but
-// leaving JWT on is fine since the admin is logged in.
+// The amount is computed SERVER-SIDE, LIVE (assigned stalls × nights × the barn's
+// CURRENT price/night) so it matches the UI and can't be tampered with. We do NOT
+// use the stored booking.totalAmount — that is $0 for bookings made before the
+// stall fee was set, which used to wrongly report "Nothing is due".
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,6 +20,54 @@ const corsHeaders = {
 };
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
+
+// ───── Live booking pricing (mirrors src/lib/invoiceGenerator.js) ─────
+
+// Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
+function assignedStallsForBooking(projectData: any, bookingId: string) {
+  const barns = projectData?.stallingService?.barns || [];
+  const result: Array<{ barnId: string; pricePerNight: number }> = [];
+  for (const barn of barns) {
+    for (const stall of barn.stalls || []) {
+      if (stall.bookingId === bookingId) {
+        result.push({ barnId: barn.id, pricePerNight: Number(barn.pricePerNight) || 0 });
+      }
+    }
+  }
+  return result;
+}
+
+// Invoice line items with LIVE amounts. Stall lines are recomputed from the
+// current price × assigned count × nights; other items keep their stored amount.
+function buildBookingLineItems(projectData: any, booking: any) {
+  const rows: Array<{ description: string; total: number }> = [];
+  const nights = Number(booking?.nights) || 1;
+  const assigned = assignedStallsForBooking(projectData, booking?.id);
+  const items = Array.isArray(booking?.items) ? booking.items : [];
+
+  if (items.length > 0) {
+    for (const it of items) {
+      if (it.type === "stall") {
+        const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
+        const count = stallsInThisBarn.length || Number(it.qty) || 0;
+        const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
+        rows.push({ description: it.name || "Stalls", total: count * nights * price });
+      } else {
+        rows.push({ description: it.name || it.type || "Booking item", total: Number(it.amount) || 0 });
+      }
+    }
+  } else {
+    rows.push({ description: "Stall reservation", total: Number(booking?.amount) || 0 });
+  }
+  return rows;
+}
+
+function computeBookingTotal(projectData: any, booking: any): number {
+  return buildBookingLineItems(projectData, booking)
+    .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 
 async function stripePost(
   endpoint: string,
@@ -72,7 +119,8 @@ serve(async (req: Request): Promise<Response> => {
     const email = booking.email;
     if (!email) throw new Error("This booking has no email to send an invoice to");
 
-    const total = Number(booking.totalAmount ?? booking.amount ?? 0);
+    // Price LIVE, not from the stale stored totalAmount.
+    const total = computeBookingTotal(project.project_data, booking);
     const paid = Number(
       booking.paidAmount ?? (booking.paymentStatus === "paid" ? total : 0)
     );
@@ -89,9 +137,7 @@ serve(async (req: Request): Promise<Response> => {
     });
     if (customer.error) throw new Error(customer.error.message);
 
-    // 2) Create the invoice FIRST (draft). Newer Stripe API versions no longer
-    //    auto-attach pending invoice items, so we make the invoice, then attach
-    //    each line to it by id (step 3) — otherwise the invoice totals $0.
+    // 2) Create the invoice FIRST (draft), then attach line items by id (step 3).
     const invoice = await stripePost("invoices", {
       customer: customer.id,
       collection_method: "send_invoice",
@@ -103,17 +149,18 @@ serve(async (req: Request): Promise<Response> => {
     });
     if (invoice.error) throw new Error(invoice.error.message);
 
-    // 3) Attach line items directly onto this invoice. Itemise stalls/supplies so
-    //    the invoice reads clearly; fall back to one lump line for a partial balance.
-    const items = (booking.items || []).filter((it: any) => Number(it.amount) > 0);
-    if (paid <= 0 && items.length > 0) {
-      for (const it of items) {
+    // 3) Attach line items with LIVE amounts (never the stale $0 stored on
+    //    pre-fee bookings); fall back to one lump line for a partial balance.
+    const liveItems = buildBookingLineItems(project.project_data, booking)
+      .filter((it) => Number(it.total) > 0);
+    if (paid <= 0 && liveItems.length > 0) {
+      for (const it of liveItems) {
         const r = await stripePost("invoiceitems", {
           customer: customer.id,
           invoice: invoice.id,
-          amount: String(Math.round(Number(it.amount) * 100)),
+          amount: String(Math.round(Number(it.total) * 100)),
           currency: "usd",
-          description: it.name || "Booking item",
+          description: it.description || "Booking item",
         });
         if (r.error) throw new Error(r.error.message);
       }

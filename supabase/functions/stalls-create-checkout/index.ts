@@ -9,11 +9,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 //   • looks the booking up SERVER-SIDE from project_data and computes the amount here,
 //     so the client can never tamper with what gets charged
 //
-// It charges the OUTSTANDING balance (total − already paid), so the same function
-// covers the first payment (paid = 0 → full total) and "pay the difference" later
-// (admin added stalls to an already-paid booking → just the delta).
-//
-// On success the stripe-webhook writes paidAmount / paymentStatus back onto the booking.
+// It charges the OUTSTANDING balance (total − already paid), priced LIVE from the
+// barn's CURRENT price/night — NOT the stored booking.totalAmount, which is $0 for
+// bookings made before the stall fee was set.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +20,48 @@ const corsHeaders = {
 };
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
+
+// ───── Live booking pricing (mirrors src/lib/invoiceGenerator.js) ─────
+
+// Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
+function assignedStallsForBooking(projectData: any, bookingId: string) {
+  const barns = projectData?.stallingService?.barns || [];
+  const result: Array<{ barnId: string; pricePerNight: number }> = [];
+  for (const barn of barns) {
+    for (const stall of barn.stalls || []) {
+      if (stall.bookingId === bookingId) {
+        result.push({ barnId: barn.id, pricePerNight: Number(barn.pricePerNight) || 0 });
+      }
+    }
+  }
+  return result;
+}
+
+// Live total = assigned stalls × nights × current price/night, plus non-stall items.
+function computeBookingTotal(projectData: any, booking: any): number {
+  const nights = Number(booking?.nights) || 1;
+  const assigned = assignedStallsForBooking(projectData, booking?.id);
+  const items = Array.isArray(booking?.items) ? booking.items : [];
+  let total = 0;
+
+  if (items.length > 0) {
+    for (const it of items) {
+      if (it.type === "stall") {
+        const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
+        const count = stallsInThisBarn.length || Number(it.qty) || 0;
+        const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
+        total += count * nights * price;
+      } else {
+        total += Number(it.amount) || 0;
+      }
+    }
+  } else {
+    total += Number(booking?.amount) || 0;
+  }
+  return total;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 
 async function stripePost(
   endpoint: string,
@@ -89,8 +129,8 @@ serve(async (req: Request): Promise<Response> => {
       throw new Error("Booking not found");
     }
 
-    // Outstanding balance in cents (total − already paid).
-    const total = Number(booking.totalAmount ?? booking.amount ?? 0);
+    // Outstanding balance in cents (total − already paid), priced LIVE.
+    const total = computeBookingTotal(project.project_data, booking);
     const paid = Number(
       booking.paidAmount ?? (booking.paymentStatus === "paid" ? total : 0)
     );
