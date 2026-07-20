@@ -6,7 +6,7 @@ import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { events } from '@/lib/eventsData';
 import { format } from 'date-fns';
@@ -1255,6 +1255,7 @@ const EventDetailPage = () => {
       {/* Full-size image preview — click any pattern / score sheet to open it. */}
       <Dialog open={!!previewImage} onOpenChange={(open) => !open && setPreviewImage(null)}>
         <DialogContent className="max-w-4xl p-2 sm:p-4">
+          <DialogTitle className="sr-only">{previewImage?.title || 'Image preview'}</DialogTitle>
           {previewImage && (
             <div className="space-y-2">
               <p className="text-sm font-medium text-center">{previewImage.title}</p>

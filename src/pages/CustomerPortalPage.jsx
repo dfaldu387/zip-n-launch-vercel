@@ -985,6 +985,9 @@ const PatternFolderItem = ({ project, onRefresh, currentUserName, isPastPatternP
             {/* Score Sheets Dialog */}
             <Dialog open={scoreSheetsDialogOpen} onOpenChange={setScoreSheetsDialogOpen}>
                 <DialogContent className="sm:max-w-6xl max-h-[95vh] p-0 flex flex-col bg-white">
+                    {/* Announced by screen readers; the visible heading below is a
+                        styled <h2>, which Radix cannot use as the dialog's name. */}
+                    <DialogTitle className="sr-only">Score Sheets</DialogTitle>
                     {/* Header Section */}
                     <div className="text-center border-b border-gray-300 px-6 py-4 bg-white">
                         <h2 className="text-2xl font-bold text-black mb-1">
@@ -1085,6 +1088,7 @@ const PatternFolderItem = ({ project, onRefresh, currentUserName, isPastPatternP
             {/* Patterns Dialog */}
             <Dialog open={patternsDialogOpen} onOpenChange={setPatternsDialogOpen}>
                 <DialogContent className="sm:max-w-6xl max-h-[95vh] p-0 flex flex-col bg-white">
+                    <DialogTitle className="sr-only">Patterns</DialogTitle>
                     {/* Header Section */}
                     <div className="text-center border-b border-gray-300 px-6 py-4 bg-white">
                         <h2 className="text-2xl font-bold text-black mb-1">
@@ -1183,6 +1187,7 @@ const PatternFolderItem = ({ project, onRefresh, currentUserName, isPastPatternP
             {/* Judge Cards Dialog */}
             <Dialog open={judgeCardsDialogOpen} onOpenChange={setJudgeCardsDialogOpen}>
                 <DialogContent className="sm:max-w-6xl max-h-[95vh] p-0 flex flex-col bg-white">
+                    <DialogTitle className="sr-only">Judge Cards</DialogTitle>
                     {/* Header Section */}
                     <div className="text-center border-b border-gray-300 px-6 py-4 bg-white">
                         <h2 className="text-2xl font-bold text-black mb-1">
@@ -1864,6 +1869,7 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
             {/* Pattern Book Dialog */}
             <Dialog open={patternBookDialogOpen} onOpenChange={setPatternBookDialogOpen}>
                 <DialogContent className="w-[95vw] h-screen max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
+                    <DialogTitle className="sr-only">Pattern Books &amp; Score Sheets</DialogTitle>
                     <PatternBookDialogContent
                         project={project}
                         profile={profile}

@@ -553,6 +553,7 @@ const HorseShowManagerPage = () => {
         {/* Free Limit Reached Modal */}
         <Dialog open={showLimitModal} onOpenChange={setShowLimitModal}>
           <DialogContent className="max-w-md">
+            <DialogTitle className="sr-only">Free Limit Reached</DialogTitle>
             <div className="py-6 text-center space-y-5">
               <div className="mx-auto w-14 h-14 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
                 <Shield className="h-7 w-7 text-amber-600" />

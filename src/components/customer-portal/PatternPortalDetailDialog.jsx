@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
@@ -927,6 +927,7 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-5xl max-h-[90vh] p-0 flex flex-col">
+                <DialogTitle className="sr-only">{project?.project_name || 'Pattern Details'}</DialogTitle>
                 {/* Header */}
                 <div className="border-b px-6 py-4">
                     <h2 className="text-xl font-bold">{project?.project_name || 'Pattern Details'}</h2>

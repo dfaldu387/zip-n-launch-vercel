@@ -189,6 +189,7 @@ const ProjectDetailModal = ({
             }}
         >
             <DialogContent className="max-w-4xl max-h-[90vh] p-0 gap-0 overflow-hidden">
+                <DialogTitle className="sr-only">Project details</DialogTitle>
                 <div className="flex flex-col lg:flex-row h-[calc(90vh-40px)]">
                     {/* Left Side - Project Details */}
                     <div className="flex-1 p-6 overflow-y-auto border-r border-border">

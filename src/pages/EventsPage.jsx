@@ -406,7 +406,8 @@ const EventsPage = () => {
       {selectedProject && (
         <Dialog open={patternBookDialogOpen} onOpenChange={setPatternBookDialogOpen}>
           <DialogContent className="w-[95vw] h-screen max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
-            <EventPatternBookDialogContent 
+            <DialogTitle className="sr-only">Pattern Book</DialogTitle>
+            <EventPatternBookDialogContent
               project={selectedProject}
               profile={profile}
               user={user}
