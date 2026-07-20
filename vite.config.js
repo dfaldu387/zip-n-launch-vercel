@@ -263,7 +263,27 @@ export default defineConfig(({ mode }) => ({
 				'@babel/traverse',
 				'@babel/generator',
 				'@babel/types'
-			]
+			],
+			output: {
+				// Put the libraries that every page needs, and that almost never
+				// change, into their own chunks. Their filenames then stay stable
+				// across deploys, so a returning visitor re-downloads only the app
+				// code we actually changed instead of the whole bundle.
+				//
+				// Deliberately NOT a catch-all for node_modules: heavy, rarely-used
+				// libraries (jspdf, xlsx, pdfjs, recharts) must stay in the lazy
+				// route chunks Rollup already creates for them. Forcing those into a
+				// shared vendor chunk would load them on every page.
+				manualChunks(id) {
+					const p = id.replace(/\\/g, '/');
+					if (!p.includes('node_modules')) return;
+					if (/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(p)) {
+						return 'vendor-react';
+					}
+					if (p.includes('node_modules/@supabase/')) return 'vendor-supabase';
+					if (p.includes('node_modules/@radix-ui/')) return 'vendor-radix';
+				},
+			},
 		}
 	}
 }));
