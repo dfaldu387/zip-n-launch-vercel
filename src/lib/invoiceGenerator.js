@@ -4,6 +4,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format, parseISO } from 'date-fns';
+import { buildLineItems, computeBookingTotal } from '@/lib/bookingPricing';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -140,75 +141,10 @@ function drawShowAndBillTo(doc, { show, booking }) {
     return Math.max(row, billRow) + 14;
 }
 
-// Build line-item rows: items[] for new bookings, fallback for legacy bookings
-function buildLineItems(booking, assignedStalls = []) {
-    const rows = [];
-
-    if (Array.isArray(booking.items) && booking.items.length > 0) {
-        const nights = booking.nights || 1;
-        for (const it of booking.items) {
-            let description = it.name || it.type;
-
-            // Stalls: price computed live = stalls × price/night × nights, so editing
-            // the nights on a booking updates the invoice instead of using a stale amount.
-            if (it.type === 'stall') {
-                const stallsInThisBarn = assignedStalls.filter(s => s.barnId === it.refId);
-                const count = stallsInThisBarn.length || it.qty || 0;
-                const price = stallsInThisBarn[0]?.pricePerNight ?? it.unitPrice ?? 0;
-                if (stallsInThisBarn.length > 0) {
-                    description += `\nAssigned: ${stallsInThisBarn.map(s => s.number || s.stallNumber).join(', ')}`;
-                }
-                description += `\n${count} stall${count !== 1 ? 's' : ''} × ${nights} night${nights !== 1 ? 's' : ''}`;
-                // Detail is rebuilt from the live price so it can't go stale against
-                // the Unit Price column (a booking made before the fee was set stored
-                // "$0.00/night" in it.detail — recompute instead of trusting it).
-                description += `\n${fmtMoney(price)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${count}`;
-                rows.push({
-                    description,
-                    qty: count * nights,
-                    unitPrice: price,
-                    total: count * nights * price,
-                });
-                continue;
-            }
-
-            if (it.detail) description += `\n${it.detail}`;
-            rows.push({
-                description,
-                qty: it.qty || 1,
-                unitPrice: it.unitPrice || 0,
-                total: it.amount || 0,
-            });
-        }
-    } else {
-        // Legacy single-stall booking
-        const qty = booking.nights || 1;
-        const unitPrice = (booking.amount || 0) / Math.max(qty, 1);
-        rows.push({
-            description: `Stall reservation${booking.stallId ? '' : ' (unassigned)'}`,
-            qty,
-            unitPrice,
-            total: booking.amount || 0,
-        });
-    }
-
-    return rows;
-}
-
-/**
- * The live amount a booking currently owes: assigned stalls × nights × current
- * price/night, plus any non-stall items. Ignores the stored booking.totalAmount
- * (which freezes at booking time and goes stale when the fee is set/changed
- * afterward) so the figure always matches the invoice PDF.
- *
- * @param {object} booking          Booking object (with items[], nights, etc.)
- * @param {Array}  [assignedStalls] Assigned stall objects carrying { barnId, pricePerNight }
- * @returns {number} total owed
- */
-export function computeBookingTotal(booking, assignedStalls = []) {
-    return buildLineItems(booking || {}, assignedStalls)
-        .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
-}
+// Line items and totals live in bookingPricing.js so the UI, this PDF, and the
+// unit tests all share one implementation. Re-exported so existing
+// `import { computeBookingTotal } from '@/lib/invoiceGenerator'` callers keep working.
+export { buildLineItems, computeBookingTotal };
 
 function drawTotals(doc, { subtotal, total, amountPaid = 0, balanceDue = null }) {
     const pageWidth = doc.internal.pageSize.getWidth();
