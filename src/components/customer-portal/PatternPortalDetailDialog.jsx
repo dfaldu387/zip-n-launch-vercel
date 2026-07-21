@@ -10,7 +10,6 @@ import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import { Loader2, Download, Printer, Mail, Link2, Image as LucideImage, FileText, CheckSquare, Square, Send, ArrowLeft } from 'lucide-react';
-import { jsPDF } from 'jspdf';
 import { fetchImageAsBase64, compressImage, cropPatternImageSmart } from '@/lib/pdfHelpers';
 
 const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
@@ -297,6 +296,8 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
         const selectedScoreSheetsList = getSelectedScoreSheets();
 
         // Always build custom PDF to ensure both patterns AND scoresheets are included
+        // jsPDF loads here, matching the on-demand jszip import further down.
+        const { jsPDF } = await import('jspdf');
         const doc = new jsPDF('p', 'pt', 'letter');
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();

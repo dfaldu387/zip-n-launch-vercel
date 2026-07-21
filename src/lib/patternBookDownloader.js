@@ -1,5 +1,3 @@
-import JSZip from 'jszip';
-import { jsPDF } from 'jspdf';
 import { format } from 'date-fns';
 import { supabase } from '@/lib/supabaseClient';
 import { fetchImageAsBase64 } from './pdfHelpers';
@@ -16,6 +14,8 @@ const createPdfFromImage = async (imageUrl, title, judgeName = '') => {
         const base64 = await fetchImageAsBase64(imageUrl);
         if (!base64) return null;
 
+        // Loaded on demand — see the note in bookGenerator.js.
+        const { jsPDF } = await import('jspdf');
         const doc = new jsPDF('p', 'pt', 'letter');
         const pageWidth = doc.internal.pageSize.getWidth();   // 612 pt
         const pageHeight = doc.internal.pageSize.getHeight();  // 792 pt
@@ -276,6 +276,8 @@ const getScoresheetForGroup = (discipline, group, projectData, associationsData,
  *       - scoresheet.pdf
  */
 export const downloadPatternBookFolder = async (projectData, projectName, onProgress) => {
+    // ~95 KB, only needed when a folder download actually starts.
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     const rootFolderName = sanitizeFilename(projectName || projectData.showName || 'Pattern_Book');
     const rootFolder = zip.folder(rootFolderName);
@@ -423,7 +425,7 @@ export const downloadPatternBookFolder = async (projectData, projectName, onProg
                 const dateStr = competitionDate ? format(parseLocalDate(competitionDate), 'MM-dd-yyyy') : '';
                 const assoc = associationsData?.find(a => a.id === discipline.association_id);
                 const resolvedJudge = resolveJudgeForGroup(projectData, discipline, group);
-                const genericBlob = createGenericScoreSheetPdf({
+                const genericBlob = await createGenericScoreSheetPdf({
                     association: assoc?.abbreviation || assoc?.name || '',
                     showName: projectData.showName || '',
                     discipline: discipline.name || '',

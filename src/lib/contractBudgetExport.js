@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import { flattenPersonnel, calculateMemberFinancials, expenseTypeMeta } from '@/lib/contractUtils';
 
 /**
@@ -23,7 +22,9 @@ const EXPENSE_COLUMNS = [
 // Numeric columns that get summed in the totals row
 const SUM_KEYS = ['Days', 'Day Pay', ...EXPENSE_COLUMNS.map(e => e.label), 'Expenses', 'Total'];
 
-export const exportBudgetToExcel = (formData) => {
+// Async so xlsx (~290 KB) is fetched on the export click rather than shipped
+// with the budgeting page.
+export const exportBudgetToExcel = async (formData) => {
   const personnel = flattenPersonnel(formData);
   if (personnel.length === 0) return false;
 
@@ -59,6 +60,7 @@ export const exportBudgetToExcel = (formData) => {
   rows.push(totals);
 
   // Create workbook
+  const XLSX = await import('xlsx');
   const ws = XLSX.utils.json_to_sheet(rows);
 
   // Set column widths

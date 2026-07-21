@@ -6,8 +6,6 @@
 // the imports below, never on anything else in that page.
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { format } from 'date-fns';
-import JSZip from 'jszip';
-import { jsPDF } from 'jspdf';
 import {
     Archive, Check, ChevronDown, ChevronRight, Download, Edit, Eye, FileText,
     Folder, LayoutGrid, Loader2, Lock, MoreVertical, PlusCircle, Printer,
@@ -470,6 +468,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             const base64 = await fetchImageAsBase64(imageUrl);
             if (!base64) return null;
 
+            // Loaded on demand so the portal doesn't ship jsPDF on page open.
+            const { jsPDF } = await import('jspdf');
             const doc = new jsPDF('p', 'pt', 'letter');
             const pageWidth = doc.internal.pageSize.getWidth();   // 612 pt
             const pageHeight = doc.internal.pageSize.getHeight();  // 792 pt
@@ -1369,6 +1369,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             );
 
             // Phase 2: Render overlays in parallel batches and pack into ZIP
+            const { default: JSZip } = await import('jszip');
             const zip = new JSZip();
             const BATCH_SIZE = 4;
             let renderedCount = 0;
@@ -3872,6 +3873,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 description: `Downloading ${totalItems} item(s) from "${latestFolder.name}"...`
             });
             
+            const { default: JSZip } = await import('jszip');
             const zip = new JSZip();
             const folderName = latestFolder.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'folder';
             

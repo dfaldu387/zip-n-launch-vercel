@@ -1,8 +1,6 @@
 // Invoice PDF generator — uses jsPDF + jspdf-autotable.
 // Pure: takes booking + show data, returns/downloads a PDF. No DB calls.
 
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { format, parseISO } from 'date-fns';
 import { buildLineItems, computeBookingTotal } from '@/lib/bookingPricing';
 
@@ -232,7 +230,15 @@ function drawFooter(doc, { booking, show, organizerContact }) {
  * @param {string} [params.options.organizerContact] Email/phone shown in footer
  * @param {number} [params.options.amountPaid]       Amount already paid (default 0)
  */
-export function generateInvoicePdf({ booking, show, assignedStalls = [], options = {} }) {
+export async function generateInvoicePdf({ booking, show, assignedStalls = [], options = {} }) {
+    // Async so jsPDF (~350 KB) loads when an invoice is actually generated, not
+    // when the Housing page opens. This module also exports plain pricing
+    // helpers that the page needs at render time.
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable'),
+    ]);
+
     const doc = new jsPDF({ unit: 'pt', format: 'letter' });
 
     const shortRef = String(booking?.id || '').slice(0, 8).toUpperCase();
@@ -309,8 +315,8 @@ export function generateInvoicePdf({ booking, show, assignedStalls = [], options
 }
 
 /** One-call download: builds the PDF and triggers a file download. */
-export function downloadInvoicePdf(params) {
-    const doc = generateInvoicePdf(params);
+export async function downloadInvoicePdf(params) {
+    const doc = await generateInvoicePdf(params);
     const shortRef = String(params?.booking?.id || 'INVOICE').slice(0, 8).toUpperCase();
     const safeShow = (params?.show?.name || 'Show').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 30);
     doc.save(`Invoice-${safeShow}-${shortRef}.pdf`);

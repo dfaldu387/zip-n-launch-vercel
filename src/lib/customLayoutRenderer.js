@@ -1,4 +1,3 @@
-import jsPDF from 'jspdf';
 import { format } from 'date-fns';
 import { fetchImageAsBase64, compressImage } from './pdfHelpers';
 import { supabase } from '@/lib/supabaseClient';
@@ -582,6 +581,10 @@ export async function generateCustomLayoutPdf(pbbData) {
     const coverDescription = customLayout.coverDescription || '';
     const copyright = customLayout.copyright || defaultCopyright(pbbData);
 
+    // jsPDF is ~350 KB. This module also exports layout helpers the UI needs at
+    // render time, so importing it here keeps the library off the initial page
+    // load and fetches it only when someone actually generates a PDF.
+    const { default: jsPDF } = await import('jspdf');
     const doc = new jsPDF('p', 'pt', 'letter');
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();

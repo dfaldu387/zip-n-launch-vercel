@@ -17,15 +17,12 @@ import {
   Upload, Trash2, File, Loader2,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { jsPDF } from 'jspdf';
-import JSZip from 'jszip';
 import {
   flattenPersonnel,
   resolvePlaceholders,
   formatDate,
 } from '@/lib/contractUtils';
 import { sendContractEmail } from '@/lib/contractEmailService';
-import * as XLSX from 'xlsx';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -295,6 +292,11 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
     }
 
     try {
+      // jsPDF + JSZip (~445 KB) load only when a ZIP export actually starts.
+      const [{ jsPDF }, { default: JSZip }] = await Promise.all([
+        import('jspdf'),
+        import('jszip'),
+      ]);
       const zip = new JSZip();
       const globalTemplate = formData.contractBuilder?.globalTemplate || '';
       const overrides = formData.contractBuilder?.employeeOverrides || {};
@@ -346,7 +348,7 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
     }
   };
 
-  const handleExportContractsToExcel = () => {
+  const handleExportContractsToExcel = async () => {
     if (personnel.length === 0) {
       toast({ title: 'No Data', description: 'Add personnel in Step 2 before exporting.', variant: 'destructive' });
       return;
@@ -366,6 +368,8 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
         'Employment End': member.employment_end_date || '',
       };
     });
+    // xlsx is ~290 KB — loaded only when an export is requested.
+    const XLSX = await import('xlsx');
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
@@ -374,7 +378,7 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
     toast({ title: 'Contracts Exported', description: 'Excel file downloaded successfully.' });
   };
 
-  const handleExportStaffToExcel = () => {
+  const handleExportStaffToExcel = async () => {
     if (personnel.length === 0) {
       toast({ title: 'No Data', description: 'Add personnel in Step 2 before exporting.', variant: 'destructive' });
       return;
@@ -388,6 +392,7 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
       'Employment Start': member.employment_start_date || '',
       'Employment End': member.employment_end_date || '',
     }));
+    const XLSX = await import('xlsx');
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Staff');
@@ -396,11 +401,12 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
     toast({ title: 'Staff Exported', description: 'Excel file downloaded successfully.' });
   };
 
-  const handlePrintAll = () => {
+  const handlePrintAll = async () => {
     if (personnel.length === 0) {
       toast({ title: 'No Contracts', description: 'No personnel to print contracts for.', variant: 'destructive' });
       return;
     }
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     personnel.forEach((member, idx) => {
       if (idx > 0) doc.addPage();

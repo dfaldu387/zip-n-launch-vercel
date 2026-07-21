@@ -12,8 +12,6 @@
 import { ensureAllRvSpots } from '@/lib/rvAssignment';
 import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
 import { buildLayerIndex, layerCell, layerById, layerLegend } from '@/lib/stallLayers';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 
 // Ordered so the first 12 colours are all clearly distinct (no two greens / teals /
 // reds) — spread across the wheel and varied in lightness. MUST stay identical to the
@@ -290,6 +288,14 @@ export function printStallingChart(opts) {
 // printed sheets are IDENTICAL to the downloaded PDF (the browser's HTML print can't
 // scale a tall barn to fit a page, which is why we print the PDF instead).
 async function renderChartPdf(opts) {
+    // html2canvas (~200 KB) and jsPDF (~350 KB) are only needed once someone
+    // prints or downloads a chart, so they load here instead of with the
+    // Housing page. printStallingChart() above needs neither.
+    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+    ]);
+
     const html = buildStallingChartHtml(opts, false);
 
     const iframe = document.createElement('iframe');

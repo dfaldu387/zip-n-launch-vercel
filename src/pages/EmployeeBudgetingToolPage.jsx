@@ -193,8 +193,8 @@ const BudgetDashboard = ({ show, contractProject }) => {
                     <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                            const success = exportBudgetToExcel(contractProject.project_data || {});
+                        onClick={async () => {
+                            const success = await exportBudgetToExcel(contractProject.project_data || {});
                             if (!success) alert('No personnel data to export.');
                         }}
                     >

@@ -1,4 +1,3 @@
-import { jsPDF } from 'jspdf';
 
 /**
  * Shared score-sheet layout constants.
@@ -189,7 +188,10 @@ export function drawGenericScoreSheetPage(doc, info) {
  * Creates a standalone generic scoresheet PDF blob.
  * Used by the ZIP downloader.
  */
-export function createGenericScoreSheetPdf(info) {
+export async function createGenericScoreSheetPdf(info) {
+  // Async so jsPDF loads on demand — drawGenericScoreSheetPage above stays
+  // synchronous because callers pass in a document they already created.
+  const { jsPDF } = await import('jspdf');
   const doc = new jsPDF('p', 'pt', 'letter');
   drawGenericScoreSheetPage(doc, info);
   return doc.output('blob');

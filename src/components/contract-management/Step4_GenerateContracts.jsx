@@ -18,7 +18,6 @@ import {
   Save, Loader2, AlertTriangle,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { jsPDF } from 'jspdf';
 import { sendContractEmail } from '@/lib/contractEmailService';
 import {
   DEFAULT_CONTRACT_TEMPLATE,
@@ -178,6 +177,8 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
       const contractText = folder.editedContract || folder.resolvedContract || '';
       let contractPdfBase64 = null;
       if (contractText) {
+        // jsPDF (~350 KB) loads only when a contract is actually produced.
+        const { jsPDF } = await import('jspdf');
         const doc = new jsPDF();
         const pageWidth = doc.internal.pageSize.getWidth();
         const margin = 20;
@@ -331,7 +332,8 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
 
   // ── PDF Download ──
 
-  const handleDownloadPdf = (member, contractText) => {
+  const handleDownloadPdf = async (member, contractText) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     const margin = 20;

@@ -1,5 +1,3 @@
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
 import { format } from 'date-fns';
 import { fetchImageAsBase64, fetchPatternAndScoresheetAssets, compressImage, cropPatternImageSmart } from './pdfHelpers';
 import { supabase } from '@/lib/supabaseClient';
@@ -28,7 +26,13 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
 
     // Feature flag: class number display (set to false to hide auto-generated numbers)
     const showClassNumbers = pbbData.showClassNumbers || false;
-    
+
+    // jsPDF + the autotable plugin are ~350 KB and only needed once a book is
+    // actually generated, so they load on demand instead of with the page.
+    // autotable must be imported after jsPDF — it patches the prototype that
+    // doc.autoTable() below relies on.
+    const { default: jsPDF } = await import('jspdf');
+    await import('jspdf-autotable');
     const doc = new jsPDF('p', 'pt', 'letter');
     const pageHeight = doc.internal.pageSize.getHeight(); // 792 pt (11 in)
     const pageWidth = doc.internal.pageSize.getWidth();   // 612 pt (8.5 in)

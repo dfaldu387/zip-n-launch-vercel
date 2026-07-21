@@ -164,9 +164,19 @@ if (window.navigation && window.self !== window.top) {
 }
 `;
 
-const addTransformIndexHtml = {
+// The Horizons scripts below exist so the Lovable visual editor, which runs the
+// app inside an iframe, can see errors and navigation via postMessage to
+// window.parent. On the deployed site there is no parent frame, so every one of
+// them is pure overhead — in particular a document-wide MutationObserver and a
+// window.fetch wrapper that runs on all data loading. Inject them for dev and
+// `build:dev` only; a production build ships none of them.
+const addTransformIndexHtml = (isProduction) => ({
 	name: 'add-transform-index-html',
 	transformIndexHtml(html) {
+		if (isProduction) {
+			return html;
+		}
+
 		const tags = [
 			{
 				tag: 'script',
@@ -218,7 +228,7 @@ const addTransformIndexHtml = {
 			tags,
 		};
 	},
-};
+});
 
 console.warn = () => {};
 
@@ -239,7 +249,7 @@ export default defineConfig(({ mode }) => ({
 		...(isDev ? [inlineEditPlugin(), editModeDevPlugin(), iframeRouteRestorationPlugin()] : []),
 		react(),
 		mode === 'development' && componentTagger(),
-		addTransformIndexHtml
+		addTransformIndexHtml(mode === 'production')
 	].filter(Boolean),
 	server: {
 		host: "::",
@@ -255,6 +265,14 @@ export default defineConfig(({ mode }) => ({
 		alias: {
 			'@': path.resolve(__dirname, './src'),
 		},
+	},
+	esbuild: {
+		// Debug logging helps in `npm run dev` but on the deployed site it is only
+		// noise, and some of it prints customer/booking data into the browser
+		// console. Marking these calls pure lets the production minifier drop
+		// them. console.error and console.warn are deliberately kept so real
+		// failures stay visible. Dev is untouched — nothing is minified there.
+		pure: mode === 'production' ? ['console.log', 'console.debug', 'console.info'] : [],
 	},
 	build: {
 		rollupOptions: {

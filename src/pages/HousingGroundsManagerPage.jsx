@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, Suspense, lazy } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import Navigation from '@/components/Navigation';
@@ -35,7 +35,10 @@ import AddBookingDialog from '@/components/housing/AddBookingDialog';
 import MasterListPanel from '@/components/housing/MasterListPanel';
 import AssignBoard from '@/components/housing/AssignBoard';
 import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
-import AnalyticsCharts from '@/components/housing/AnalyticsCharts';
+// Recharts is ~355 KB and the charts only appear on the Analytics tab, and only
+// once there are no-show bookings — so the library loads with the charts rather
+// than with the page.
+const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls } from '@/lib/stallAssignment';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { sendStallInvoice } from '@/lib/housingCheckout';
@@ -3477,13 +3480,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         size="sm"
                                         className="h-7 px-2 text-xs"
                                         title="Download invoice PDF"
-                                        onClick={() => {
+                                        onClick={async () => {
                                             const assignedStalls = getAssignedStallsForBooking(booking, barns)
                                                 .map(s => {
                                                     const barn = barns.find(b => b.id === s.barnId);
                                                     return { barnId: s.barnId, number: s.number, pricePerNight: barn?.pricePerNight || 0 };
                                                 });
-                                            downloadInvoicePdf({
+                                            await downloadInvoicePdf({
                                                 booking,
                                                 show: {
                                                     id: show.id,
@@ -3873,7 +3876,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
                     {/* Charts */}
                     {analytics.noShow.total > 0 && (
-                        <AnalyticsCharts analytics={analytics} bookings={bookings} />
+                        <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading charts…</div>}>
+                            <AnalyticsCharts analytics={analytics} bookings={bookings} />
+                        </Suspense>
                     )}
                 </TabsContent>
             </Tabs>
