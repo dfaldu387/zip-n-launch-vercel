@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -2593,10 +2593,14 @@ const CustomerPortalPage = () => {
     const navigate = useNavigate();
     const [projects, setProjects] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const hasLoadedRef = useRef(false);
 
     const fetchProjects = async () => {
         if (!user) return;
-        setIsLoading(true);
+        // Only blank the page for the very first load. A later refetch must keep the
+        // cards mounted, otherwise an open dialog is destroyed under the user.
+        if (!hasLoadedRef.current) setIsLoading(true);
+
         const { data, error } = await supabase
             .from('projects')
             .select('*')
@@ -2608,12 +2612,15 @@ const CustomerPortalPage = () => {
         } else {
             setProjects(data);
         }
+        hasLoadedRef.current = true;
         setIsLoading(false);
     };
 
+    // Keyed on the id, not the object: Supabase hands back a fresh user object on
+    // every token refresh (which fires when you come back to the browser tab).
     useEffect(() => {
         fetchProjects();
-    }, [user]);
+    }, [user?.id]);
 
     const patternBookProjects = projects.filter(p => p.project_type === 'pattern_book');
     const allShowProjects = projects.filter(p => {

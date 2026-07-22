@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { preferBestScoresheet, dedupeByDiscipline } from '@/lib/scoresheetLookup';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import { Loader2, Download, Printer, Mail, Link2, Image as LucideImage, FileText, CheckSquare, Square, Send, ArrowLeft } from 'lucide-react';
 import { fetchImageAsBase64, compressImage, cropPatternImageSmart } from '@/lib/pdfHelpers';
@@ -183,12 +184,14 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
                 }
 
                 if (assoc?.abbreviation && discipline.name) {
-                    const { data: fallbackSheets } = await supabase
-                        .from('tbl_scoresheet')
-                        .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev')
-                        .eq('association_abbrev', assoc.abbreviation)
-                        .ilike('discipline', `%${discipline.name}%`);
-                    const validSheets = (fallbackSheets || []).filter(s => s.image_url);
+                    const { data: fallbackSheets } = await preferBestScoresheet(
+                        supabase
+                            .from('tbl_scoresheet')
+                            .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+                            .eq('association_abbrev', assoc.abbreviation)
+                            .ilike('discipline', `%${discipline.name}%`)
+                    );
+                    const validSheets = dedupeByDiscipline((fallbackSheets || []).filter(s => s.image_url));
                     for (const scoresheet of validSheets) {
                         const sid = `${scoresheet.id}`;
                         if (!processedScoresheets.has(sid)) {

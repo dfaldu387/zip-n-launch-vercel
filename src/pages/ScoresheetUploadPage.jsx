@@ -9,7 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { X, Loader2, Eye, Trash2, PlusCircle, Pen, Image as ImageIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Loader2, Eye, Trash2, PlusCircle, Pen, FileText, Upload, ChevronLeft, ChevronRight } from 'lucide-react';
+import BulkScoresheetUploadDialog from '@/components/admin/BulkScoresheetUploadDialog';
+import { isPdfSource } from '@/lib/scoresheetLookup';
 import { v4 as uuidv4 } from 'uuid';
 import Navigation from '@/components/Navigation';
 import AdminBackButton from '@/components/admin/AdminBackButton';
@@ -20,6 +22,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 const ScoresheetUploadPage = () => {
     const { toast } = useToast();
     const [isFormOpen, setIsFormOpen] = useState(false);
+    const [isBulkOpen, setIsBulkOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [scoresheets, setScoresheets] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -316,7 +319,7 @@ const ScoresheetUploadPage = () => {
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,
-        accept: { 'image/*': [] },
+        accept: { 'application/pdf': ['.pdf'], 'image/*': [] },
         maxFiles: 1
     });
 
@@ -357,7 +360,7 @@ const ScoresheetUploadPage = () => {
         }
 
         if (!image && !editingScoresheetId) {
-            toast({ title: "Missing image", description: "Please upload a scoresheet image.", variant: "destructive" });
+            toast({ title: "Missing file", description: "Please upload a scoresheet PDF or image.", variant: "destructive" });
             return;
         }
 
@@ -391,10 +394,11 @@ const ScoresheetUploadPage = () => {
                 city_state: formData.city_state || null,
             };
 
-            // Add image fields if new image was uploaded
+            // Add file fields if a new file was uploaded
             if (imageUrl) {
                 scoresheetPayload.image_url = imageUrl;
                 scoresheetPayload.storage_path = storagePath;
+                scoresheetPayload.file_name = image.name;
             }
 
             let scoresheetResponse;
@@ -458,7 +462,7 @@ const ScoresheetUploadPage = () => {
             setImage({
                 id: scoresheet.id,
                 preview: scoresheet.image_url,
-                name: scoresheet.storage_path?.split('/').pop() || 'existing-image'
+                name: scoresheet.file_name || scoresheet.storage_path?.split('/').pop() || 'existing-file'
             });
         }
         setIsFormOpen(true);
@@ -502,11 +506,16 @@ const ScoresheetUploadPage = () => {
                             <AdminBackButton />
                             <div className="text-center flex-1">
                                 <h1 className="text-2xl md:text-3xl font-bold">Scoresheet Upload</h1>
-                                <p className="text-sm text-muted-foreground">Upload scoresheet images and associate them with patterns.</p>
+                                <p className="text-sm text-muted-foreground">Upload scoresheet PDFs or images and associate them with patterns.</p>
                             </div>
-                            <Button onClick={() => { resetForm(); setIsFormOpen(true); }}>
-                                <PlusCircle className="mr-2 h-4 w-4" /> Add New Scoresheet
-                            </Button>
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => setIsBulkOpen(true)}>
+                                    <Upload className="mr-2 h-4 w-4" /> Bulk Upload
+                                </Button>
+                                <Button onClick={() => { resetForm(); setIsFormOpen(true); }}>
+                                    <PlusCircle className="mr-2 h-4 w-4" /> Add New Scoresheet
+                                </Button>
+                            </div>
                         </div>
 
                         <Card>
@@ -564,7 +573,10 @@ const ScoresheetUploadPage = () => {
                                             <TableHeader>
                                                 <TableRow>
                                                     <TableHead>Association</TableHead>
+                                                    <TableHead>City</TableHead>
                                                     <TableHead>Discipline</TableHead>
+                                                    <TableHead>Type</TableHead>
+                                                    <TableHead>File</TableHead>
                                                     <TableHead>Actions</TableHead>
                                                 </TableRow>
                                             </TableHeader>
@@ -581,7 +593,22 @@ const ScoresheetUploadPage = () => {
                                                                 return assoc?.name || abbrev;
                                                             })()}
                                                         </TableCell>
+                                                        <TableCell className="text-muted-foreground">{s.city_state || '—'}</TableCell>
                                                         <TableCell>{s.discipline || s.pattern?.discipline || 'N/A'}</TableCell>
+                                                        <TableCell className="text-xs">
+                                                            {s.doc_type === 'accessory' ? 'Cheat Sheet' : 'Score Sheet'}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {(() => {
+                                                                if (!s.image_url) return <span className="text-xs text-destructive">missing</span>;
+                                                                const pdf = isPdfSource(s.file_name) || isPdfSource(s.image_url);
+                                                                return (
+                                                                    <span className={`text-xs px-2 py-0.5 rounded-full ${pdf ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
+                                                                        {pdf ? 'PDF' : 'Image'}
+                                                                    </span>
+                                                                );
+                                                            })()}
+                                                        </TableCell>
                                                         <TableCell className="space-x-2">
                                                             <Button
                                                                 variant="outline"
@@ -823,7 +850,7 @@ const ScoresheetUploadPage = () => {
                         )}
 
                         <Card>
-                            <CardHeader><CardTitle>Scoresheet Image</CardTitle></CardHeader>
+                            <CardHeader><CardTitle>Scoresheet File</CardTitle></CardHeader>
                             <CardContent>
                                 {!image ? (
                                     <div
@@ -833,18 +860,29 @@ const ScoresheetUploadPage = () => {
                                         }`}
                                     >
                                         <input {...getInputProps()} />
-                                        <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
+                                        <FileText className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
                                         <p className="text-sm text-muted-foreground">
-                                            {isDragActive ? 'Drop the image here' : 'Drag & drop an image here, or click to select'}
+                                            {isDragActive ? 'Drop the file here' : 'Drag & drop a PDF or image here, or click to select'}
                                         </p>
                                     </div>
                                 ) : (
                                     <div className="relative group">
-                                        <img
-                                            src={image.preview}
-                                            alt="Scoresheet preview"
-                                            className="w-full max-h-96 object-contain rounded-md border"
-                                        />
+                                        {isPdfSource(image.name) || isPdfSource(image.preview) ? (
+                                            <>
+                                                <iframe
+                                                    src={image.preview}
+                                                    title="Scoresheet PDF preview"
+                                                    className="w-full h-96 rounded-md border bg-white"
+                                                />
+                                                <p className="mt-2 text-xs text-muted-foreground truncate">{image.name}</p>
+                                            </>
+                                        ) : (
+                                            <img
+                                                src={image.preview}
+                                                alt="Scoresheet preview"
+                                                className="w-full max-h-96 object-contain rounded-md border"
+                                            />
+                                        )}
                                         <Button
                                             variant="destructive"
                                             size="icon"
@@ -887,12 +925,20 @@ const ScoresheetUploadPage = () => {
                                 </div>
                                 {selectedScoresheet.image_url && (
                                     <div>
-                                        <h3 className="font-semibold mb-2">Scoresheet Image</h3>
-                                        <img
-                                            src={selectedScoresheet.image_url}
-                                            alt="Scoresheet"
-                                            className="w-full h-auto rounded-md border"
-                                        />
+                                        <h3 className="font-semibold mb-2">Scoresheet File</h3>
+                                        {isPdfSource(selectedScoresheet.file_name) || isPdfSource(selectedScoresheet.image_url) ? (
+                                            <iframe
+                                                src={selectedScoresheet.image_url}
+                                                title="Scoresheet PDF"
+                                                className="w-full h-[60vh] rounded-md border bg-white"
+                                            />
+                                        ) : (
+                                            <img
+                                                src={selectedScoresheet.image_url}
+                                                alt="Scoresheet"
+                                                className="w-full h-auto rounded-md border"
+                                            />
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -900,6 +946,14 @@ const ScoresheetUploadPage = () => {
                     )}
                 </DialogContent>
             </Dialog>
+
+            <BulkScoresheetUploadDialog
+                open={isBulkOpen}
+                onOpenChange={setIsBulkOpen}
+                associations={associations}
+                disciplines={disciplines}
+                onComplete={fetchScoresheets}
+            />
 
             <ConfirmationDialog
                 isOpen={isDeleteDialogOpen}

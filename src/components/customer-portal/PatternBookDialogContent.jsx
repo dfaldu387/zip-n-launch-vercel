@@ -12,6 +12,7 @@ import {
     Share2, Trash2, Users, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
+import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
 import { cn, parseLocalDate } from '@/lib/utils';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
@@ -66,6 +67,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     const [scoresheets, setScoresheets] = useState([]);
     const [isLoadingPatterns, setIsLoadingPatterns] = useState(false);
     const [isLoadingScoresheets, setIsLoadingScoresheets] = useState(false);
+    // Cheat sheets from the shared library, matched to this show's disciplines.
+    const [libraryAccessoryDocs, setLibraryAccessoryDocs] = useState([]);
     const [selectedSidebarItem, setSelectedSidebarItem] = useState('allItems');
     const [filterDisciplines, setFilterDisciplines] = useState(new Set()); // multi-select discipline
     const [filterDivisions, setFilterDivisions] = useState(new Set()); // multi-select division (renamed from filterClasses)
@@ -1065,14 +1068,15 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     
                     if (associationAbbrev && scoresheet.disciplineName) {
                         try {
-                            const { data: scoresheetData, error: scoresheetError } = await supabase
-                                .from('tbl_scoresheet')
-                                .select('id, image_url, file_name, storage_path, discipline, association_abbrev')
-                                .eq('association_abbrev', associationAbbrev)
-                                .eq('discipline', scoresheet.disciplineName)
-                                .limit(1)
-                                .maybeSingle();
-                            
+                            const { data: scoresheetRows, error: scoresheetError } = await preferBestScoresheet(
+                                supabase
+                                    .from('tbl_scoresheet')
+                                    .select('id, image_url, file_name, storage_path, discipline, association_abbrev, city_state')
+                                    .eq('association_abbrev', associationAbbrev)
+                                    .eq('discipline', scoresheet.disciplineName)
+                            ).limit(1);
+
+                            const scoresheetData = scoresheetRows?.[0];
                             if (!scoresheetError && scoresheetData && scoresheetData.image_url) {
                                 imageUrl = scoresheetData.image_url;
                             }
@@ -1201,28 +1205,19 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         console.warn('QR record insert threw; continuing without QR:', qrEx);
                     }
 
-                    // Apply text overlay using AI detection
-                    const blob = await applyTextOverlay(imageUrl, overlayData, qrUrl);
+                    // PDF score sheets can't be drawn on a canvas, so skip the AI field
+                    // detection that would only fall back to the original file anyway.
+                    const sourceIsPdf = isPdfSource(scoresheet.file_name)
+                        || isPdfSource(scoresheet.storage_path)
+                        || isPdfSource(imageUrl);
+                    const blob = sourceIsPdf
+                        ? await (await fetch(imageUrl)).blob()
+                        : await applyTextOverlay(imageUrl, overlayData, qrUrl);
                     const blobUrl = window.URL.createObjectURL(blob);
 
-                    // Determine filename
-                    let fileName = 'scoresheet.png';
-                    if (scoresheet.divisionName && scoresheet.judgeName) {
-                        // Generated scoresheet: use descriptive filename
-                        fileName = `${scoresheet.disciplineName || 'Scoresheet'}_${scoresheet.divisionName}_${scoresheet.judgeName}.png`
-                            .replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '');
-                    } else if (scoresheet.storage_path) {
-                        fileName = scoresheet.storage_path.split('/').pop() || fileName;
-                    } else if (scoresheet.file_name) {
-                        fileName = scoresheet.file_name;
-                    } else if (scoresheet.displayName) {
-                        fileName = scoresheet.displayName;
-                    } else {
-                        // Extract from URL
-                        const urlParts = imageUrl.split('/');
-                        fileName = urlParts[urlParts.length - 1] || fileName;
-                    }
-                    
+                    const fileName = buildScoresheetDownloadName(scoresheet, imageUrl);
+
+
                     const link = document.createElement('a');
                     link.href = blobUrl;
                     link.download = fileName;
@@ -1326,11 +1321,13 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         (discipline?.selectedAssociations ? Object.keys(discipline.selectedAssociations).find(k => discipline.selectedAssociations[k]) : null);
                     const association = associationsData.find(a => a.id === associationId);
                     if (association?.abbreviation && scoresheet.disciplineName) {
-                        const { data: ssData } = await supabase
-                            .from('tbl_scoresheet')
-                            .select('id, image_url')
-                            .eq('association_abbrev', association.abbreviation)
-                            .eq('discipline', scoresheet.disciplineName)
+                        const { data: ssData } = await preferBestScoresheet(
+                            supabase
+                                .from('tbl_scoresheet')
+                                .select('id, image_url, city_state')
+                                .eq('association_abbrev', association.abbreviation)
+                                .eq('discipline', scoresheet.disciplineName)
+                        )
                             .limit(1)
                             .maybeSingle();
                         if (ssData?.image_url) imageUrl = ssData.image_url;
@@ -2081,6 +2078,60 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         }
     }, [activeTab, activeSubTab]);
 
+    // Pull the cheat sheets that match this show's disciplines when the Accessory Documents tab opens.
+    useEffect(() => {
+        if (activeSubTab !== 'accessory') return undefined;
+        let cancelled = false;
+
+        const loadAccessoryDocs = async () => {
+            const showDisciplines = project?.project_data?.disciplines || [];
+            const wanted = new Map(); // association abbreviation -> discipline names
+
+            for (const discipline of showDisciplines) {
+                if (!discipline?.name) continue;
+                const associationId = discipline.association_id ||
+                    (discipline.selectedAssociations
+                        ? Object.keys(discipline.selectedAssociations).find(k => discipline.selectedAssociations[k])
+                        : null);
+                const abbrev = associationsData.find(a => a.id === associationId)?.abbreviation;
+                if (!abbrev) continue;
+                if (!wanted.has(abbrev)) wanted.set(abbrev, new Set());
+                wanted.get(abbrev).add(discipline.name);
+            }
+
+            if (wanted.size === 0) {
+                if (!cancelled) setLibraryAccessoryDocs([]);
+                return;
+            }
+
+            const docs = [];
+            for (const [abbrev, names] of wanted) {
+                const { data } = await preferBestScoresheet(
+                    supabase
+                        .from('tbl_scoresheet')
+                        .select('id, image_url, file_name, discipline, association_abbrev, city_state')
+                        .eq('association_abbrev', abbrev)
+                        .in('discipline', Array.from(names)),
+                    ACCESSORY_DOC_TYPE
+                );
+                for (const row of dedupeByDiscipline((data || []).filter(r => r.image_url))) {
+                    docs.push({
+                        filePath: `library-${row.id}`,
+                        fileUrl: row.image_url,
+                        fileName: row.file_name,
+                        customName: `${row.discipline} - Cheat Sheet`,
+                        tags: [row.association_abbrev, row.discipline].filter(Boolean),
+                    });
+                }
+            }
+
+            if (!cancelled) setLibraryAccessoryDocs(docs);
+        };
+
+        loadAccessoryDocs().catch(err => console.error('Error loading accessory documents:', err));
+        return () => { cancelled = true; };
+    }, [activeSubTab, project, associationsData]);
+
     // Auto-regenerate score sheets when filters change
     useEffect(() => {
         if (activeTab === 'patternBook' && activeSubTab === 'scoreSheets') {
@@ -2723,11 +2774,13 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         if (scoresheetMap[key]) continue;
 
                         try {
-                            const { data: fallbackData } = await supabase
-                                .from('tbl_scoresheet')
-                                .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
-                                .eq('association_abbrev', associationAbbrev)
-                                .eq('discipline', disciplineInfo.disciplineName)
+                            const { data: fallbackData } = await preferBestScoresheet(
+                                supabase
+                                    .from('tbl_scoresheet')
+                                    .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+                                    .eq('association_abbrev', associationAbbrev)
+                                    .eq('discipline', disciplineInfo.disciplineName)
+                            )
                                 .limit(1)
                                 .maybeSingle();
                             if (fallbackData) {
@@ -5864,6 +5917,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                 {activeSubTab === 'accessory' && (
                                     (() => {
                                         const accessoryDocs = [
+                                            ...libraryAccessoryDocs,
                                             ...(projectData.showDocuments || []),
                                             ...(projectData.generalMarketing || []),
                                             ...(projectData.lessonPlans || []),
@@ -6037,12 +6091,20 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                             </div>
                         ) : previewImage ? (
                             <div className="rounded-md overflow-hidden border bg-muted/20">
-                                <img 
-                                    src={previewImage} 
-                                    alt={previewType === 'pattern' ? 'Pattern Diagram' : 'Scoresheet'} 
-                                    className="w-full h-auto max-h-[70vh] object-contain"
-                                    loading="lazy"
-                                />
+                                {isPdfSource(previewItem?.file_name) || isPdfSource(previewImage) ? (
+                                    <iframe
+                                        src={previewImage}
+                                        title={previewType === 'pattern' ? 'Pattern Diagram' : 'Scoresheet'}
+                                        className="w-full h-[70vh] bg-white"
+                                    />
+                                ) : (
+                                    <img
+                                        src={previewImage}
+                                        alt={previewType === 'pattern' ? 'Pattern Diagram' : 'Scoresheet'}
+                                        className="w-full h-auto max-h-[70vh] object-contain"
+                                        loading="lazy"
+                                    />
+                                )}
                             </div>
                         ) : (
                             <div className="text-center py-12 text-muted-foreground">
