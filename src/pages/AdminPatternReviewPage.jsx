@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { supabase } from '@/lib/supabaseClient';
+import { preferBestScoresheet } from '@/lib/scoresheetLookup';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -262,11 +263,13 @@ const AdminPatternReviewPage = () => {
 
       for (const assoc of (assocs || [])) {
         if (!assoc.abbreviation) continue;
-        const { data: sheets } = await supabase
-          .from('tbl_scoresheet')
-          .select('id, image_url, storage_path, discipline, file_name, association_abbrev')
-          .eq('association_abbrev', assoc.abbreviation)
-          .ilike('discipline', pattern.class_name);
+        const { data: sheets } = await preferBestScoresheet(
+          supabase
+            .from('tbl_scoresheet')
+            .select('id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+            .eq('association_abbrev', assoc.abbreviation)
+            .ilike('discipline', pattern.class_name)
+        );
 
         if (sheets?.length > 0) {
           const sheet = sheets.find(s => s.image_url) || sheets[0];

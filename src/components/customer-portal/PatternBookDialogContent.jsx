@@ -12,7 +12,7 @@ import {
     Share2, Trash2, Users, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
-import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
+import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, findAccessoryDocUrl, mergePdfBlobs, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
 import { cn, parseLocalDate } from '@/lib/utils';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
@@ -1011,6 +1011,33 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         }
     };
     
+    // A judge scores from the printed sheet, so the rules page has to be in front of the
+    // grid. Robert uploads them as two separate PDFs, so join them at download time.
+    // Any failure here falls back to the score sheet alone — never block the download.
+    const buildScoresheetPdfBlob = useCallback(async (scoresheet, imageUrl) => {
+        const scoreSheetBlob = await (await fetch(imageUrl)).blob();
+
+        try {
+            const associationAbbrev = scoresheet.association_abbrev
+                || associationsData.find(a => a.id === scoresheet.associationId)?.abbreviation
+                || null;
+
+            const cheatSheetUrl = await findAccessoryDocUrl(supabase, {
+                associationAbbrev,
+                discipline: scoresheet.disciplineName || scoresheet.discipline,
+            });
+            // If both rows point at the same upload there is nothing to add, and merging
+            // would hand the judge the same page twice.
+            if (!cheatSheetUrl || cheatSheetUrl === imageUrl) return scoreSheetBlob;
+
+            const cheatSheetBlob = await (await fetch(cheatSheetUrl)).blob();
+            return await mergePdfBlobs([cheatSheetBlob, scoreSheetBlob]);
+        } catch (error) {
+            console.warn('Could not attach the cheat sheet page:', error);
+            return scoreSheetBlob;
+        }
+    }, [associationsData]);
+
     // Download scoresheet handler - Same logic as Step6_Preview.jsx
     const handleDownloadScoresheet = async (scoresheet) => {
         try {
@@ -1211,7 +1238,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         || isPdfSource(scoresheet.storage_path)
                         || isPdfSource(imageUrl);
                     const blob = sourceIsPdf
-                        ? await (await fetch(imageUrl)).blob()
+                        ? await buildScoresheetPdfBlob(scoresheet, imageUrl)
                         : await applyTextOverlay(imageUrl, overlayData, qrUrl);
                     const blobUrl = window.URL.createObjectURL(blob);
 
@@ -1345,7 +1372,14 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             }
 
             // Phase 1: Deduplicated AI field detection
-            const uniqueImageUrls = [...new Set(downloadable.map(r => r.imageUrl))];
+            // PDFs are never drawn on a canvas, so don't pay for field detection on them.
+            const uniqueImageUrls = [...new Set(
+                downloadable
+                    .filter(r => !isPdfSource(r.scoresheet?.file_name)
+                        && !isPdfSource(r.scoresheet?.storage_path)
+                        && !isPdfSource(r.imageUrl))
+                    .map(r => r.imageUrl)
+            )];
             setBulkDownloadProgress({
                 phase: 'detecting',
                 current: 0,
@@ -1460,18 +1494,20 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                             console.warn('Bulk QR insert threw; continuing without QR:', qrEx);
                         }
 
-                        // Apply overlay using pre-resolved positions
-                        const positions = fieldPositionsMap.get(imageUrl);
-                        const blob = await applyTextOverlayWithPositions(imageUrl, overlayData, positions, qrUrl);
+                        // PDFs get their cheat sheet page joined on; images get the overlay.
+                        const sourceIsPdf = isPdfSource(scoresheet.file_name)
+                            || isPdfSource(scoresheet.storage_path)
+                            || isPdfSource(imageUrl);
+                        const blob = sourceIsPdf
+                            ? await buildScoresheetPdfBlob(scoresheet, imageUrl)
+                            : await applyTextOverlayWithPositions(
+                                imageUrl,
+                                overlayData,
+                                fieldPositionsMap.get(imageUrl),
+                                qrUrl,
+                            );
 
-                        // Build filename
-                        let fileName = 'scoresheet.png';
-                        if (scoresheet.divisionName && scoresheet.judgeName) {
-                            fileName = `${scoresheet.disciplineName || 'Scoresheet'}_${scoresheet.divisionName}_${scoresheet.judgeName}.png`
-                                .replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '');
-                        } else if (scoresheet.displayName) {
-                            fileName = scoresheet.displayName.replace(/[^a-zA-Z0-9._-]/g, '_') + '.png';
-                        }
+                        const fileName = buildScoresheetDownloadName(scoresheet, imageUrl);
 
                         // Ensure unique filename within ZIP
                         let finalName = fileName;
@@ -2953,39 +2989,41 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         // exact (pattern + assoc) key missed. Leave unresolved instead.
                     }
                     
-                    // Fallback: Try to get from patternSelection.scoresheetData
-                    if (!scoresheetData && patternSelection && typeof patternSelection === 'object' && patternSelection.scoresheetData) {
-                        scoresheetData = patternSelection.scoresheetData;
-                    }
-                    
                     // Fallback: Try to fetch by association and discipline
                     if (!scoresheetData) {
-                        const associationId = discipline.association_id || 
-                            (discipline.selectedAssociations ? 
+                        const associationId = discipline.association_id ||
+                            (discipline.selectedAssociations ?
                              Object.keys(discipline.selectedAssociations).find(key => discipline.selectedAssociations[key]) : null);
                         const association = associationsMap[associationId] || associationsMap[associationId?.abbreviation];
-                        
+
                         if (association?.abbreviation && disciplineName) {
                             try {
                                 // Exact-match association_abbrev AND discipline so APHA results
                                 // never bleed into AQHA rows (and vice versa).
-                                const { data: scoresheet } = await supabase
-                                    .from('tbl_scoresheet')
-                                    .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
-                                    .eq('association_abbrev', association.abbreviation)
-                                    .eq('discipline', disciplineName)
-                                    .limit(1)
-                                    .maybeSingle();
+                                const { data: scoresheetRows } = await preferBestScoresheet(
+                                    supabase
+                                        .from('tbl_scoresheet')
+                                        .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+                                        .eq('association_abbrev', association.abbreviation)
+                                        .eq('discipline', disciplineName)
+                                ).limit(1);
 
-                                if (scoresheet) {
-                                    scoresheetData = scoresheet;
+                                if (scoresheetRows?.[0]) {
+                                    scoresheetData = scoresheetRows[0];
                                 }
                             } catch (err) {
                                 console.error(`Error fetching scoresheet for ${disciplineName}:`, err);
                             }
                         }
                     }
-                    
+
+                    // Last resort: the snapshot saved into project_data when the book was built.
+                    // It is checked last on purpose — a score sheet re-uploaded by an admin must
+                    // win over a copy frozen into the project months ago.
+                    if (!scoresheetData && patternSelection && typeof patternSelection === 'object' && patternSelection.scoresheetData) {
+                        scoresheetData = patternSelection.scoresheetData;
+                    }
+
                     // Extract divisions for scoresheet
                     const divisions = Array.isArray(group.divisions) ? group.divisions : [];
                     const extractedDivisions = divisions.map(div => {
@@ -3312,28 +3350,44 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     // removed. If no exact match, leave it unresolved and warn.
                     if (firstPatternId && abbrev) {
                         try {
-                            const { data: ssData } = await supabase
-                                .from('tbl_scoresheet')
-                                .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
-                                .eq('pattern_id', firstPatternId)
-                                .eq('association_abbrev', abbrev)
-                                .limit(1)
-                                .maybeSingle();
-                            if (ssData) baseScoresheetData = ssData;
+                            const { data: ssRows } = await preferBestScoresheet(
+                                supabase
+                                    .from('tbl_scoresheet')
+                                    .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+                                    .eq('pattern_id', firstPatternId)
+                                    .eq('association_abbrev', abbrev)
+                            ).limit(1);
+                            if (ssRows?.[0]) baseScoresheetData = ssRows[0];
                         } catch (err) {
                             console.error('Error fetching scoresheet by pattern_id+abbrev:', err);
                         }
                     }
                     if (!baseScoresheetData && abbrev && disciplineName) {
                         try {
-                            const { data: ssData } = await supabase
-                                .from('tbl_scoresheet')
-                                .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
-                                .eq('association_abbrev', abbrev)
-                                .ilike('discipline', `%${disciplineName}%`)
-                                .limit(1)
-                                .maybeSingle();
-                            if (ssData) baseScoresheetData = ssData;
+                            // Exact discipline first — a loose `%name%` match lets an older,
+                            // city-less row for a different class win.
+                            const { data: ssRows } = await preferBestScoresheet(
+                                supabase
+                                    .from('tbl_scoresheet')
+                                    .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+                                    .eq('association_abbrev', abbrev)
+                                    .eq('discipline', disciplineName)
+                            ).limit(1);
+                            if (ssRows?.[0]) baseScoresheetData = ssRows[0];
+                        } catch (err) {
+                            console.error(`Error fetching scoresheet for ${disciplineName}:`, err);
+                        }
+                    }
+                    if (!baseScoresheetData && abbrev && disciplineName) {
+                        try {
+                            const { data: ssRows } = await preferBestScoresheet(
+                                supabase
+                                    .from('tbl_scoresheet')
+                                    .select('id, pattern_id, image_url, storage_path, discipline, file_name, association_abbrev, city_state')
+                                    .eq('association_abbrev', abbrev)
+                                    .ilike('discipline', `%${disciplineName}%`)
+                            ).limit(1);
+                            if (ssRows?.[0]) baseScoresheetData = ssRows[0];
                         } catch (err) {
                             console.error(`Error fetching scoresheet for ${disciplineName}:`, err);
                         }
