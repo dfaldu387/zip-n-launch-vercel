@@ -179,123 +179,186 @@ const refineFieldBox = (ctx, img, rawField, scaleX, scaleY) => {
 };
 
 /**
- * Draw info label box at a fixed position over the SHOW/CLASS/DATE area
- * of a scoresheet. Uses fixed proportional coordinates since these fields
- * are consistently in the top-right corner of all scoresheet templates.
+ * Tag geometry, shared by the canvas overlay and the PDF stamp so the tag looks
+ * the same however the sheet was uploaded.
  *
- * Target: ~2.75" wide × ~1" tall on a standard 8.5×11" page.
+ * Robert asked for it condensed: it may cover the blank top of a sheet, but it
+ * must not reach down into the printed judging criteria. On a letter page this
+ * lands at ~2.55" × 0.89" with a QR, ~2.04" × 0.71" without — still shorter than
+ * the first version (2.8" × 1.15") while carrying one more line, because the
+ * discipline has to be on the tag alongside the division.
  */
-const drawInfoLabel = (ctx, canvasW, canvasH, data, qrImage = null) => {
-  // Fixed position: top-right corner of scoresheet
-  // SHOW/CLASS/DATE fields occupy roughly x: 50-100%, y: 1-6% on most templates
-  // When a QR is present, widen the label so the QR can sit on the left without
-  // squeezing the text. Robert wants a consistent corner placement for the code.
-  const labelW = Math.round(canvasW * (qrImage ? 0.40 : 0.33));
-  const labelH = Math.round(canvasH * 0.105);     // ~1.15" on 11" page
-  const margin = Math.round(canvasW * 0.012);      // small margin from right edge
-  const labelX = canvasW - labelW - margin;
-  const labelY = Math.round(canvasH * 0.012);      // small margin from top
-  const borderW = Math.max(1, Math.round(canvasW * 0.0012));
-  const pad = Math.round(labelW * 0.04);
+export const TAG_WIDTH_RATIO = 0.30;       // of page width, when a QR is included
+export const TAG_WIDTH_RATIO_NO_QR = 0.24;
+export const TAG_ASPECT = 0.35;            // height ÷ width — locks the shape on any page size
+export const TAG_MARGIN_RATIO = 0.012;     // gap from the top and right edges
 
-  // QR occupies a square block on the left side of the label, full label height.
-  const qrSize = qrImage ? labelH - pad * 2 : 0;
-  const qrX = qrImage ? labelX + pad : 0;
-  const qrY = qrImage ? labelY + pad : 0;
-  const textLeft = qrImage ? qrX + qrSize + pad : labelX;
+export const getTagWidthRatio = (hasQr) => (hasQr ? TAG_WIDTH_RATIO : TAG_WIDTH_RATIO_NO_QR);
+
+/**
+ * Draw the tag inside an explicit box. `bleed` paints extra white around the box
+ * so an overlay can hide the template's own SHOW/CLASS/DATE labels underneath.
+ */
+const drawTag = (ctx, labelX, labelY, labelW, labelH, data = {}, qrImage = null, bleed = 0, qrPlaceholder = false) => {
+  const borderW = Math.max(1, Math.round(labelW * 0.004));
+  const pad = Math.max(2, Math.round(labelH * 0.07));
+
+  // QR takes a square block on the left, full label height. A preview reserves the
+  // same block without minting a real code — codes belong to printed sheets only.
+  const hasQrBlock = !!qrImage || qrPlaceholder;
+  const qrSize = hasQrBlock ? labelH - pad * 2 : 0;
+  const qrX = labelX + pad;
+  const qrY = labelY + pad;
+  const textLeft = hasQrBlock ? qrX + qrSize + pad : labelX + pad;
   const textRight = labelX + labelW - pad;
-  const textCenterX = (textLeft + textRight) / 2;
+  const centerX = (textLeft + textRight) / 2;
   const maxTextW = textRight - textLeft;
 
-  // Font sizes
-  const fontBrand = Math.max(10, Math.round(labelH * 0.10));
-  const fontTitle = Math.max(13, Math.round(labelH * 0.14));
-  const fontNormal = Math.max(11, Math.round(labelH * 0.12));
-  const fontSmall = Math.max(10, Math.round(labelH * 0.11));
-  const lineGap = Math.round(labelH * 0.045);
+  // Tighter type than the first version — smaller sizes, smaller gaps.
+  const fontBrand = Math.max(7, Math.round(labelH * 0.10));
+  const fontTitle = Math.max(9, Math.round(labelH * 0.135));
+  const fontNormal = Math.max(8, Math.round(labelH * 0.12));
+  const fontSmall = Math.max(8, Math.round(labelH * 0.11));
+  const lineGap = Math.max(1, Math.round(labelH * 0.025));
 
-  const truncate = (text) => {
-    if (!text) return '';
+  const fontOf = (size, bold) => `${bold ? 'bold ' : ''}${size}px Arial, Helvetica, sans-serif`;
+
+  // A cut-off judge name is useless at the arena, so shrink the line to fit before
+  // resorting to an ellipsis. Only shows drop characters, and only after 25% shrink.
+  const fit = (text, size, bold) => {
+    let s = size;
+    const min = Math.max(6, Math.round(size * 0.75));
+    while (s > min) {
+      ctx.font = fontOf(s, bold);
+      if (ctx.measureText(text).width <= maxTextW) break;
+      s -= 1;
+    }
+    ctx.font = fontOf(s, bold);
     let t = text;
-    ctx.font = `bold ${fontTitle}px Arial, Helvetica, sans-serif`;
     while (ctx.measureText(t).width > maxTextW && t.length > 3) t = t.slice(0, -2) + '…';
-    return t;
+    return { text: t, size: s };
   };
+
+  // Date and judge share one line — this is the "line items side by side" ask.
+  const judge = (data.judgeName || '').trim();
+  const footParts = [];
+  if (data.date) footParts.push(data.date);
+  if (judge) footParts.push(`Judge: ${judge}`);
+  const footText = footParts.join('  •  ');
+
+  // Robert's required contents: equipatterns.com, show, discipline AND division,
+  // then date + judge. Discipline gets its own line so neither name gets clipped.
+  const rows = [
+    { text: 'www.equipatterns.com', size: fontBrand, bold: false, color: '#1a5276' },
+    data.showName && { text: data.showName, size: fontTitle, bold: true, color: '#000000' },
+    data.disciplineName && { text: data.disciplineName, size: fontNormal, bold: false, color: '#000000' },
+    data.className && { text: data.className, size: fontNormal, bold: false, color: '#000000' },
+    (footText || !judge) && { text: footText || '', size: fontSmall, bold: false, color: '#000000', judgeBlank: !judge },
+  ].filter(Boolean);
+
+  const contentH = rows.reduce((sum, r) => sum + r.size, 0) + lineGap * (rows.length - 1);
 
   ctx.save();
 
-  // White background (slightly larger to cover underlying field labels)
+  // White background — with bleed it also wipes the labels printed underneath.
   ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(labelX - pad, labelY - pad, labelW + pad * 2, labelH + pad * 2);
+  ctx.fillRect(labelX - bleed, labelY - bleed, labelW + bleed * 2, labelH + bleed * 2);
 
-  // Border
   ctx.strokeStyle = '#000000';
   ctx.lineWidth = borderW;
   ctx.strokeRect(labelX, labelY, labelW, labelH);
 
-  // QR code on the left side of the label
   if (qrImage && qrSize > 0) {
     ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
+  } else if (qrPlaceholder && qrSize > 0) {
+    // Preview only — shows where the code lands without creating one.
+    ctx.strokeStyle = '#999999';
+    ctx.lineWidth = Math.max(1, borderW * 0.8);
+    ctx.setLineDash([Math.max(2, Math.round(qrSize * 0.06)), Math.max(2, Math.round(qrSize * 0.06))]);
+    ctx.strokeRect(qrX, qrY, qrSize, qrSize);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#999999';
+    ctx.font = `${Math.max(6, Math.round(qrSize * 0.16))}px Arial, Helvetica, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('QR', qrX + qrSize / 2, qrY + qrSize / 2);
   }
 
-  const centerX = textCenterX;
-  let curY = labelY + Math.round(labelH * 0.08);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
+  let curY = labelY + Math.max(pad, (labelH - contentH) / 2);
 
-  // Line 1: branding
-  ctx.font = `${fontBrand}px Arial, Helvetica, sans-serif`;
-  ctx.fillStyle = '#1a5276';
-  ctx.fillText('www.equipatterns.com', centerX, curY);
-  curY += fontBrand + lineGap * 2;
-
-  // Line 2: Show name (bold)
-  if (data.showName) {
-    ctx.font = `bold ${fontTitle}px Arial, Helvetica, sans-serif`;
-    ctx.fillStyle = '#000000';
-    ctx.fillText(truncate(data.showName), centerX, curY);
-    curY += fontTitle + lineGap;
+  for (const row of rows) {
+    ctx.fillStyle = row.color;
+    if (row.judgeBlank) {
+      // No judge assigned — leave a ruled blank so it can be written in at the show.
+      const label = 'Judges Name';
+      ctx.font = fontOf(row.size, row.bold);
+      const labelW2 = ctx.measureText(label).width;
+      const blankW = Math.min(maxTextW - labelW2 - row.size * 0.4, maxTextW * 0.45);
+      const startX = centerX - (labelW2 + row.size * 0.4 + blankW) / 2;
+      ctx.textAlign = 'left';
+      ctx.fillText(label, startX, curY);
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = Math.max(1, borderW * 0.6);
+      ctx.beginPath();
+      ctx.moveTo(startX + labelW2 + row.size * 0.4, curY + row.size);
+      ctx.lineTo(startX + labelW2 + row.size * 0.4 + blankW, curY + row.size);
+      ctx.stroke();
+      ctx.textAlign = 'center';
+    } else {
+      const fitted = fit(row.text, row.size, row.bold);
+      ctx.fillText(fitted.text, centerX, curY);
+    }
+    curY += row.size + lineGap;
   }
-
-  // Line 3: Class / division
-  if (data.className) {
-    ctx.font = `${fontNormal}px Arial, Helvetica, sans-serif`;
-    ctx.fillStyle = '#000000';
-    let t = data.className;
-    while (ctx.measureText(t).width > maxTextW && t.length > 3) t = t.slice(0, -2) + '…';
-    ctx.fillText(t, centerX, curY);
-    curY += fontNormal + lineGap;
-  }
-
-  // Line 4: Date
-  if (data.date) {
-    ctx.font = `${fontSmall}px Arial, Helvetica, sans-serif`;
-    ctx.fillStyle = '#000000';
-    ctx.fillText(data.date, centerX, curY);
-    curY += fontSmall + lineGap * 2;
-  }
-
-  // Line 5: Judges Name ________
-  ctx.font = `${fontSmall}px Arial, Helvetica, sans-serif`;
-  ctx.fillStyle = '#000000';
-  const jLabel = 'Judges Name';
-  const jName = data.judgeName || '';
-  const jText = jName ? `${jLabel}  ${jName}` : jLabel;
-  ctx.fillText(jText, centerX, curY);
-  // Underline
-  const jLabelW = ctx.measureText(jLabel + '  ').width;
-  const jTextW = ctx.measureText(jText).width;
-  const ulStartX = centerX - jTextW / 2 + jLabelW;
-  const ulLen = jName ? (jTextW - jLabelW) : Math.round(maxTextW * 0.35);
-  const ulY = curY + fontSmall + Math.round(lineGap * 0.4);
-  ctx.strokeStyle = '#000000';
-  ctx.lineWidth = Math.max(1, borderW * 0.6);
-  ctx.beginPath();
-  ctx.moveTo(ulStartX, ulY);
-  ctx.lineTo(ulStartX + ulLen, ulY);
-  ctx.stroke();
 
   ctx.restore();
+};
+
+/**
+ * Place the tag in the top-right corner of a scoresheet canvas.
+ */
+const drawInfoLabel = (ctx, canvasW, canvasH, data, qrImage = null, qrPlaceholder = false) => {
+  const labelW = Math.round(canvasW * getTagWidthRatio(!!qrImage || qrPlaceholder));
+  const labelH = Math.round(labelW * TAG_ASPECT);
+  const margin = Math.round(canvasW * TAG_MARGIN_RATIO);
+  const labelX = canvasW - labelW - margin;
+  const labelY = margin;
+  drawTag(ctx, labelX, labelY, labelW, labelH, data, qrImage, Math.round(labelH * 0.07), qrPlaceholder);
+};
+
+/**
+ * Render the tag on its own transparent-free canvas and return PNG bytes.
+ * Used to stamp PDF score sheets, which never touch the canvas pipeline.
+ *
+ * @returns {Promise<{bytes: Uint8Array, aspect: number, hasQr: boolean}|null>}
+ */
+export const renderTagPng = async (data, qrUrl = null, pxWidth = 1200, qrPlaceholder = false) => {
+  try {
+    const qrImage = await loadQrImage(qrUrl, 512);
+    const width = Math.round(pxWidth);
+    const height = Math.round(width * TAG_ASPECT);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    drawTag(ctx, 0, 0, width, height, data, qrImage, 0, qrPlaceholder);
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png', 1.0));
+    if (!blob) return null;
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      aspect: TAG_ASPECT,
+      hasQr: !!qrImage || qrPlaceholder,
+    };
+  } catch (e) {
+    console.warn('Failed to render score sheet tag image:', e);
+    return null;
+  }
 };
 
 /**
@@ -308,7 +371,7 @@ const drawInfoLabel = (ctx, canvasW, canvasH, data, qrImage = null) => {
  * @param {string} overlayData.judgeName - Judge name
  * @returns {Promise<Blob>} - Modified image as blob
  */
-export const applyTextOverlay = async (imageUrl, overlayData, qrUrl = null) => {
+export const applyTextOverlay = async (imageUrl, overlayData, qrUrl = null, qrPlaceholder = false) => {
   try {
     console.log('=== APPLYING TEXT OVERLAY ===');
     console.log('Image URL:', imageUrl);
@@ -399,7 +462,7 @@ export const applyTextOverlay = async (imageUrl, overlayData, qrUrl = null) => {
       // Uses fixed proportional positioning — scoresheets consistently have
       // these fields in the top-right ~35% of width, top ~3-15% of height.
       const qrImage = await loadQrImage(qrUrl);
-      drawInfoLabel(ctx, img.width, img.height, overlayData, qrImage);
+      drawInfoLabel(ctx, img.width, img.height, overlayData, qrImage, qrPlaceholder);
     } else {
       console.warn('No field positions detected, skipping text overlay');
     }
@@ -711,13 +774,12 @@ export const getOverlayDataFromContext = (project, scoresheet) => {
   const baseDiscipline = scoresheet?.disciplineName || '';
   const baseGroup = scoresheet?.groupName || '';
   const patternNumber = scoresheet?.patternNumber || null;
+  // The discipline is its own line on the tag now, so this label carries only the
+  // class/division part (e.g. "Pattern 0002 \u2013 Open Amateur Youth").
   const classParts = [];
-  if (baseDiscipline) classParts.push(baseDiscipline);
   if (patternNumber) classParts.push(`Pattern ${patternNumber}`);
   if (baseGroup && baseGroup !== baseDiscipline) classParts.push(baseGroup);
-  const className = classParts.length > 0
-    ? classParts.join(' \u2013 ')
-    : (baseGroup || baseDiscipline || '');
+  const className = classParts.join(' \u2013 ');
   
   // Get date - prioritize per-class date from scoresheet, then divisionDates lookup, then show start date
   let date = '';
@@ -825,6 +887,7 @@ export const getOverlayDataFromContext = (project, scoresheet) => {
 
   return {
     showName,
+    disciplineName: baseDiscipline,
     className,
     date,
     judgeName

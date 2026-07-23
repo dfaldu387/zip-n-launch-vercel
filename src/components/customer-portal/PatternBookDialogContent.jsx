@@ -4,7 +4,7 @@
 //
 // Extracted verbatim from CustomerPortalPage.jsx — it depends only on props and
 // the imports below, never on anything else in that page.
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import {
     Archive, Check, ChevronDown, ChevronRight, Download, Edit, Eye, FileText,
@@ -12,7 +12,7 @@ import {
     Share2, Trash2, Users, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
-import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, findAccessoryDocUrl, mergePdfBlobs, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
+import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, buildOrdinalPrefix, findAccessoryDocUrl, mergePdfBlobs, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
 import { cn, parseLocalDate } from '@/lib/utils';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
@@ -56,6 +56,7 @@ import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import ResultsTab from '@/components/customer-portal/ResultsTab';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { applyTextOverlay, getOverlayDataFromContext, batchDetectFieldPositions, applyTextOverlayWithPositions } from '@/lib/scoresheetTextOverlay';
+import { stampPdfWithTag } from '@/lib/scoresheetPdfStamp';
 import { findClassItemId } from '@/lib/resultsUtils';
 import { fetchImageAsBase64, cropPatternImageSmart } from '@/lib/pdfHelpers';
 import { getPatternSelectionForAssoc, isAssocKeyedEntry, forEachPatternSelection, getForcedAssocForDivision, detectShowAssociations } from '@/lib/patternSelectionHelpers';
@@ -95,9 +96,15 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     const [scoresheetSortBy, setScoresheetSortBy] = useState('association');
     const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null);
 
+    // Cheat sheets / accessory documents share the Score Sheets toolbar: select, download, one sort
+    const [selectedAccessoryKeys, setSelectedAccessoryKeys] = useState(new Set());
+    const [accessorySortBy, setAccessorySortBy] = useState('discipline');
+    const [isDownloadingAccessory, setIsDownloadingAccessory] = useState(false);
+
     const [previewItem, setPreviewItem] = useState(null); // For pattern/scoresheet preview modal
     const [previewType, setPreviewType] = useState(null); // 'pattern' or 'scoresheet'
     const [previewImage, setPreviewImage] = useState(null); // Image URL for preview
+    const [previewIsPdf, setPreviewIsPdf] = useState(false); // a rendered blob URL carries no extension
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
     const [projectStatus, setProjectStatus] = useState(project.status || 'Draft'); // Local status state
     const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
@@ -267,16 +274,58 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         }
     };
     
+    // What the tag prints. Preview, single download and bulk download all call this,
+    // so the sheet on screen is the sheet that comes out of the printer.
+    const buildOverlayData = useCallback((scoresheet) => {
+        if (!scoresheet?.divisionName || !scoresheet?.judgeName) {
+            return getOverlayDataFromContext(project, scoresheet);
+        }
+
+        const projectDataLocal = project?.project_data || {};
+        let date = scoresheet.classDate || '';
+        if (!date) {
+            // Fall back to the per-division date set in the builder, then the show start.
+            for (const disc of (projectDataLocal.disciplines || [])) {
+                for (const group of (disc.patternGroups || [])) {
+                    for (const div of (group.divisions || [])) {
+                        const divName = div?.name || div?.divisionName || div?.division || div?.title || '';
+                        const divId = div?.id;
+                        if (divName.trim() === scoresheet.divisionName && divId && disc.divisionDates?.[divId]) {
+                            date = disc.divisionDates[divId];
+                            break;
+                        }
+                    }
+                    if (date) break;
+                }
+                if (date) break;
+            }
+            if (!date) date = projectDataLocal.startDate || '';
+        }
+
+        const pn = scoresheet.patternNumber
+            ? String(scoresheet.patternNumber).padStart(4, '0')
+            : null;
+
+        return {
+            showName: project?.project_name || projectDataLocal.showName || '',
+            disciplineName: scoresheet.disciplineName || '',
+            className: pn ? `Pattern ${pn} – ${scoresheet.divisionName}` : scoresheet.divisionName,
+            date,
+            judgeName: scoresheet.judgeName,
+        };
+    }, [project]);
+
     const handleViewScoresheet = async (scoresheet) => {
         setPreviewItem(scoresheet);
         setPreviewType('scoresheet');
         setIsLoadingPreview(true);
         setPreviewImage(null);
+        setPreviewIsPdf(false);
         
         try {
             // Get scoresheet image (same as download logic)
             let imageUrl = scoresheet.image_url || null;
-            
+
             if (!imageUrl && scoresheet.id) {
                 let numericId = null;
                 if (typeof scoresheet.id === 'number') {
@@ -284,21 +333,40 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 } else if (typeof scoresheet.id === 'string' && !isNaN(parseInt(scoresheet.id))) {
                     numericId = parseInt(scoresheet.id);
                 }
-                
+
                 if (numericId) {
                     const { data: scoresheetData } = await supabase
                         .from('tbl_scoresheet')
                         .select('image_url')
                         .eq('id', numericId)
                         .maybeSingle();
-                    
+
                     imageUrl = scoresheetData?.image_url || null;
                 }
             }
-            
-            setPreviewImage(imageUrl);
+
+            if (!imageUrl) {
+                setPreviewImage(null);
+                return;
+            }
+
+            // Preview the finished sheet, not the bare template: same tag, same merged
+            // cheat sheet page. The QR is drawn as a placeholder — a real code belongs
+            // to a printed sheet, and minting one per preview would litter the table.
+            const overlayData = buildOverlayData(scoresheet);
+            const sourceIsPdf = isPdfSource(scoresheet.file_name)
+                || isPdfSource(scoresheet.storage_path)
+                || isPdfSource(imageUrl);
+
+            const blob = sourceIsPdf
+                ? await buildScoresheetPdfBlob(scoresheet, imageUrl, overlayData, null, true)
+                : await applyTextOverlay(imageUrl, overlayData, null, true);
+
+            setPreviewIsPdf(sourceIsPdf);
+            setPreviewImage(URL.createObjectURL(blob));
         } catch (error) {
             console.error('Error loading scoresheet image:', error);
+            setPreviewImage(null);
         } finally {
             setIsLoadingPreview(false);
         }
@@ -1014,8 +1082,10 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     // A judge scores from the printed sheet, so the rules page has to be in front of the
     // grid. Robert uploads them as two separate PDFs, so join them at download time.
     // Any failure here falls back to the score sheet alone — never block the download.
-    const buildScoresheetPdfBlob = useCallback(async (scoresheet, imageUrl) => {
+    // The tag is stamped last so it lands on every page, cheat sheet included.
+    const buildScoresheetPdfBlob = useCallback(async (scoresheet, imageUrl, overlayData = null, qrUrl = null, qrPlaceholder = false) => {
         const scoreSheetBlob = await (await fetch(imageUrl)).blob();
+        const stamp = (blob) => (overlayData ? stampPdfWithTag(blob, overlayData, qrUrl, qrPlaceholder) : Promise.resolve(blob));
 
         try {
             const associationAbbrev = scoresheet.association_abbrev
@@ -1028,13 +1098,13 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             });
             // If both rows point at the same upload there is nothing to add, and merging
             // would hand the judge the same page twice.
-            if (!cheatSheetUrl || cheatSheetUrl === imageUrl) return scoreSheetBlob;
+            if (!cheatSheetUrl || cheatSheetUrl === imageUrl) return await stamp(scoreSheetBlob);
 
             const cheatSheetBlob = await (await fetch(cheatSheetUrl)).blob();
-            return await mergePdfBlobs([cheatSheetBlob, scoreSheetBlob]);
+            return await stamp(await mergePdfBlobs([cheatSheetBlob, scoreSheetBlob]));
         } catch (error) {
             console.warn('Could not attach the cheat sheet page:', error);
-            return scoreSheetBlob;
+            return await stamp(scoreSheetBlob);
         }
     }, [associationsData]);
 
@@ -1122,52 +1192,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         description: "Detecting fields and applying text overlay"
                     });
                     
-                    // Get overlay data - use per-scoresheet division/judge if available (generated scoresheets)
-                    let overlayData;
-                    if (scoresheet.divisionName && scoresheet.judgeName) {
-                        // Generated scoresheet: use specific division and judge
-                        const projectDataLocal = project?.project_data || {};
-                        let date = '';
-                        // Use per-class date if available
-                        if (scoresheet.classDate) {
-                            date = scoresheet.classDate;
-                        } else {
-                            // Fallback: look up divisionDates by matching division name
-                            for (const disc of (projectDataLocal.disciplines || [])) {
-                                for (const group of (disc.patternGroups || [])) {
-                                    for (const div of (group.divisions || [])) {
-                                        const divName = div?.name || div?.divisionName || div?.division || div?.title || '';
-                                        const divId = div?.id;
-                                        if (divName.trim() === scoresheet.divisionName && divId && disc.divisionDates?.[divId]) {
-                                            date = disc.divisionDates[divId];
-                                            break;
-                                        }
-                                    }
-                                    if (date) break;
-                                }
-                                if (date) break;
-                            }
-                            // Final fallback to show start date only (not range)
-                            if (!date) date = projectDataLocal.startDate || '';
-                        }
-                        // Include the actual pattern number so generated scoresheets
-                        // also reflect the row's pattern (e.g. "Pattern 0002 – Open Amateur").
-                        const pn = scoresheet.patternNumber
-                            ? String(scoresheet.patternNumber).padStart(4, '0')
-                            : null;
-                        const classLabel = pn
-                            ? `${scoresheet.disciplineName || ''} \u2013 Pattern ${pn} \u2013 ${scoresheet.divisionName}`.trim()
-                            : scoresheet.divisionName;
-                        overlayData = {
-                            showName: project?.project_name || projectDataLocal.showName || '',
-                            className: classLabel,
-                            date,
-                            judgeName: scoresheet.judgeName,
-                        };
-                    } else {
-                        // Fallback to original context extraction
-                        overlayData = getOverlayDataFromContext(project, scoresheet);
-                    }
+                    const overlayData = buildOverlayData(scoresheet);
                     console.log('Overlay data:', overlayData);
 
                     // Resolve which project holds the schedule + results for this
@@ -1212,7 +1237,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                             .insert({
                                 association: scoresheet.association_abbrev || scoresheet.associationId || null,
                                 class_name: scoresheet.disciplineName || null,
-                                pattern_name: overlayData.className || null,
+                                // Keep the discipline in the QR record even though the tag prints it on its own line.
+                                pattern_name: [overlayData.disciplineName, overlayData.className].filter(Boolean).join(' – ') || null,
                                 division: scoresheet.divisionName || null,
                                 judge_name: scoresheet.judgeName || null,
                                 show_name: overlayData.showName || null,
@@ -1238,7 +1264,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         || isPdfSource(scoresheet.storage_path)
                         || isPdfSource(imageUrl);
                     const blob = sourceIsPdf
-                        ? await buildScoresheetPdfBlob(scoresheet, imageUrl)
+                        ? await buildScoresheetPdfBlob(scoresheet, imageUrl, overlayData, qrUrl)
                         : await applyTextOverlay(imageUrl, overlayData, qrUrl);
                     const blobUrl = window.URL.createObjectURL(blob);
 
@@ -1418,46 +1444,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 const batch = downloadable.slice(i, i + BATCH_SIZE);
 
                 const batchResults = await Promise.allSettled(
-                    batch.map(async ({ scoresheet, imageUrl }) => {
-                        // Build overlay data (same logic as handleDownloadScoresheet)
-                        let overlayData;
-                        if (scoresheet.divisionName && scoresheet.judgeName) {
-                            const projectDataLocal = project?.project_data || {};
-                            let date = '';
-                            if (scoresheet.classDate) {
-                                date = scoresheet.classDate;
-                            } else {
-                                for (const disc of (projectDataLocal.disciplines || [])) {
-                                    for (const group of (disc.patternGroups || [])) {
-                                        for (const div of (group.divisions || [])) {
-                                            const divName = div?.name || div?.divisionName || div?.division || div?.title || '';
-                                            const divId = div?.id;
-                                            if (divName.trim() === scoresheet.divisionName && divId && disc.divisionDates?.[divId]) {
-                                                date = disc.divisionDates[divId];
-                                                break;
-                                            }
-                                        }
-                                        if (date) break;
-                                    }
-                                    if (date) break;
-                                }
-                                if (!date) date = projectDataLocal.startDate || '';
-                            }
-                            const pn = scoresheet.patternNumber
-                                ? String(scoresheet.patternNumber).padStart(4, '0')
-                                : null;
-                            const classLabel = pn
-                                ? `${scoresheet.disciplineName || ''} \u2013 Pattern ${pn} \u2013 ${scoresheet.divisionName}`.trim()
-                                : scoresheet.divisionName;
-                            overlayData = {
-                                showName: project?.project_name || projectDataLocal.showName || '',
-                                className: classLabel,
-                                date,
-                                judgeName: scoresheet.judgeName,
-                            };
-                        } else {
-                            overlayData = getOverlayDataFromContext(project, scoresheet);
-                        }
+                    batch.map(async ({ scoresheet, imageUrl }, batchIndex) => {
+                        // Position in the sorted list — becomes the file name prefix so the
+                        // unzipped folder reads in the same order as the screen.
+                        const ordinal = i + batchIndex + 1;
+                        const overlayData = buildOverlayData(scoresheet);
 
                         // Insert a QR record per scoresheet — one printed sheet,
                         // one scannable id. If insert fails, skip the QR but
@@ -1474,7 +1465,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                 .insert({
                                     association: scoresheet.association_abbrev || scoresheet.associationId || null,
                                     class_name: scoresheet.disciplineName || null,
-                                    pattern_name: overlayData.className || null,
+                                    // Keep the discipline in the QR record even though the tag prints it on its own line.
+                                    pattern_name: [overlayData.disciplineName, overlayData.className].filter(Boolean).join(' – ') || null,
                                     division: scoresheet.divisionName || null,
                                     judge_name: scoresheet.judgeName || null,
                                     show_name: overlayData.showName || null,
@@ -1499,7 +1491,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                             || isPdfSource(scoresheet.storage_path)
                             || isPdfSource(imageUrl);
                         const blob = sourceIsPdf
-                            ? await buildScoresheetPdfBlob(scoresheet, imageUrl)
+                            ? await buildScoresheetPdfBlob(scoresheet, imageUrl, overlayData, qrUrl)
                             : await applyTextOverlayWithPositions(
                                 imageUrl,
                                 overlayData,
@@ -1507,7 +1499,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                 qrUrl,
                             );
 
-                        const fileName = buildScoresheetDownloadName(scoresheet, imageUrl);
+                        const fileName = buildScoresheetDownloadName(scoresheet, imageUrl, ordinal, downloadable.length);
 
                         // Ensure unique filename within ZIP
                         let finalName = fileName;
@@ -1584,6 +1576,71 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         } finally {
             setBulkDownloadProgress(null);
             setSelectedScoresheetIds(new Set());
+        }
+    };
+
+    // Bulk download the selected cheat sheets / accessory documents as one ZIP,
+    // numbered so they unzip in the order shown on screen.
+    const handleBulkDownloadAccessory = async (docs) => {
+        if (!docs || docs.length === 0) return;
+        setIsDownloadingAccessory(true);
+        try {
+            const { default: JSZip } = await import('jszip');
+            const zip = new JSZip();
+            const usedNames = new Set();
+            let added = 0;
+
+            for (let i = 0; i < docs.length; i++) {
+                const doc = docs[i];
+                const url = doc.fileUrl || doc.url;
+                try {
+                    const blob = await (await fetch(url)).blob();
+                    const base = (doc.customName || doc.fileName || `Document ${i + 1}`)
+                        .replace(/[<>:"/\\|?*]/g, '-').trim();
+                    const extension = (doc.fileName || url).split('.').pop().split(/[?#]/)[0] || 'pdf';
+                    let name = `${buildOrdinalPrefix(i + 1, docs.length)}${base}`;
+                    if (!name.toLowerCase().endsWith(`.${extension.toLowerCase()}`)) name = `${name}.${extension}`;
+                    let finalName = name;
+                    let counter = 1;
+                    while (usedNames.has(finalName)) {
+                        finalName = name.replace(/(\.[^.]+)$/, `_${counter}$1`);
+                        counter++;
+                    }
+                    usedNames.add(finalName);
+                    zip.file(finalName, blob);
+                    added++;
+                } catch (e) {
+                    console.error('Could not add accessory document to ZIP:', url, e);
+                }
+            }
+
+            if (added === 0) {
+                toast({ title: 'Download failed', description: 'None of the selected documents could be downloaded.', variant: 'destructive' });
+                return;
+            }
+
+            const content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+            const projectName = (project?.project_name || 'Documents').replace(/[^a-z0-9]/gi, '_');
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = `${projectName}_Cheat_Sheets.zip`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+
+            toast({
+                title: 'Download complete',
+                description: added === docs.length
+                    ? `Downloaded ${added} document(s) as ZIP`
+                    : `Downloaded ${added} of ${docs.length} document(s)`,
+            });
+        } catch (error) {
+            console.error('Accessory bulk download error:', error);
+            toast({ title: 'Download failed', description: error.message || 'Failed to download documents', variant: 'destructive' });
+        } finally {
+            setIsDownloadingAccessory(false);
+            setSelectedAccessoryKeys(new Set());
         }
     };
 
@@ -2091,17 +2148,25 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             return true;
         });
 
-        return [...list].sort((a, b) => {
-            if (scoresheetSortBy === 'association') {
-                const cmp = (a.associationId || '').localeCompare(b.associationId || '');
-                return cmp !== 0 ? cmp : (a.divisionName || '').localeCompare(b.divisionName || '');
-            }
-            if (scoresheetSortBy === 'division') return (a.divisionName || '').localeCompare(b.divisionName || '');
-            if (scoresheetSortBy === 'judge') return (a.judgeName || '').localeCompare(b.judgeName || '');
-            if (scoresheetSortBy === 'discipline') return (a.disciplineName || '').localeCompare(b.disciplineName || '');
-            if (scoresheetSortBy === 'name') return (a.displayName || '').localeCompare(b.displayName || '');
-            return 0;
-        });
+        // One sort key, as Robert asked — no layered sorting. Everything after the chosen
+        // key is only a tiebreak, so rows that share a key still read tidily and the
+        // download order matches the screen exactly.
+        const sortKey = (s) => {
+            if (scoresheetSortBy === 'association') return s.associationId || s.association_abbrev || '';
+            if (scoresheetSortBy === 'division') return s.divisionName || '';
+            if (scoresheetSortBy === 'judge') return s.judgeName || '';
+            if (scoresheetSortBy === 'discipline') return s.disciplineName || '';
+            if (scoresheetSortBy === 'date') return s.classDate || '';
+            if (scoresheetSortBy === 'name') return s.displayName || '';
+            return '';
+        };
+        const compare = (x, y) => String(x || '').localeCompare(String(y || ''), undefined, { numeric: true });
+        return [...list].sort((a, b) =>
+            compare(sortKey(a), sortKey(b))
+            || compare(a.disciplineName, b.disciplineName)
+            || compare(a.divisionName, b.divisionName)
+            || compare(a.judgeName, b.judgeName)
+        );
     }, [generatedScoresheets, folderItemsAsScoresheets, selectedSidebarItem, selectedFolderId, scoresheetSortBy, filterAssociations, filterDisciplines, filterDivisions, filterJudges]);
     
     // Fetch data when dialog opens or tabs change
@@ -2156,6 +2221,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         fileUrl: row.image_url,
                         fileName: row.file_name,
                         customName: `${row.discipline} - Cheat Sheet`,
+                        discipline: row.discipline,
+                        association: row.association_abbrev,
                         tags: [row.association_abbrev, row.discipline].filter(Boolean),
                     });
                 }
@@ -3112,7 +3179,14 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     };
 
     // Generate scoresheets: Division x Judge cross-product (user-controlled)
+    // Every filter tick starts a fresh run, and each run makes several awaited queries.
+    // Without this guard a slower earlier run can land last and overwrite the newer
+    // result — which is how ticking a second judge could make that judge's classes
+    // vanish from the list until the filters were cleared (Robert's "Mo Holmes is not
+    // on the list"). Only the newest run is allowed to publish.
+    const scoresheetRunIdRef = useRef(0);
     const generateScoresheets = async () => {
+        const runId = ++scoresheetRunIdRef.current;
         setIsGeneratingScoresheets(true);
         setSelectedScoresheetIds(new Set());
         try {
@@ -3459,6 +3533,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 }
             }
 
+            // A newer filter change already started its own run — drop this stale result.
+            if (runId !== scoresheetRunIdRef.current) return;
+
             setGeneratedScoresheets(result);
 
             toast({
@@ -3477,13 +3554,16 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             }
         } catch (error) {
             console.error('Error generating scoresheets:', error);
-            toast({
-                title: "Generation failed",
-                description: error.message || "Failed to generate scoresheets",
-                variant: "destructive"
-            });
+            if (runId === scoresheetRunIdRef.current) {
+                toast({
+                    title: "Generation failed",
+                    description: error.message || "Failed to generate scoresheets",
+                    variant: "destructive"
+                });
+            }
         } finally {
-            setIsGeneratingScoresheets(false);
+            // Keep the spinner up while a newer run is still working.
+            if (runId === scoresheetRunIdRef.current) setIsGeneratingScoresheets(false);
         }
     };
 
@@ -4674,8 +4754,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                             </Popover>
                                         )}
 
-                                        {/* 2. Discipline Filter - Show for Patterns and Score Sheets tabs */}
-                                        {(activeSubTab === 'patterns' || activeSubTab === 'scoreSheets') && (
+                                        {/* 2. Discipline Filter - Patterns, Score Sheets and Cheat Sheets */}
+                                        {(activeSubTab === 'patterns' || activeSubTab === 'scoreSheets' || activeSubTab === 'accessory') && (
                                             <Popover open={disciplineFilterOpen} onOpenChange={(open) => { setDisciplineFilterOpen(open); if (!open) setDisciplineSearch(''); }}>
                                                 <PopoverTrigger asChild>
                                                     <Button variant="outline" className="w-36 justify-between">
@@ -5796,17 +5876,18 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                             </div>
                                                         )}
                                                     </div>
-                                                    {/* Sort dropdown */}
+                                                    {/* Sort dropdown — the download follows this same order */}
                                                     <Select value={scoresheetSortBy} onValueChange={setScoresheetSortBy}>
-                                                        <SelectTrigger className="h-7 w-32 text-xs">
+                                                        <SelectTrigger className="h-7 w-44 text-xs">
                                                             <SelectValue placeholder="Sort by" />
                                                         </SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="association">By Association</SelectItem>
-                                                            <SelectItem value="division">By Division</SelectItem>
-                                                            <SelectItem value="discipline">By Discipline</SelectItem>
-                                                            <SelectItem value="judge">By Judge</SelectItem>
-                                                            <SelectItem value="name">By Name</SelectItem>
+                                                            <SelectItem value="association">Sort by Association</SelectItem>
+                                                            <SelectItem value="discipline">Sort by Discipline</SelectItem>
+                                                            <SelectItem value="division">Sort by Division</SelectItem>
+                                                            <SelectItem value="judge">Sort by Judge</SelectItem>
+                                                            <SelectItem value="date">Sort by Date</SelectItem>
+                                                            <SelectItem value="name">Sort by Name</SelectItem>
                                                         </SelectContent>
                                                     </Select>
                                                 </div>
@@ -5847,6 +5928,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                 {scoresheet.judgeName && (
                                                                     <div>
                                                                         <span className="font-medium">Judge:</span> {scoresheet.judgeName}
+                                                                    </div>
+                                                                )}
+                                                                {scoresheet.classDate && (
+                                                                    <div>
+                                                                        <span className="font-medium">Date:</span> {scoresheet.classDate}
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -5970,21 +6056,41 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                 
                                 {activeSubTab === 'accessory' && (
                                     (() => {
-                                        const accessoryDocs = [
+                                        const allAccessoryDocs = [
                                             ...libraryAccessoryDocs,
                                             ...(projectData.showDocuments || []),
                                             ...(projectData.generalMarketing || []),
                                             ...(projectData.lessonPlans || []),
                                         ].filter(d => d && (d.fileUrl || d.url));
+
+                                        // Same discipline filter as the Score Sheets tab. Documents with no
+                                        // discipline (schedules, bills) drop out once a discipline is picked.
+                                        const docDiscipline = (doc) => (doc.discipline
+                                            || (doc.tags || []).find(t => disciplineOptions.includes(t))
+                                            || '').trim();
+                                        const accessoryDocs = (filterDisciplines.size > 0
+                                            ? allAccessoryDocs.filter(d => filterDisciplines.has(docDiscipline(d)))
+                                            : allAccessoryDocs
+                                        ).sort((a, b) => {
+                                            const key = (d) => accessorySortBy === 'discipline' ? docDiscipline(d) : (d.customName || d.fileName || '');
+                                            const cmp = key(a).localeCompare(key(b), undefined, { numeric: true });
+                                            return cmp !== 0 ? cmp : (a.customName || a.fileName || '').localeCompare(b.customName || b.fileName || '');
+                                        });
+
                                         if (accessoryDocs.length === 0) {
                                             return (
                                                 <div className="text-center py-12 text-muted-foreground">
                                                     <FileText className="h-12 w-12 mx-auto mb-4 opacity-30" />
-                                                    <p className="text-lg font-medium mb-2">No Accessory Documents</p>
-                                                    <p className="text-sm">Upload show schedules, bills, or related documents in the Pattern Book Builder (Step 6).</p>
+                                                    <p className="text-lg font-medium mb-2">No Cheat Sheets or Accessory Documents</p>
+                                                    <p className="text-sm">
+                                                        {filterDisciplines.size > 0
+                                                            ? 'Try clearing the Discipline filter above.'
+                                                            : 'Upload show schedules, bills, or related documents in the Pattern Book Builder (Step 6).'}
+                                                    </p>
                                                 </div>
                                             );
                                         }
+                                        const docKey = (doc) => doc.filePath || doc.fileUrl || doc.url;
                                         const handleShare = async (doc) => {
                                             const url = doc.fileUrl || doc.url;
                                             const title = doc.customName || doc.fileName || 'Accessory Document';
@@ -6008,15 +6114,73 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                 w.addEventListener('load', () => { try { w.focus(); w.print(); } catch (_) {} });
                                             }
                                         };
+                                        const selectedDocs = accessoryDocs.filter(d => selectedAccessoryKeys.has(docKey(d)));
+
                                         return (
                                             <TooltipProvider>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {/* Same toolbar as Score Sheets: select all, bulk download, one sort */}
+                                            <div className="flex items-center justify-between mb-3 pb-2 border-b">
+                                                <div className="flex items-center gap-2">
+                                                    <Checkbox
+                                                        id="select-all-accessory"
+                                                        checked={selectedDocs.length === accessoryDocs.length && accessoryDocs.length > 0}
+                                                        onCheckedChange={(checked) => {
+                                                            setSelectedAccessoryKeys(checked
+                                                                ? new Set(accessoryDocs.map(docKey))
+                                                                : new Set());
+                                                        }}
+                                                    />
+                                                    <Label htmlFor="select-all-accessory" className="text-xs font-normal cursor-pointer">
+                                                        {selectedDocs.length > 0 ? `${selectedDocs.length} selected` : 'Select All'}
+                                                    </Label>
+                                                    {selectedDocs.length > 0 && (
+                                                        isDownloadingAccessory ? (
+                                                            <div className="flex items-center gap-2 ml-2 text-xs text-muted-foreground">
+                                                                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                                                                Preparing ZIP...
+                                                            </div>
+                                                        ) : (
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="h-7 text-xs ml-2"
+                                                                onClick={() => handleBulkDownloadAccessory(selectedDocs)}
+                                                            >
+                                                                <Download className="h-3.5 w-3.5 mr-1.5" />
+                                                                Download ({selectedDocs.length})
+                                                            </Button>
+                                                        )
+                                                    )}
+                                                </div>
+                                                <Select value={accessorySortBy} onValueChange={setAccessorySortBy}>
+                                                    <SelectTrigger className="h-7 w-44 text-xs">
+                                                        <SelectValue placeholder="Sort by" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="discipline">Sort by Discipline</SelectItem>
+                                                        <SelectItem value="name">Sort by Name</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="space-y-2">
                                                 {accessoryDocs.map((doc, idx) => {
                                                     const url = doc.fileUrl || doc.url;
                                                     const name = doc.customName || doc.fileName || `Document ${idx + 1}`;
+                                                    const key = docKey(doc);
                                                     return (
-                                                        <div key={(doc.filePath || url) + idx} className="flex items-center justify-between p-3 border rounded-md bg-card">
+                                                        <div key={key + idx} className="flex items-center justify-between p-3 border rounded-md bg-card">
                                                             <div className="flex items-center gap-3 overflow-hidden">
+                                                                <Checkbox
+                                                                    checked={selectedAccessoryKeys.has(key)}
+                                                                    onCheckedChange={(checked) => {
+                                                                        setSelectedAccessoryKeys(prev => {
+                                                                            const next = new Set(prev);
+                                                                            if (checked) next.add(key);
+                                                                            else next.delete(key);
+                                                                            return next;
+                                                                        });
+                                                                    }}
+                                                                />
                                                                 <FileText className="h-6 w-6 text-muted-foreground flex-shrink-0" />
                                                                 <div className="overflow-hidden">
                                                                     <p className="text-sm font-medium truncate">{name}</p>
@@ -6124,9 +6288,12 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             
             {/* Pattern/Scoresheet Preview Modal */}
             <Dialog open={!!previewItem} onOpenChange={() => {
+                // The score sheet preview is a rendered blob, so hand the memory back.
+                if (previewImage?.startsWith('blob:')) URL.revokeObjectURL(previewImage);
                 setPreviewItem(null);
                 setPreviewType(null);
                 setPreviewImage(null);
+                setPreviewIsPdf(false);
             }}>
                 <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
@@ -6145,7 +6312,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                             </div>
                         ) : previewImage ? (
                             <div className="rounded-md overflow-hidden border bg-muted/20">
-                                {isPdfSource(previewItem?.file_name) || isPdfSource(previewImage) ? (
+                                {previewIsPdf || isPdfSource(previewItem?.file_name) || isPdfSource(previewImage) ? (
                                     <iframe
                                         src={previewImage}
                                         title={previewType === 'pattern' ? 'Pattern Diagram' : 'Scoresheet'}
