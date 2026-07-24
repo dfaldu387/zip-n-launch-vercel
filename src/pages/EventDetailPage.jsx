@@ -15,6 +15,7 @@ import { downloadPatternJpeg, printPatterns, downloadPatternBookPdf, buildBrande
 import { Document, Page, pdfjs } from 'react-pdf';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
+import { isShowPublished } from '@/lib/showPublishing';
 
 // Some patterns are organizer-uploaded PDFs (custom requests) rather than database
 // image-patterns. Render their first page inline with react-pdf — worker set once here.
@@ -490,6 +491,9 @@ const EventDetailPage = () => {
     projectData?.moduleStatuses?.patternBook === 'published' ||
     ['Final', 'Publication', 'published'].includes(event.project?.status)
   );
+  // Completed score sheets are public once the show is published — same rule the
+  // results page itself enforces, so the button and the page can never disagree.
+  const resultsPublished = isShowPublished(event.project);
   // Optional scheduled release: if a future Publication Date is set, hold the patterns
   // back until that day (string compare on yyyy-MM-dd is date-correct).
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -1215,6 +1219,16 @@ const EventDetailPage = () => {
                     )
                   )}
                   {getPatternStatus()}
+                  {/* Results: the completed score sheets the show office posted from the
+                      arena. Only offered once the show itself is published — the page
+                      re-checks that too, so a shared link cannot leak early results. */}
+                  {event.isFromProjects && resultsPublished && (
+                    <Button asChild className="w-full bg-purple-600 hover:bg-purple-700">
+                      <Link to={`/event-results/${event.id}`}>
+                        <Trophy className="h-4 w-4 mr-2" /> Results &amp; Score Sheets
+                      </Link>
+                    </Button>
+                  )}
                   {(event.website || event.show_website || event.showWebsite) && (
                     <Button asChild variant="outline" className="w-full">
                       <a href={event.website || event.show_website || event.showWebsite} target="_blank" rel="noopener noreferrer">

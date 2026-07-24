@@ -44,6 +44,7 @@ const PatternUploadWizardPage = lazy(() => import('@/pages/PatternUploadWizardPa
 const ScoreSheetGeneratorPage = lazy(() => import('@/pages/ScoreSheetGeneratorPage'));
 const ScoreSheetQRDownloadPage = lazy(() => import('@/pages/ScoreSheetQRDownloadPage'));
 const ScoreSheetResultsPage = lazy(() => import('@/pages/ScoreSheetResultsPage'));
+const ShowResultsPage = lazy(() => import('@/pages/ShowResultsPage'));
 const AIScoreSheetManagerPage = lazy(() => import('@/pages/AIScoreSheetManagerPage'));
 const AdminPatternReviewPage = lazy(() => import('@/pages/AdminPatternReviewPage'));
 const AIPatternGeneratorStudioPage = lazy(() => import('@/pages/AIPatternGeneratorStudioPage'));
@@ -293,6 +294,8 @@ function App() {
                   <Route path="/score-sheet-generator" element={<ScoreSheetGeneratorPage />} />
                   <Route path="/s/:id" element={<ScoreSheetQRDownloadPage />} />
                   <Route path="/s/:id/results" element={<ScoreSheetResultsPage />} />
+                  {/* Public results: every completed score sheet posted for a show */}
+                  <Route path="/event-results/:id" element={<ShowResultsPage />} />
                   {/* Catch-all: any unknown URL redirects to home instead of a blank page */}
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
