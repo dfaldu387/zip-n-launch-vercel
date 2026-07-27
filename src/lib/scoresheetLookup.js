@@ -78,6 +78,54 @@ export const mergePdfBlobs = async (blobs) => {
     return new Blob([await merged.save()], { type: 'application/pdf' });
 };
 
+// The "one PDF" download needs every sheet to be a PDF page, but image-backed templates
+// render to PNG. Wrap one in a fixed US Letter page rather than a page the size of the
+// source pixels — a packet of mixed page sizes makes the printer re-scale sheet by sheet,
+// which is exactly the manual work this download exists to remove.
+export const imageBlobToPdfBlob = async (blob) => {
+    const { PDFDocument } = await import('pdf-lib');
+    const bytes = await blob.arrayBuffer();
+    const pdf = await PDFDocument.create();
+
+    const isJpeg = /jpe?g/i.test(blob.type || '');
+    const image = isJpeg ? await pdf.embedJpg(bytes) : await pdf.embedPng(bytes);
+
+    const landscape = image.width > image.height;
+    const pageWidth = landscape ? 792 : 612;
+    const pageHeight = landscape ? 612 : 792;
+    const page = pdf.addPage([pageWidth, pageHeight]);
+
+    // Fit inside the page, centred, aspect ratio kept — never crop a judge's grid.
+    const scale = Math.min(pageWidth / image.width, pageHeight / image.height);
+    const width = image.width * scale;
+    const height = image.height * scale;
+    page.drawImage(image, {
+        x: (pageWidth - width) / 2,
+        y: (pageHeight - height) / 2,
+        width,
+        height,
+    });
+
+    return new Blob([await pdf.save()], { type: 'application/pdf' });
+};
+
+// The merged packet gets printed and then stacked on a table, so the file name has to say
+// whose pile it is — "Mo Holmes - Score Sheets.pdf", not "Scoresheets.pdf". Only filters
+// narrowed to a single value contribute; "2 Selected" tells the person holding it nothing.
+export const buildMergedPdfName = (filterSets = [], fallback = '') => {
+    const single = (set) => {
+        if (!set || typeof set.size !== 'number' || set.size !== 1) return null;
+        const value = String(Array.from(set)[0] || '').trim();
+        return value || null;
+    };
+
+    const label = filterSets.map(single).filter(Boolean).join(' - ')
+        || String(fallback || '').trim();
+
+    const safe = label.replace(/[<>:"/\\|?*]/g, '-').replace(/\s+/g, ' ').trim();
+    return safe ? `${safe} - Score Sheets.pdf` : 'Score Sheets.pdf';
+};
+
 // Keep one row per discipline after a query that can return duplicates.
 export const dedupeByDiscipline = (rows) => {
     const best = new Map();

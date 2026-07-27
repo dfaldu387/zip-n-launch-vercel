@@ -103,6 +103,43 @@ body {
   }
 }
 
+/* Finger-scrollable list with a scrollbar that is always visible.
+   Used on the filter dropdowns and on the document lists inside the pattern
+   book dialog. Two separate iPad problems are solved here:
+   - Touch: the filter popovers are portalled outside the Dialog, so the
+     dialog's scroll lock swallows touchmove. pan-y plus a stopPropagation
+     handler on the container keeps finger-scrolling alive.
+   - Discoverability: iOS hides scrollbars until you scroll, so a list that
+     continues past the fold looks like the whole list. Forcing the bar to
+     stay visible is the "bar on the side" that shows there is more. */
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.55) hsl(var(--muted) / 0.6);
+}
+
+.touch-scroll::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 10px;
+}
+
+.touch-scroll::-webkit-scrollbar-track {
+  background: hsl(var(--muted) / 0.6);
+  border-radius: 5px;
+}
+
+.touch-scroll::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.55);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.touch-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.8);
+}
+
 .highlight-section {
   animation: section-highlight 1.5s ease-in-out;
 }

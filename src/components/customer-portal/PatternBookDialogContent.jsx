@@ -12,7 +12,7 @@ import {
     Share2, Trash2, Users, X,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
-import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, buildOrdinalPrefix, findAccessoryDocUrl, mergePdfBlobs, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
+import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, buildOrdinalPrefix, findAccessoryDocUrl, mergePdfBlobs, imageBlobToPdfBlob, buildMergedPdfName, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
 import { cn, parseLocalDate } from '@/lib/utils';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
@@ -55,7 +55,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import ResultsTab from '@/components/customer-portal/ResultsTab';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
-import { applyTextOverlay, getOverlayDataFromContext, batchDetectFieldPositions, applyTextOverlayWithPositions } from '@/lib/scoresheetTextOverlay';
+import { applyTextOverlay, getOverlayDataFromContext } from '@/lib/scoresheetTextOverlay';
 import { stampPdfWithTag } from '@/lib/scoresheetPdfStamp';
 import { findClassItemId } from '@/lib/resultsUtils';
 import { fetchImageAsBase64, cropPatternImageSmart } from '@/lib/pdfHelpers';
@@ -1311,7 +1311,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     };
 
     // Bulk download selected scoresheets as a single ZIP with deduplicated AI calls
-    const handleBulkDownloadScoresheets = async () => {
+    // mode 'zip'  -> one numbered file per class, packed into a ZIP (unchanged behaviour)
+    // mode 'pdf'  -> every class merged into a single PDF, pages in the on-screen order,
+    //                so the whole set prints in one job instead of 14 open/print/close rounds.
+    // Everything up to packaging is identical, so the two share this function.
+    const handleBulkDownloadScoresheets = async (mode = 'zip') => {
         const selected = displayedScoresheets.filter(s => selectedScoresheetIds.has(s.uniqueKey));
         if (selected.length === 0) return;
 
@@ -1397,41 +1401,19 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 return;
             }
 
-            // Phase 1: Deduplicated AI field detection
-            // PDFs are never drawn on a canvas, so don't pay for field detection on them.
-            const uniqueImageUrls = [...new Set(
-                downloadable
-                    .filter(r => !isPdfSource(r.scoresheet?.file_name)
-                        && !isPdfSource(r.scoresheet?.storage_path)
-                        && !isPdfSource(r.imageUrl))
-                    .map(r => r.imageUrl)
-            )];
-            setBulkDownloadProgress({
-                phase: 'detecting',
-                current: 0,
-                total: uniqueImageUrls.length,
-                message: `Detecting fields on ${uniqueImageUrls.length} unique template(s)...`
-            });
-
-            const fieldPositionsMap = await batchDetectFieldPositions(
-                uniqueImageUrls,
-                (completed, total) => {
-                    setBulkDownloadProgress({
-                        phase: 'detecting',
-                        current: completed,
-                        total,
-                        message: `Detecting fields: ${completed} of ${total} template(s)...`
-                    });
-                }
-            );
-
-            // Phase 2: Render overlays in parallel batches and pack into ZIP
-            const { default: JSZip } = await import('jszip');
-            const zip = new JSZip();
+            // Render overlays in parallel batches, then package.
+            // There used to be an AI field-detection pass here, one call per unique
+            // template, before a single file was written. Nothing consumed the result —
+            // the tag is placed by fixed proportion, not by detection — so it was pure
+            // waiting time on every bulk download.
+            const asOnePdf = mode === 'pdf';
             const BATCH_SIZE = 4;
             let renderedCount = 0;
             const totalToRender = downloadable.length;
             const usedFileNames = new Set();
+            // Keyed by ordinal so the merged PDF cannot drift out of screen order even if a
+            // batch settles out of sequence.
+            const rendered = [];
 
             setBulkDownloadProgress({
                 phase: 'rendering',
@@ -1490,14 +1472,13 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         const sourceIsPdf = isPdfSource(scoresheet.file_name)
                             || isPdfSource(scoresheet.storage_path)
                             || isPdfSource(imageUrl);
-                        const blob = sourceIsPdf
+                        let blob = sourceIsPdf
                             ? await buildScoresheetPdfBlob(scoresheet, imageUrl, overlayData, qrUrl)
-                            : await applyTextOverlayWithPositions(
-                                imageUrl,
-                                overlayData,
-                                fieldPositionsMap.get(imageUrl),
-                                qrUrl,
-                            );
+                            : await applyTextOverlay(imageUrl, overlayData, qrUrl);
+
+                        // Image templates come back as PNG, which pdf-lib cannot merge —
+                        // give them a page of their own before the packet is assembled.
+                        if (asOnePdf && !sourceIsPdf) blob = await imageBlobToPdfBlob(blob);
 
                         const fileName = buildScoresheetDownloadName(scoresheet, imageUrl, ordinal, downloadable.length);
 
@@ -1513,13 +1494,13 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         }
                         usedFileNames.add(finalName);
 
-                        return { fileName: finalName, blob };
+                        return { ordinal, fileName: finalName, blob };
                     })
                 );
 
                 for (const result of batchResults) {
                     if (result.status === 'fulfilled') {
-                        zip.file(result.value.fileName, result.value.blob);
+                        rendered.push(result.value);
                     } else {
                         console.error('Failed to render scoresheet:', result.reason);
                     }
@@ -1534,37 +1515,59 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 });
             }
 
-            // Phase 3: Generate and download ZIP
+            // Phase 3: Package — one merged PDF, or one file per class in a ZIP.
+            rendered.sort((a, b) => a.ordinal - b.ordinal);
+            if (rendered.length === 0) {
+                toast({ title: 'Download failed', description: 'None of the selected scoresheets could be rendered', variant: 'destructive' });
+                return;
+            }
+
             setBulkDownloadProgress({
                 phase: 'rendering',
                 current: totalToRender,
                 total: totalToRender,
-                message: 'Generating ZIP file...'
+                message: asOnePdf ? 'Combining into one PDF...' : 'Generating ZIP file...'
             });
 
-            const projectName = (project?.project_name || 'Scoresheets').replace(/[^a-z0-9]/gi, '_');
-            const content = await zip.generateAsync({
-                type: 'blob',
-                compression: 'DEFLATE',
-                compressionOptions: { level: 6 }
-            });
+            let content;
+            let downloadName;
+            if (asOnePdf) {
+                content = await mergePdfBlobs(rendered.map(r => r.blob));
+                downloadName = buildMergedPdfName(
+                    [filterJudges, filterDisciplines, filterDivisions, filterAssociations],
+                    project?.project_name,
+                );
+            } else {
+                const { default: JSZip } = await import('jszip');
+                const zip = new JSZip();
+                rendered.forEach(r => zip.file(r.fileName, r.blob));
+                content = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'DEFLATE',
+                    compressionOptions: { level: 6 }
+                });
+                const projectName = (project?.project_name || 'Scoresheets').replace(/[^a-z0-9]/gi, '_');
+                downloadName = `${projectName}_Scoresheets.zip`;
+            }
 
             const url = URL.createObjectURL(content);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `${projectName}_Scoresheets.zip`;
+            link.download = downloadName;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
 
-            const addedCount = Object.keys(zip.files).length;
+            const addedCount = rendered.length;
             const failedCount = totalToRender - addedCount;
             toast({
                 title: 'Download complete',
                 description: failedCount > 0
                     ? `Downloaded ${addedCount} scoresheets (${failedCount} failed)`
-                    : `Downloaded ${addedCount} scoresheets as ZIP`
+                    : asOnePdf
+                        ? `${addedCount} scoresheets combined into ${downloadName}`
+                        : `Downloaded ${addedCount} scoresheets as ZIP`
             });
         } catch (error) {
             console.error('Bulk download error:', error);
@@ -4304,7 +4307,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     </div>
                 </div>
                 
-                <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mb-4">
                     <span>
                         Show dates: {
                             projectData.startDate 
@@ -4355,8 +4358,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             
             {/* Main Content */}
                 <div className="flex flex-1 overflow-hidden">
-                    {/* Left Sidebar */}
-                    <div className="w-64 border-r bg-muted/30 p-4 flex flex-col">
+                    {/* Left Sidebar. Both sidebars are a fixed 256px, so on a phone they
+                        left the score sheet list about 250px wide with nothing readable in
+                        it. Drop this one below the tablet breakpoint — an iPad still gets
+                        the filing system, a phone gets the full width for the list. */}
+                    <div className="hidden md:flex w-64 shrink-0 border-r bg-muted/30 p-4 flex-col">
                     <div className="mb-6">
                         <h3 className="text-sm font-semibold mb-2">My Filing System</h3>
                         <div className="space-y-1">
@@ -4401,7 +4407,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         >
                             My Folders
                         </h3>
-                        <div className="space-y-1 max-h-[300px] overflow-y-auto">
+                        <div className="touch-scroll space-y-1 max-h-[300px] overflow-y-auto">
                             {/* Inline folder creation at root level */}
                             {isCreatingFolder && !creatingFolderParentId && (
                                 <div className="flex items-center gap-2 px-3 py-2">
@@ -4625,12 +4631,14 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 
                 {/* Main Content Area */}
                 <div className="flex-1 flex overflow-hidden">
-                    <div className="flex-1 p-6 flex flex-col overflow-hidden">
+                    <div className="flex-1 min-w-0 p-4 md:p-6 flex flex-col overflow-hidden">
                         {activeTab === 'patternBook' && (
                             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-                                {/* Sub-tabs - Hide when viewing folder */}
+                                {/* Sub-tabs - Hide when viewing folder.
+                                    Four tabs do not fit on a phone, so let them wrap onto a
+                                    second row instead of squashing each label to two lines. */}
                                 {selectedSidebarItem !== 'folder' && (
-                                    <div className="flex gap-4 mb-6 border-b">
+                                    <div className="flex flex-wrap gap-4 mb-6 border-b">
                                         <button 
                                             onClick={() => setActiveSubTab('patterns')}
                                             className={`px-4 py-2 border-b-2 font-medium ${
@@ -4718,8 +4726,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         </div>
                                                     )}
                                                     <div
-                                                        className="max-h-[240px] overflow-y-auto overscroll-contain"
+                                                        className="touch-scroll max-h-[240px] overflow-y-auto overscroll-contain"
                                                         onWheel={(e) => e.stopPropagation()}
+                                                        onTouchMove={(e) => e.stopPropagation()}
                                                     >
                                                         <div className="p-2 space-y-1">
                                                             {uniqueAssociations
@@ -4793,8 +4802,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         />
                                                     </div>
                                                     <div
-                                                        className="max-h-[240px] overflow-y-auto overscroll-contain"
+                                                        className="touch-scroll max-h-[240px] overflow-y-auto overscroll-contain"
                                                         onWheel={(e) => e.stopPropagation()}
+                                                        onTouchMove={(e) => e.stopPropagation()}
                                                     >
                                                         <div className="p-2 space-y-1">
                                                             {disciplineOptions
@@ -4864,8 +4874,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         />
                                                     </div>
                                                     <div
-                                                        className="max-h-[300px] overflow-y-auto overscroll-contain"
+                                                        className="touch-scroll max-h-[300px] overflow-y-auto overscroll-contain"
                                                         onWheel={(e) => e.stopPropagation()}
+                                                        onTouchMove={(e) => e.stopPropagation()}
                                                     >
                                                         {/* Group divisions by association when multiple associations exist */}
                                                         {uniqueAssociations.length > 1 ? (
@@ -4985,8 +4996,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         />
                                                     </div>
                                                     <div
-                                                        className="max-h-[240px] overflow-y-auto overscroll-contain"
+                                                        className="touch-scroll max-h-[240px] overflow-y-auto overscroll-contain"
                                                         onWheel={(e) => e.stopPropagation()}
+                                                        onTouchMove={(e) => e.stopPropagation()}
                                                     >
                                                         <div className="p-2 space-y-1">
                                                             {filteredJudgeOptions
@@ -5047,8 +5059,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         )}
                                                     </div>
                                                     <div
-                                                        className="max-h-[240px] overflow-y-auto overscroll-contain"
+                                                        className="touch-scroll max-h-[240px] overflow-y-auto overscroll-contain"
                                                         onWheel={(e) => e.stopPropagation()}
+                                                        onTouchMove={(e) => e.stopPropagation()}
                                                     >
                                                         <div className="p-2 space-y-1">
                                                             {uniqueDates.map(dateVal => (
@@ -5533,7 +5546,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                                 </div>
                                             ) : (
-                                                <div className="space-y-2 overflow-y-auto pr-2 flex-1">
+                                                <div className="touch-scroll space-y-2 overflow-y-auto pr-2 flex-1 min-h-0">
                                                     {/* Bulk selection toolbar */}
                                                     <div className="flex items-center justify-between bg-muted/30 p-2 rounded-md mb-2">
                                                         <div className="flex items-center gap-2">
@@ -5813,7 +5826,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                 <span className="ml-3 text-muted-foreground">Generating score sheets...</span>
                                             </div>
                                         ) : displayedScoresheets.length > 0 ? (
-                                            <div className="space-y-2 overflow-y-auto pr-2 flex-1">
+                                            <div className="touch-scroll space-y-2 overflow-y-auto pr-2 flex-1 min-h-0">
                                                 {/* Bulk selection toolbar */}
                                                 <div className="flex items-center justify-between bg-muted/30 p-2 rounded-md mb-2">
                                                     <div className="flex items-center gap-2">
@@ -5850,10 +5863,18 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                         </div>
                                                                     </div>
                                                                 ) : (
-                                                                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleBulkDownloadScoresheets}>
-                                                                        <Download className="h-3.5 w-3.5 mr-1.5" />
-                                                                        Download ({selectedScoresheetIds.size})
-                                                                    </Button>
+                                                                    <>
+                                                                        {/* Two ways out of the same selection: separate files to sort by
+                                                                            hand, or one packet that prints in a single job. */}
+                                                                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleBulkDownloadScoresheets('zip')}>
+                                                                            <Download className="h-3.5 w-3.5 mr-1.5" />
+                                                                            Download ({selectedScoresheetIds.size})
+                                                                        </Button>
+                                                                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleBulkDownloadScoresheets('pdf')}>
+                                                                            <FileText className="h-3.5 w-3.5 mr-1.5" />
+                                                                            Download as 1 PDF
+                                                                        </Button>
+                                                                    </>
                                                                 )}
                                                                 {folders.length > 0 && !bulkDownloadProgress && (
                                                                     <DropdownMenu>
@@ -6119,7 +6140,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                         return (
                                             <TooltipProvider>
                                             {/* Same toolbar as Score Sheets: select all, bulk download, one sort */}
-                                            <div className="flex items-center justify-between mb-3 pb-2 border-b">
+                                            <div className="flex shrink-0 items-center justify-between mb-3 pb-2 border-b">
                                                 <div className="flex items-center gap-2">
                                                     <Checkbox
                                                         id="select-all-accessory"
@@ -6162,7 +6183,10 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                     </SelectContent>
                                                 </Select>
                                             </div>
-                                            <div className="space-y-2">
+                                            {/* This list had no scroll box of its own, so anything
+                                                past the fold was clipped by the tab's overflow-hidden
+                                                and unreachable on a tablet. */}
+                                            <div className="touch-scroll space-y-2 overflow-y-auto pr-2 flex-1 min-h-0">
                                                 {accessoryDocs.map((doc, idx) => {
                                                     const url = doc.fileUrl || doc.url;
                                                     const name = doc.customName || doc.fileName || `Document ${idx + 1}`;
@@ -6236,7 +6260,10 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     
                 {/* Right Panel - Hide when viewing folder contents */}
                 {selectedSidebarItem !== 'folder' && (
-                    <div className="w-64 border-l bg-muted/30 p-4">
+                    // Read-only info (owner, judges, staff), so it is the first thing to
+                    // give up when the screen is narrow. An iPad keeps the full width for
+                    // the list instead of splitting it three ways.
+                    <div className="hidden xl:block w-64 shrink-0 border-l bg-muted/30 p-4">
                         <div className="space-y-4">
                             <div>
                                 <h4 className="text-sm font-semibold mb-2">Affiliated with:</h4>

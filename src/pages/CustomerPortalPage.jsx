@@ -51,7 +51,6 @@ import { Progress } from '@/components/ui/progress';
 import ProjectDetailModal from '@/components/ProjectDetailModal';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { downloadPatternBookFolder } from '@/lib/patternBookDownloader';
-import { applyTextOverlay, getOverlayDataFromContext, batchDetectFieldPositions, applyTextOverlayWithPositions } from '@/lib/scoresheetTextOverlay';
 import { findClassItemId } from '@/lib/resultsUtils';
 import { fetchImageAsBase64, cropPatternImageSmart } from '@/lib/pdfHelpers';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
@@ -1693,8 +1692,12 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
                     </div>
                 </div>
                 
-                {/* Main Content - Two Columns */}
-                <div className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Main Content - Two Columns.
+                    The breakpoint here tracks the viewport, but the card itself is only a
+                    third to a half of it, so at md each of these columns came out ~150px
+                    and names broke one word per line. Two columns only once the card is
+                    genuinely wide enough to hold them. */}
+                <div className="px-4 pb-4 grid grid-cols-1 xl:grid-cols-2 gap-6">
                     {/* Left Column - People */}
                     <div>
                         <h4 className="text-sm font-semibold text-foreground mb-3">People:</h4>
@@ -1866,7 +1869,10 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
 
             {/* Pattern Book Dialog */}
             <Dialog open={patternBookDialogOpen} onOpenChange={setPatternBookDialogOpen}>
-                <DialogContent className="w-[95vw] h-screen max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
+                {/* h-[100dvh], not h-screen: on iPad/iPhone Safari 100vh ignores the
+                    browser chrome, so the bottom of the dialog -- and the last rows of
+                    whichever list is open -- sat off-screen with no way to reach them. */}
+                <DialogContent className="w-[95vw] h-[100dvh] max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
                     <DialogTitle className="sr-only">Pattern Books &amp; Score Sheets</DialogTitle>
                     <PatternBookDialogContent
                         project={project}

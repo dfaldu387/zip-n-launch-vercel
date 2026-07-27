@@ -2615,7 +2615,7 @@ const EventPatternBookDialogContent = ({ project, profile, user, associationsDat
               
                 </div>
                 
-                <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mb-4">
                     <span>
                         Show dates: {
                             projectData.startDate 
@@ -2697,8 +2697,9 @@ const EventPatternBookDialogContent = ({ project, profile, user, associationsDat
                 onDragCancel={handleDragCancel}
             >
                 <div className="flex flex-1 overflow-hidden">
-                    {/* Left Sidebar */}
-                    <div className="w-64 border-r bg-muted/30 p-4 flex flex-col">
+                    {/* Left Sidebar. Same fix as the customer-portal copy of this dialog:
+                        two fixed 256px rails left a phone about 250px for the list. */}
+                    <div className="hidden md:flex w-64 shrink-0 border-r bg-muted/30 p-4 flex-col">
                     <div className="mb-6">
                         <h3 className="text-sm font-semibold mb-2">My Filing System</h3>
                         <div className="space-y-1">
@@ -3884,7 +3885,8 @@ const EventPatternBookDialogContent = ({ project, profile, user, associationsDat
                     
                 {/* Right Panel - Hide when viewing folder contents */}
                 {selectedSidebarItem !== 'folder' && (
-                    <div className="w-64 border-l bg-muted/30 p-4">
+                    // Read-only info, so it is the first rail to drop on a narrow screen.
+                    <div className="hidden xl:block w-64 shrink-0 border-l bg-muted/30 p-4">
                         <div className="space-y-4">
                         <div>
                             <h4 className="text-sm font-semibold mb-2">Affiliated with:</h4>

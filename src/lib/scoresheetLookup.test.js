@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildOrdinalPrefix, buildScoresheetDownloadName } from '@/lib/scoresheetLookup';
+import { buildOrdinalPrefix, buildScoresheetDownloadName, buildMergedPdfName } from '@/lib/scoresheetLookup';
 
 // A 225-sheet download only stays in the on-screen sort order if the file names
 // sort that way after unzipping — that is what the numeric prefix is for.
@@ -52,5 +52,41 @@ describe('buildScoresheetDownloadName', () => {
     it('uses .png for image templates', () => {
         expect(buildScoresheetDownloadName({ ...sheet, file_name: 'template.png' }, 'https://x/y.png'))
             .toBe('Ranch Riding - custom-Junior 8-13 Intro - Mo Holmes.png');
+    });
+});
+
+// The merged packet is printed and stacked by judge, so its file name is how the person
+// at the table knows whose pile they picked up.
+describe('buildMergedPdfName', () => {
+    const judges = new Set(['Mo Holmes']);
+    const disciplines = new Set(['English Equitation']);
+
+    it('names the packet after a filter narrowed to one value', () => {
+        expect(buildMergedPdfName([judges], 'Fall Classic'))
+            .toBe('Mo Holmes - Score Sheets.pdf');
+    });
+
+    it('chains several single-value filters in the order given', () => {
+        expect(buildMergedPdfName([judges, disciplines], 'Fall Classic'))
+            .toBe('Mo Holmes - English Equitation - Score Sheets.pdf');
+    });
+
+    it('ignores a filter with several values, since "2 Selected" names nothing', () => {
+        expect(buildMergedPdfName([new Set(['Mo Holmes', 'Lanae McDonald'])], 'Fall Classic'))
+            .toBe('Fall Classic - Score Sheets.pdf');
+    });
+
+    it('falls back to the show name when nothing is filtered', () => {
+        expect(buildMergedPdfName([new Set(), undefined], 'Fall Classic'))
+            .toBe('Fall Classic - Score Sheets.pdf');
+    });
+
+    it('does not repeat itself when there is no show name either', () => {
+        expect(buildMergedPdfName([], '')).toBe('Score Sheets.pdf');
+    });
+
+    it('strips characters that are illegal in a file name', () => {
+        expect(buildMergedPdfName([new Set(['Level I/II: Go 1'])], 'Show'))
+            .toBe('Level I-II- Go 1 - Score Sheets.pdf');
     });
 });

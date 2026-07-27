@@ -399,73 +399,15 @@ export const applyTextOverlay = async (imageUrl, overlayData, qrUrl = null, qrPl
     // Draw the original image
     ctx.drawImage(img, 0, 0);
 
-    // Detect field positions using AI
-    const fieldPositions = await detectFieldPositions(imageUrl);
-
-    if (fieldPositions?.fields) {
-      // Calculate scale factors.
-      // If the detector returns normalized (0..1) coordinates, we scale by the image dimensions.
-      const isNormalized = fieldPositions.units === 'normalized' ||
-        ((fieldPositions.imageWidth ?? 0) > 0 && (fieldPositions.imageWidth ?? 0) <= 2 &&
-         (fieldPositions.imageHeight ?? 0) > 0 && (fieldPositions.imageHeight ?? 0) <= 2);
-
-      const scaleX = isNormalized
-        ? img.width
-        : (fieldPositions.imageWidth ? img.width / fieldPositions.imageWidth : 1);
-      const scaleY = isNormalized
-        ? img.height
-        : (fieldPositions.imageHeight ? img.height / fieldPositions.imageHeight : 1);
-
-      const fields = fieldPositions.fields;
-
-      const drawField = (rawField, text, key) => {
-        if (!rawField?.found) {
-          console.warn(`Field ${key} not found by AI`);
-          return;
-        }
-        
-        if (!text) {
-          console.warn(`No text data for field ${key}`);
-          return;
-        }
-
-        const refined = refineFieldBox(ctx, img, rawField, scaleX, scaleY);
-
-        if (refined.width < 40 || refined.height < 12) {
-          console.warn(`Skipping ${key}: refined box too small`, refined);
-          return;
-        }
-
-        // Optional: small safety padding so text doesn't touch the border
-        const x = refined.x;
-        const y = refined.yCenter;
-        const w = refined.width;
-        const h = refined.height;
-
-        console.log(`=== Drawing Field: ${key} ===`);
-        console.log(`Text: "${text}"`);
-        console.log(`Raw field from AI:`, rawField);
-        console.log(`Refined box:`, { x, y, width: w, height: h, yCenter: y });
-        console.log(`Image dimensions:`, { width: img.width, height: img.height });
-        console.log(`Scale factors:`, { scaleX, scaleY });
-        console.log(`Field position:`, { 
-          top: refined.yCenter - refined.height / 2,
-          bottom: refined.yCenter + refined.height / 2,
-          left: x,
-          right: x + w
-        });
-        
-        drawFittedText(ctx, text, x, y, w, h);
-      };
-
-      // Draw info label over the SHOW/CLASS/DATE area (top-right of scoresheet).
-      // Uses fixed proportional positioning — scoresheets consistently have
-      // these fields in the top-right ~35% of width, top ~3-15% of height.
-      const qrImage = await loadQrImage(qrUrl);
-      drawInfoLabel(ctx, img.width, img.height, overlayData, qrImage, qrPlaceholder);
-    } else {
-      console.warn('No field positions detected, skipping text overlay');
-    }
+    // Draw info label over the SHOW/CLASS/DATE area (top-right of scoresheet).
+    // Uses fixed proportional positioning — scoresheets consistently have
+    // these fields in the top-right ~35% of width, top ~3-15% of height.
+    // This must never be conditional: the tag is what tells a judge which show,
+    // class and judge the printed sheet belongs to. It used to sit behind an AI
+    // field-detection call, so any association whose layout the detector didn't
+    // recognise (APHA, AQHA) came out with no tag at all.
+    const qrImage = await loadQrImage(qrUrl);
+    drawInfoLabel(ctx, img.width, img.height, overlayData, qrImage, qrPlaceholder);
 
     // Convert canvas to blob
     return new Promise((resolve, reject) => {
@@ -727,25 +669,11 @@ export const applyTextOverlayWithPositions = async (imageUrl, overlayData, field
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0);
 
-    if (fieldPositions?.fields) {
-      const isNormalized = fieldPositions.units === 'normalized' ||
-        ((fieldPositions.imageWidth ?? 0) > 0 && (fieldPositions.imageWidth ?? 0) <= 2 &&
-         (fieldPositions.imageHeight ?? 0) > 0 && (fieldPositions.imageHeight ?? 0) <= 2);
-      const scaleX = isNormalized ? img.width : (fieldPositions.imageWidth ? img.width / fieldPositions.imageWidth : 1);
-      const scaleY = isNormalized ? img.height : (fieldPositions.imageHeight ? img.height / fieldPositions.imageHeight : 1);
-      const fields = fieldPositions.fields;
-
-      const drawField = (rawField, text, key) => {
-        if (!rawField?.found || !text) return;
-        const refined = refineFieldBox(ctx, img, rawField, scaleX, scaleY);
-        if (refined.width < 40 || refined.height < 12) return;
-        drawFittedText(ctx, text, refined.x, refined.yCenter, refined.width, refined.height);
-      };
-
-      // Draw info label over the SHOW/CLASS/DATE area (top-right of scoresheet)
-      const qrImage = await loadQrImage(qrUrl);
-      drawInfoLabel(ctx, img.width, img.height, overlayData, qrImage);
-    }
+    // Draw info label over the SHOW/CLASS/DATE area (top-right of scoresheet).
+    // Unconditional for the same reason as applyTextOverlay — a sheet the field
+    // detector could not read still has to carry its show, class and judge.
+    const qrImage = await loadQrImage(qrUrl);
+    drawInfoLabel(ctx, img.width, img.height, overlayData, qrImage);
 
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Failed to create blob')), 'image/png', 1.0);

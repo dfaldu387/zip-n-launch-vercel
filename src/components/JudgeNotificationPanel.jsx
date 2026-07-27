@@ -67,9 +67,16 @@ const JudgeNotificationPanel = ({ userEmail }) => {
 
         fetchNotifications();
         
-        // Set up real-time subscription
+        // Set up real-time subscription.
+        // The topic has to be unique per subscription. Navigation mounts this panel
+        // twice — desktop bar and mobile menu — and supabase.channel() hands back the
+        // existing channel when the topic matches, so a shared name meant the second
+        // panel called .on() on an already-subscribed channel and threw, taking the
+        // whole page down with it on any narrow screen. A fresh name per effect run
+        // also avoids racing removeChannel(), which unsubscribes asynchronously.
+        const channelName = `judge-notifications-${Math.random().toString(36).slice(2, 10)}`;
         const channel = supabase
-            .channel('judge-notifications')
+            .channel(channelName)
             .on('postgres_changes', 
                 { 
                     event: 'INSERT', 

@@ -51,6 +51,10 @@ const ScoresheetUploadPage = () => {
         association_abbrev: '',
         discipline: '',
         city_state: '',
+        // Without this the form used to save every upload as a score sheet, so a cheat
+        // sheet added here went to the wrong tab and stopped being merged in front of
+        // the grid. Bulk upload always asked; this form has to ask too.
+        doc_type: 'scoresheet',
     });
 
     useEffect(() => {
@@ -297,6 +301,7 @@ const ScoresheetUploadPage = () => {
             association_abbrev: '',
             discipline: '',
             city_state: '',
+            doc_type: 'scoresheet',
         });
         setImage(null);
         setEditingScoresheetId(null);
@@ -392,6 +397,7 @@ const ScoresheetUploadPage = () => {
                 association_abbrev: formData.association_abbrev || null,
                 discipline: formData.discipline || null,
                 city_state: formData.city_state || null,
+                doc_type: formData.doc_type || 'scoresheet',
             };
 
             // Add file fields if a new file was uploaded
@@ -457,6 +463,7 @@ const ScoresheetUploadPage = () => {
             association_abbrev: scoresheet.association_abbrev || '',
             discipline: scoresheet.discipline || '',
             city_state: scoresheet.city_state || '',
+            doc_type: scoresheet.doc_type || 'scoresheet',
         });
         if (scoresheet.image_url) {
             setImage({
@@ -685,6 +692,23 @@ const ScoresheetUploadPage = () => {
                         <DialogTitle>{editingScoresheetId ? 'Edit' : 'Add New'} Scoresheet</DialogTitle>
                     </DialogHeader>
                     <div className="grid gap-6 py-4 overflow-y-auto pr-2">
+                        {/* Which kind of document this is. Wrong value here sends the file to
+                            the wrong customer tab and drops the rules page from the judge's
+                            printout, so it is the first thing the form asks. */}
+                        <div>
+                            <Label htmlFor="doc_type">Document Type *</Label>
+                            <Select
+                                value={formData.doc_type}
+                                onValueChange={value => setFormData(prev => ({ ...prev, doc_type: value }))}
+                            >
+                                <SelectTrigger id="doc_type"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="scoresheet">Score Sheet</SelectItem>
+                                    <SelectItem value="accessory">Accessory Document (Cheat Sheet)</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
                         {/* Selection Mode Toggle */}
                         <div className="space-y-3">
                             <Label>Select Data Source *</Label>
