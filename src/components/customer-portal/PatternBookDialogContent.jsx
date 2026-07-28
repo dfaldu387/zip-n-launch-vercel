@@ -7,10 +7,13 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import {
-    Archive, Check, ChevronDown, ChevronRight, Download, Edit, Eye, FileText,
-    Folder, LayoutGrid, Loader2, Lock, MoreVertical, PlusCircle, Printer,
-    Share2, Trash2, Users, X,
+    Archive, Check, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Download,
+    Edit, Eye, FileText, Folder, GripVertical, LayoutGrid, Loader2, Lock,
+    MoreVertical, PlusCircle, Printer, Share2, Trash2, Users, X,
 } from 'lucide-react';
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '@/lib/supabaseClient';
 import { preferBestScoresheet, dedupeByDiscipline, isPdfSource, buildScoresheetDownloadName, buildOrdinalPrefix, findAccessoryDocUrl, mergePdfBlobs, imageBlobToPdfBlob, buildMergedPdfName, ACCESSORY_DOC_TYPE } from '@/lib/scoresheetLookup';
 import { cn, parseLocalDate } from '@/lib/utils';
@@ -60,6 +63,21 @@ import { stampPdfWithTag } from '@/lib/scoresheetPdfStamp';
 import { findClassItemId } from '@/lib/resultsUtils';
 import { fetchImageAsBase64, cropPatternImageSmart } from '@/lib/pdfHelpers';
 import { getPatternSelectionForAssoc, isAssocKeyedEntry, forEachPatternSelection, getForcedAssocForDivision, detectShowAssociations } from '@/lib/patternSelectionHelpers';
+import { resolveDivisionDate, resolveDivisionDates, collectScheduledDates } from '@/lib/divisionDates';
+
+// useSortable is a hook, so it cannot be called inside the parent's .map(). This shell
+// calls it once per row and hands the drag props back through a render prop, which keeps
+// the card markup where it already lives instead of extracting the whole row.
+const SortableRow = ({ id, children }) => {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+        zIndex: isDragging ? 50 : undefined,
+    };
+    return children({ setNodeRef, style, handleProps: { ...attributes, ...listeners } });
+};
 
 const PatternBookDialogContent = ({ project, profile, user, associationsData, onClose, onRefresh, initialTab = 'patternBook' }) => {
     const [activeTab, setActiveTab] = useState(initialTab);
@@ -87,6 +105,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     const [associationSearch, setAssociationSearch] = useState('');
     const [filterDates, setFilterDates] = useState(new Set());
     const [dateFilterOpen, setDateFilterOpen] = useState(false);
+    const [filterGos, setFilterGos] = useState(new Set()); // 1 and/or 2 — only shown for two-go shows
+    const [goFilterOpen, setGoFilterOpen] = useState(false);
 
     // Score sheet generation state (user-controlled, not auto-fetched)
     const [generatedScoresheets, setGeneratedScoresheets] = useState([]);
@@ -94,11 +114,20 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     const [selectedScoresheetIds, setSelectedScoresheetIds] = useState(new Set());
     const [selectedPatternIds, setSelectedPatternIds] = useState(new Set());
     const [scoresheetSortBy, setScoresheetSortBy] = useState('association');
+    // Hand-placed order, as a list of uniqueKeys. Null until the first drag or Move to
+    // top/bottom; from then on scoresheetSortBy is 'custom' and this wins over the sort.
+    const [customScoresheetOrder, setCustomScoresheetOrder] = useState(null);
+    // Same idea for the Patterns tab, which has no sort dropdown — null means "as listed".
+    const [customPatternOrder, setCustomPatternOrder] = useState(null);
+    // And for Accessory Documents. Drag only on this tab — there is no ⋮ menu to hang a
+    // Move to top on, so a tablet gets the drag handle and nothing else.
+    const [customAccessoryOrder, setCustomAccessoryOrder] = useState(null);
     const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null);
 
     // Cheat sheets / accessory documents share the Score Sheets toolbar: select, download, one sort
     const [selectedAccessoryKeys, setSelectedAccessoryKeys] = useState(new Set());
     const [accessorySortBy, setAccessorySortBy] = useState('discipline');
+    // false when idle, otherwise 'zip' or 'pdf' — the spinner says which one is running.
     const [isDownloadingAccessory, setIsDownloadingAccessory] = useState(false);
 
     const [previewItem, setPreviewItem] = useState(null); // For pattern/scoresheet preview modal
@@ -289,9 +318,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 for (const group of (disc.patternGroups || [])) {
                     for (const div of (group.divisions || [])) {
                         const divName = div?.name || div?.divisionName || div?.division || div?.title || '';
-                        const divId = div?.id;
-                        if (divName.trim() === scoresheet.divisionName && divId && disc.divisionDates?.[divId]) {
-                            date = disc.divisionDates[divId];
+                        const divDate = divName.trim() === scoresheet.divisionName
+                            ? resolveDivisionDate(disc, div)
+                            : null;
+                        if (divDate) {
+                            date = divDate;
                             break;
                         }
                     }
@@ -306,10 +337,16 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             ? String(scoresheet.patternNumber).padStart(4, '0')
             : null;
 
+        // A two-go class prints one sheet per go, so the go has to be on the tag —
+        // otherwise the two sheets are indistinguishable on paper.
+        const divisionLabel = scoresheet.goNumber
+            ? `${scoresheet.divisionName} (Go ${scoresheet.goNumber})`
+            : scoresheet.divisionName;
+
         return {
             showName: project?.project_name || projectDataLocal.showName || '',
             disciplineName: scoresheet.disciplineName || '',
-            className: pn ? `Pattern ${pn} – ${scoresheet.divisionName}` : scoresheet.divisionName,
+            className: pn ? `Pattern ${pn} – ${divisionLabel}` : divisionLabel,
             date,
             judgeName: scoresheet.judgeName,
         };
@@ -403,6 +440,17 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         return cleaned || name;
     };
     
+    // "2026-08-05" reads as a database value on a card. Show the day the way the
+    // Dates filter shows it so the card and the dropdown match.
+    const formatClassDate = (dateStr) => {
+        if (!dateStr) return '';
+        try {
+            return format(parseLocalDate(dateStr), 'EEE, MMM d, yyyy');
+        } catch {
+            return dateStr;
+        }
+    };
+
     // Helper function to format division with Go label (same as bookGenerator.js)
     const formatDivisionWithGo = (division) => {
         const baseName = removeFirstWord(typeof division === 'string' ? division : (division.division || division.name || ''));
@@ -411,6 +459,23 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             return `${baseName} (Go ${division.goNumber})`;
         }
         return baseName;
+    };
+
+    // Divisions are always split into a Go 1 group and a Go 2 group, so repeating
+    // "(Go 2)" after every name is noise. When the whole list is one go, say it
+    // once at the end — same as the pattern book already does.
+    const formatDivisionListWithGo = (divisions, separator = ' / ') => {
+        const list = divisions || [];
+        if (!list.length) return '';
+        const gos = list.map(d => (typeof d === 'object' && d) ? d.goNumber : null);
+        const allSameGo = gos.every(n => (n === 1 || n === 2) && n === gos[0]);
+        if (allSameGo) {
+            const names = list
+                .map(d => removeFirstWord(typeof d === 'string' ? d : (d.division || d.name || '')))
+                .join(separator);
+            return `${names} — Go ${gos[0]}`;
+        }
+        return list.map(formatDivisionWithGo).join(separator);
     };
     
     // Helper function to find discipline and group for a pattern
@@ -590,7 +655,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
 
                 // Division names
                 if (headerInfo.divisions && headerInfo.divisions.length > 0) {
-                    const divisions = headerInfo.divisions.map(d => formatDivisionWithGo(d)).join(' / ');
+                    const divisions = formatDivisionListWithGo(headerInfo.divisions, ' / ');
                     doc.setFontSize(9);
                     doc.setFont('helvetica', 'normal');
                     const maxWidth = pageWidth - margin * 2;
@@ -744,7 +809,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     };
     
     // Download pattern handler
-    const handleDownloadPattern = async (pattern) => {
+    // Builds the finished pattern PDF — header, maneuvers, the lot — and hands it back
+    // rather than saving it, so the row button and both bulk buttons emit identical files.
+    // Failures throw with a message worth showing; the caller decides how loudly to say it,
+    // because a bulk run must not fire one toast per pattern.
+    const buildPatternPdf = async (pattern) => {
         try {
             // Check if project is in Published/Approved/Locked state
             const status = (projectStatus || project.status || '').toString().trim();
@@ -811,12 +880,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 }
                 
                 if (!patternData) {
-                    toast({
-                        title: "Download not available",
-                        description: `Pattern with ID ${numericPatternId} not found in database`,
-                        variant: "destructive"
-                    });
-                    return;
+                    throw new Error(`Pattern with ID ${numericPatternId} not found in database`);
                 }
                 
                 patternDataFromDb = patternData;
@@ -836,14 +900,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             }
             
             if (!imageUrl) {
-                toast({
-                    title: "Download not available",
-                    description: "Pattern image not found",
-                    variant: "destructive"
-                });
-                return;
+                throw new Error('Pattern image not found');
             }
-            
+
             // Get pattern title
             let patternTitle = patternDataFromDb?.pdf_file_name || 
                              pattern.patternName || 
@@ -920,12 +979,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     // Try to get date from divisionDates (set in Step 3, tab 2)
                     if (group.divisions && group.divisions.length > 0) {
                         const divisionDates = group.divisions
-                            .map(div => {
-                                const divId = typeof div === 'object' ? (div.id || div.division) : div;
-                                return discipline.divisionDates?.[divId];
-                            })
+                            .map(div => resolveDivisionDate(discipline, div))
                             .filter(Boolean);
-                        
+
                         if (divisionDates.length > 0) {
                             competitionDate = divisionDates[0];
                         }
@@ -1042,35 +1098,46 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 throw new Error('Failed to create PDF');
             }
             
-            // Format filename
-            let fileName = patternTitle
+            // Format filename. Two goes of the same class share a title, so the go goes
+            // in the name — otherwise the two files are indistinguishable after unzipping.
+            let fileName = [patternTitle, pattern.goNumber ? `Go ${pattern.goNumber}` : null]
+                .filter(Boolean)
+                .join(' - ')
                 .replace(/\.pdf$/i, '')
                 .replace(/[<>:"/\\|?*]/g, '-')
                 .replace(/\s+/g, '_')
                 .trim();
-            
+
             if (!fileName) fileName = 'Pattern';
             fileName = fileName + '.pdf';
-            
-            const blobUrl = window.URL.createObjectURL(pdfBlob);
+
+            return { blob: pdfBlob, fileName, isPublishedState, headerInfo };
+        } catch (error) {
+            console.error('Error building pattern PDF:', error);
+            throw error;
+        }
+    };
+
+    const handleDownloadPattern = async (pattern) => {
+        try {
+            const { blob, fileName, isPublishedState, headerInfo } = await buildPatternPdf(pattern);
+
+            const blobUrl = window.URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = blobUrl;
             link.download = fileName;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            
             window.URL.revokeObjectURL(blobUrl);
-            
+
             toast({
                 title: "Download started",
-                description: isPublishedState && headerInfo 
-                    ? "Pattern PDF with full header downloaded" 
+                description: isPublishedState && headerInfo
+                    ? "Pattern PDF with full header downloaded"
                     : "Pattern PDF with title downloaded"
             });
-            
         } catch (error) {
-            console.error('Error downloading pattern:', error);
             toast({
                 title: "Download failed",
                 description: error.message || "Failed to download pattern",
@@ -1078,7 +1145,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             });
         }
     };
-    
+
     // A judge scores from the printed sheet, so the rules page has to be in front of the
     // grid. Robert uploads them as two separate PDFs, so join them at download time.
     // Any failure here falls back to the score sheet alone — never block the download.
@@ -1311,6 +1378,172 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     };
 
     // Bulk download selected scoresheets as a single ZIP with deduplicated AI calls
+    // Reordering always starts from the rows as they are on screen right now, so a drag or
+    // a Move to top continues the order the user is looking at instead of re-deriving one.
+    // Both downloads read displayedScoresheets, so they follow this with no extra wiring.
+    const applyScoresheetOrder = (keys) => {
+        setCustomScoresheetOrder(keys);
+        setScoresheetSortBy('custom');
+    };
+
+    // A finger drag on a tablet is fiddly; these two cover the case Robert actually
+    // described — "take that one and put it at the top" — without any dragging.
+    const moveScoresheet = (uniqueKey, where) => {
+        const keys = displayedScoresheets.map(s => s.uniqueKey);
+        if (!keys.includes(uniqueKey)) return;
+        const rest = keys.filter(k => k !== uniqueKey);
+        applyScoresheetOrder(where === 'top' ? [uniqueKey, ...rest] : [...rest, uniqueKey]);
+    };
+
+    const handleScoresheetDragEnd = ({ active, over }) => {
+        if (!over || active.id === over.id) return;
+        const keys = displayedScoresheets.map(s => s.uniqueKey);
+        const from = keys.indexOf(active.id);
+        const to = keys.indexOf(over.id);
+        if (from === -1 || to === -1) return;
+        applyScoresheetOrder(arrayMove(keys, from, to));
+    };
+
+    // A short drag threshold rather than a long-press delay: the handle is its own target,
+    // so there is nothing to disambiguate, and a delay just feels broken on a tablet.
+    const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+    const movePattern = (key, where) => {
+        const keys = orderedPatternEntries.map(e => e.key);
+        if (!keys.includes(key)) return;
+        const rest = keys.filter(k => k !== key);
+        setCustomPatternOrder(where === 'top' ? [key, ...rest] : [...rest, key]);
+    };
+
+    const handlePatternDragEnd = ({ active, over }) => {
+        if (!over || active.id === over.id) return;
+        const keys = orderedPatternEntries.map(e => e.key);
+        const from = keys.indexOf(active.id);
+        const to = keys.indexOf(over.id);
+        if (from === -1 || to === -1) return;
+        setCustomPatternOrder(arrayMove(keys, from, to));
+    };
+
+    // Same two buttons as Score Sheets. Patterns are simpler: buildPatternPdf already
+    // returns a PDF, so there is no image-to-page step and no cheat sheet to staple on.
+    // The filters that narrowed the pile belong in the file name — someone holding the
+    // printout has to know it is Saturday's Go 2 patterns and not the whole show.
+    // Sets with more than one value are dropped by buildMergedPdfName.
+    const goLabelSet = useMemo(
+        () => new Set(Array.from(filterGos).map(g => `Go ${g}`)),
+        [filterGos],
+    );
+
+    const handleBulkDownloadPatterns = async (mode = 'zip') => {
+        const selected = orderedPatternEntries.filter(e => selectedPatternIds.has(e.key));
+        if (selected.length === 0) return;
+
+        const asOnePdf = mode === 'pdf';
+        const total = selected.length;
+        setBulkDownloadProgress({ phase: 'rendering', current: 0, total, message: `Rendering patterns: 0 of ${total}...` });
+
+        try {
+            const built = [];
+            const usedFileNames = new Set();
+            const BATCH_SIZE = 4;
+
+            for (let i = 0; i < selected.length; i += BATCH_SIZE) {
+                const batch = selected.slice(i, i + BATCH_SIZE);
+                const results = await Promise.allSettled(batch.map(async (entry, batchIndex) => {
+                    const ordinal = i + batchIndex + 1;
+                    const { blob, fileName } = await buildPatternPdf(entry.p);
+                    return { ordinal, baseName: `${buildOrdinalPrefix(ordinal, total)}${fileName}`, blob };
+                }));
+
+                for (const result of results) {
+                    if (result.status === 'fulfilled') built.push(result.value);
+                    else console.error('Failed to render pattern:', result.reason);
+                }
+
+                setBulkDownloadProgress({
+                    phase: 'rendering',
+                    current: Math.min(i + BATCH_SIZE, total),
+                    total,
+                    message: `Rendering patterns: ${Math.min(i + BATCH_SIZE, total)} of ${total}...`,
+                });
+            }
+
+            built.sort((a, b) => a.ordinal - b.ordinal);
+            if (built.length === 0) {
+                toast({ title: 'Download failed', description: 'None of the selected patterns could be rendered', variant: 'destructive' });
+                return;
+            }
+
+            setBulkDownloadProgress({
+                phase: 'rendering',
+                current: total,
+                total,
+                message: asOnePdf ? 'Combining into one PDF...' : 'Generating ZIP file...',
+            });
+
+            const patternNameFilters = [filterAssociations, filterDisciplines, filterDivisions, filterDates, goLabelSet];
+
+            let content;
+            let downloadName;
+            if (asOnePdf) {
+                content = await mergePdfBlobs(built.map(b => b.blob));
+                downloadName = buildMergedPdfName(
+                    patternNameFilters,
+                    project?.project_name,
+                    'Patterns',
+                );
+            } else {
+                const { default: JSZip } = await import('jszip');
+                const zip = new JSZip();
+                for (const item of built) {
+                    // Two patterns can share a title; the ordinal prefix normally separates
+                    // them, but keep the guard so a collision can never drop a file.
+                    let finalName = item.baseName;
+                    let counter = 1;
+                    while (usedFileNames.has(finalName)) {
+                        const extIdx = item.baseName.lastIndexOf('.');
+                        finalName = extIdx > 0
+                            ? `${item.baseName.slice(0, extIdx)}_${counter}${item.baseName.slice(extIdx)}`
+                            : `${item.baseName}_${counter}`;
+                        counter++;
+                    }
+                    usedFileNames.add(finalName);
+                    zip.file(finalName, item.blob);
+                }
+                content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+                // Same name as the one-PDF version so the two downloads sit together
+                // in the Downloads folder and say which day/go they came from.
+                downloadName = buildMergedPdfName(patternNameFilters, project?.project_name, 'Patterns')
+                    .replace(/\.pdf$/i, '.zip');
+            }
+
+            const url = URL.createObjectURL(content);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = downloadName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+            const failedCount = total - built.length;
+            toast({
+                title: 'Download complete',
+                description: failedCount > 0
+                    ? `Downloaded ${built.length} patterns (${failedCount} failed)`
+                    : asOnePdf
+                        ? `${built.length} patterns combined into ${downloadName}`
+                        : `Downloaded ${built.length} patterns as ZIP`,
+            });
+        } catch (error) {
+            console.error('Bulk pattern download error:', error);
+            toast({ title: 'Download failed', description: error.message || 'Failed to download patterns', variant: 'destructive' });
+        } finally {
+            setBulkDownloadProgress(null);
+            setSelectedPatternIds(new Set());
+        }
+    };
+
     // mode 'zip'  -> one numbered file per class, packed into a ZIP (unchanged behaviour)
     // mode 'pdf'  -> every class merged into a single PDF, pages in the on-screen order,
     //                so the whole set prints in one job instead of 14 open/print/close rounds.
@@ -1529,12 +1762,14 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                 message: asOnePdf ? 'Combining into one PDF...' : 'Generating ZIP file...'
             });
 
+            const scoresheetNameFilters = [filterJudges, filterDisciplines, filterDivisions, filterAssociations, filterDates, goLabelSet];
+
             let content;
             let downloadName;
             if (asOnePdf) {
                 content = await mergePdfBlobs(rendered.map(r => r.blob));
                 downloadName = buildMergedPdfName(
-                    [filterJudges, filterDisciplines, filterDivisions, filterAssociations],
+                    scoresheetNameFilters,
                     project?.project_name,
                 );
             } else {
@@ -1546,8 +1781,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     compression: 'DEFLATE',
                     compressionOptions: { level: 6 }
                 });
-                const projectName = (project?.project_name || 'Scoresheets').replace(/[^a-z0-9]/gi, '_');
-                downloadName = `${projectName}_Scoresheets.zip`;
+                downloadName = buildMergedPdfName(scoresheetNameFilters, project?.project_name)
+                    .replace(/\.pdf$/i, '.zip');
             }
 
             const url = URL.createObjectURL(content);
@@ -1584,20 +1819,40 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
 
     // Bulk download the selected cheat sheets / accessory documents as one ZIP,
     // numbered so they unzip in the order shown on screen.
-    const handleBulkDownloadAccessory = async (docs) => {
+    // mode 'zip' -> one numbered file per document (unchanged behaviour)
+    // mode 'pdf' -> every document merged into one packet that prints in a single job.
+    const handleBulkDownloadAccessory = async (docs, mode = 'zip') => {
         if (!docs || docs.length === 0) return;
-        setIsDownloadingAccessory(true);
+        const asOnePdf = mode === 'pdf';
+        setIsDownloadingAccessory(asOnePdf ? 'pdf' : 'zip');
         try {
-            const { default: JSZip } = await import('jszip');
-            const zip = new JSZip();
             const usedNames = new Set();
-            let added = 0;
+            const collected = [];
 
             for (let i = 0; i < docs.length; i++) {
                 const doc = docs[i];
                 const url = doc.fileUrl || doc.url;
                 try {
-                    const blob = await (await fetch(url)).blob();
+                    let blob = await (await fetch(url)).blob();
+
+                    if (asOnePdf) {
+                        // Cheat sheets are normally PDFs, but older uploads are scans. Anything
+                        // that is neither PDF nor image is dropped rather than corrupting the
+                        // merge — the toast reports the shortfall so it is not silent.
+                        const isPdf = blob.type === 'application/pdf'
+                            || isPdfSource(doc.fileName)
+                            || isPdfSource(url);
+                        if (!isPdf) {
+                            if (!blob.type.startsWith('image/')) {
+                                console.warn('Skipping document that cannot become a PDF page:', url, blob.type);
+                                continue;
+                            }
+                            blob = await imageBlobToPdfBlob(blob);
+                        }
+                        collected.push({ blob });
+                        continue;
+                    }
+
                     const base = (doc.customName || doc.fileName || `Document ${i + 1}`)
                         .replace(/[<>:"/\\|?*]/g, '-').trim();
                     const extension = (doc.fileName || url).split('.').pop().split(/[?#]/)[0] || 'pdf';
@@ -1610,23 +1865,34 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         counter++;
                     }
                     usedNames.add(finalName);
-                    zip.file(finalName, blob);
-                    added++;
+                    collected.push({ name: finalName, blob });
                 } catch (e) {
-                    console.error('Could not add accessory document to ZIP:', url, e);
+                    console.error('Could not prepare accessory document:', url, e);
                 }
             }
 
-            if (added === 0) {
+            if (collected.length === 0) {
                 toast({ title: 'Download failed', description: 'None of the selected documents could be downloaded.', variant: 'destructive' });
                 return;
             }
 
-            const content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-            const projectName = (project?.project_name || 'Documents').replace(/[^a-z0-9]/gi, '_');
+            let content;
+            let downloadName;
+            if (asOnePdf) {
+                content = await mergePdfBlobs(collected.map(c => c.blob));
+                downloadName = buildMergedPdfName([filterDisciplines], project?.project_name, 'Cheat Sheets');
+            } else {
+                const { default: JSZip } = await import('jszip');
+                const zip = new JSZip();
+                collected.forEach(c => zip.file(c.name, c.blob));
+                content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+                const projectName = (project?.project_name || 'Documents').replace(/[^a-z0-9]/gi, '_');
+                downloadName = `${projectName}_Cheat_Sheets.zip`;
+            }
+
             const link = document.createElement('a');
             link.href = URL.createObjectURL(content);
-            link.download = `${projectName}_Cheat_Sheets.zip`;
+            link.download = downloadName;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -1634,9 +1900,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
 
             toast({
                 title: 'Download complete',
-                description: added === docs.length
-                    ? `Downloaded ${added} document(s) as ZIP`
-                    : `Downloaded ${added} of ${docs.length} document(s)`,
+                description: collected.length < docs.length
+                    ? `Downloaded ${collected.length} of ${docs.length} document(s)`
+                    : asOnePdf
+                        ? `${collected.length} document(s) combined into ${downloadName}`
+                        : `Downloaded ${collected.length} document(s) as ZIP`,
             });
         } catch (error) {
             console.error('Accessory bulk download error:', error);
@@ -1876,19 +2144,26 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
     }, [projectData, filterAssociations, allDivisionNamesFromPatterns, allDivisionNamesFromProjectData]);
 
     // Get unique dates from divisionDates and show date range
+    // A show only has a Go filter when some class actually runs twice. Without this
+    // the dropdown would show up on every single-go show and confuse people.
+    const hasTwoGoClasses = useMemo(() => (projectData.disciplines || []).some(disc =>
+        Object.values(disc?.divisionGos || {}).some(go => go?.go2Date)
+        || (disc?.patternGroups || []).some(g => (g.divisions || []).some(d => d?.goNumber === 2))
+    ), [projectData]);
+
     const uniqueDates = useMemo(() => {
+        // Only days that actually have classes scheduled (Go 1 and Go 2). Padding
+        // this with every day between start and end listed days holding nothing,
+        // so picking one returned an empty list.
+        const scheduled = collectScheduledDates(projectData);
+        if (scheduled.length > 0) return scheduled;
+
+        // Nothing scheduled yet — fall back to the show range so the filter is
+        // still usable while the schedule is being built.
         const dates = new Set();
-        // Collect per-division dates
-        (projectData.disciplines || []).forEach(discipline => {
-            Object.values(discipline.divisionDates || {}).forEach(d => {
-                if (d) dates.add(d);
-            });
-        });
-        // Also include all dates from show date range
         if (projectData.startDate) {
             dates.add(projectData.startDate);
             if (projectData.endDate && projectData.endDate !== projectData.startDate) {
-                // Generate each day between start and end
                 const start = parseLocalDate(projectData.startDate);
                 const end = parseLocalDate(projectData.endDate);
                 const current = new Date(start);
@@ -2108,7 +2383,14 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         }
         // Date filter
         if (filterDates.size > 0) {
-            if (!pattern.classDate || !filterDates.has(pattern.classDate)) return false;
+            const patternDates = pattern.classDates?.length
+                ? pattern.classDates
+                : (pattern.classDate ? [pattern.classDate] : []);
+            if (!patternDates.some(d => filterDates.has(d))) return false;
+        }
+        if (filterGos.size > 0) {
+            // A class with no go number runs once, so it belongs to Go 1.
+            if (!filterGos.has(pattern.goNumber || 1)) return false;
         }
         return true;
     }).sort((a, b) => {
@@ -2121,7 +2403,24 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         }
         return 0;
     });
-    
+
+    // Pair every pattern with the key its checkbox already uses. The index fallback is the
+    // position in filteredPatterns, so the key stays put no matter where the row is dragged.
+    const patternEntries = filteredPatterns.map((p, i) => ({
+        p,
+        i,
+        key: p.uniqueKey || p.id || p.numericId || `pattern-${i}`,
+    }));
+
+    // Hand-placed order wins. Anything that was not on screen when the order was set lands
+    // after the placed rows rather than jumping to the front of the print pile.
+    const orderedPatternEntries = (() => {
+        if (!customPatternOrder) return patternEntries;
+        const position = new Map(customPatternOrder.map((key, idx) => [key, idx]));
+        const placed = (e) => position.has(e.key) ? position.get(e.key) : Number.MAX_SAFE_INTEGER;
+        return [...patternEntries].sort((a, b) => placed(a) - placed(b) || a.i - b.i);
+    })();
+
     // Display scoresheets: use generated list (already filtered at generation time), with sorting.
     // Defensively filter by all active filters so stale rows from a previous generation
     // don't leak through while a regeneration is in flight.
@@ -2151,6 +2450,22 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             return true;
         });
 
+        const compare = (x, y) => String(x || '').localeCompare(String(y || ''), undefined, { numeric: true });
+
+        // A hand-placed order beats every sort key. Rows that were not on screen when the
+        // order was set — a widened filter, a regenerated sheet — land after the placed
+        // ones rather than silently jumping to the front of the print pile.
+        if (scoresheetSortBy === 'custom' && customScoresheetOrder) {
+            const position = new Map(customScoresheetOrder.map((key, i) => [key, i]));
+            const placed = (s) => position.has(s.uniqueKey) ? position.get(s.uniqueKey) : Number.MAX_SAFE_INTEGER;
+            return [...list].sort((a, b) =>
+                placed(a) - placed(b)
+                || compare(a.disciplineName, b.disciplineName)
+                || compare(a.divisionName, b.divisionName)
+                || compare(a.judgeName, b.judgeName)
+            );
+        }
+
         // One sort key, as Robert asked — no layered sorting. Everything after the chosen
         // key is only a tiebreak, so rows that share a key still read tidily and the
         // download order matches the screen exactly.
@@ -2163,14 +2478,14 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             if (scoresheetSortBy === 'name') return s.displayName || '';
             return '';
         };
-        const compare = (x, y) => String(x || '').localeCompare(String(y || ''), undefined, { numeric: true });
         return [...list].sort((a, b) =>
             compare(sortKey(a), sortKey(b))
             || compare(a.disciplineName, b.disciplineName)
             || compare(a.divisionName, b.divisionName)
+            || (a.goNumber || 0) - (b.goNumber || 0)
             || compare(a.judgeName, b.judgeName)
         );
-    }, [generatedScoresheets, folderItemsAsScoresheets, selectedSidebarItem, selectedFolderId, scoresheetSortBy, filterAssociations, filterDisciplines, filterDivisions, filterJudges]);
+    }, [generatedScoresheets, folderItemsAsScoresheets, selectedSidebarItem, selectedFolderId, scoresheetSortBy, customScoresheetOrder, filterAssociations, filterDisciplines, filterDivisions, filterJudges]);
     
     // Fetch data when dialog opens or tabs change
     useEffect(() => {
@@ -2243,7 +2558,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
         if (activeTab === 'patternBook' && activeSubTab === 'scoreSheets') {
             generateScoresheets();
         }
-    }, [filterDisciplines, filterDivisions, filterJudges, filterDates, filterAssociations]);
+    }, [filterDisciplines, filterDivisions, filterJudges, filterDates, filterGos, filterAssociations]);
 
     const fetchPatterns = async () => {
         setIsLoadingPatterns(true);
@@ -2612,19 +2927,34 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         ? judgesForGroup 
                         : (judgesForGroup ? [judgesForGroup] : []);
                     
-                    // Compute classDate from divisionDates for the first division in this group
+                    // Compute classDate from the group's divisions (Go-aware — a Go 2
+                    // division's date lives on divisionGos, not divisionDates)
                     let classDate = null;
                     const groupDivisions = group.divisions || [];
                     for (const div of groupDivisions) {
-                        const divId = typeof div === 'string' ? div : div?.id;
-                        if (divId && discipline.divisionDates?.[divId]) {
-                            classDate = discipline.divisionDates[divId];
+                        const divDate = resolveDivisionDate(discipline, div);
+                        if (divDate) {
+                            classDate = divDate;
                             break;
                         }
                     }
                     if (!classDate) {
                         classDate = projectData.groupDueDates?.[disciplineIndex]?.[groupIndex] || projectData.startDate || null;
                     }
+
+                    // One class can hold divisions running on different days, so the date
+                    // filter has to match any of them — not just the first division's day.
+                    const classDates = [...new Set(
+                        groupDivisions.flatMap(div => resolveDivisionDates(discipline, div))
+                    )];
+                    if (classDates.length === 0 && classDate) classDates.push(classDate);
+
+                    // A group is a "Go 1" or "Go 2" group only when every division in it
+                    // carries the same go number. Mixed or untagged groups have no go.
+                    const groupGoNumbers = [...new Set(
+                        groupDivisions.map(div => (typeof div === 'object' ? div?.goNumber : null)).filter(Boolean)
+                    )];
+                    const goNumber = groupGoNumbers.length === 1 ? groupGoNumbers[0] : null;
 
                     // Create unique key based on content, not just indices, to prevent duplicates
                     const uniqueKey = `${disciplineName}-${groupName}-${numericPatternId || patternId || 'no-pattern'}-${patternVersion || 'default'}`;
@@ -2682,6 +3012,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                             groupId: group.id,
                             groupIndex: groupIndex,
                             classDate, // Per-class competition date
+                            classDates, // Every day this class runs (Go 1 / Go 2, mixed-day groups)
+                            goNumber, // 1 or 2 when this class is one go of a two-go class
                             divisions: extractedDivisions,
                             divisionNames: (() => {
                                 // Use the same resolved assoc as the badge so divisions
@@ -3316,35 +3648,58 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     // group may carry its own assocId / association_id; if it matches the
                     // current iteration's association (or has no assoc tag — treat as shared),
                     // include it. Without this, APHA-only divisions would bleed into AQHA rows.
-                    const disciplineDivisions = [];
-                    const divisionDateMap = {};
+                    // Keyed by division name AND go number: a two-go class runs twice and
+                    // the judge scores each go separately, so it needs its own sheet per go.
+                    const divisionEntries = new Map();
                     for (const group of groups) {
                         (group.divisions || []).forEach(div => {
                             const divName = extractDivisionName(div);
-                            const divId = typeof div === 'string' ? div : div?.id;
                             const divAssoc = typeof div === 'object' && div
                                 ? (div.assocId || div.association_id || div.association || '')
                                 : '';
                             const divAssocNorm = divAssoc ? String(divAssoc).toUpperCase() : '';
                             if (assocNormForDiv && divAssocNorm && divAssocNorm !== assocNormForDiv) return;
-                            if (divName.trim()) {
-                                disciplineDivisions.push(divName.trim());
-                                if (divId && discipline.divisionDates?.[divId]) {
-                                    divisionDateMap[divName.trim()] = discipline.divisionDates[divId];
-                                }
-                            }
+                            if (!divName.trim()) return;
+
+                            const name = divName.trim();
+                            const goNumber = (typeof div === 'object' && (div.goNumber === 1 || div.goNumber === 2))
+                                ? div.goNumber
+                                : null;
+                            const key = `${name}|${goNumber || 0}`;
+                            if (!divisionEntries.has(key)) divisionEntries.set(key, { name, goNumber, dates: [] });
+                            const entry = divisionEntries.get(key);
+                            // A division can run on more than one day — the filter matches any.
+                            resolveDivisionDates(discipline, div).forEach(d => {
+                                if (!entry.dates.includes(d)) entry.dates.push(d);
+                            });
                         });
                     }
-                    const uniqueDisciplineDivisions = [...new Set(disciplineDivisions)];
 
-                    let matchingDivisions = uniqueDisciplineDivisions.filter(d =>
-                        selectedDivisionsList.some(sel => sel.toLowerCase() === d.toLowerCase())
+                    // A class split into Go 1 / Go 2 groups can ALSO still appear untagged in
+                    // another group. Without this the same class would generate a Go 1 sheet,
+                    // a Go 2 sheet and a third go-less sheet — three sheets for two runs.
+                    const goTaggedNames = new Set(
+                        [...divisionEntries.values()].filter(e => e.goNumber).map(e => e.name)
+                    );
+                    for (const [key, entry] of [...divisionEntries]) {
+                        if (!entry.goNumber && goTaggedNames.has(entry.name)) divisionEntries.delete(key);
+                    }
+
+                    let matchingDivisions = [...divisionEntries.values()].filter(entry =>
+                        selectedDivisionsList.some(sel => sel.toLowerCase() === entry.name.toLowerCase())
                     );
                     if (filterDates.size > 0) {
-                        matchingDivisions = matchingDivisions.filter(d => {
-                            const divDate = divisionDateMap[d];
-                            return divDate && filterDates.has(divDate);
+                        matchingDivisions = matchingDivisions.filter(entry => {
+                            if (entry.dates.length) return entry.dates.some(dt => filterDates.has(dt));
+                            // No date of its own — the row displays the show start date,
+                            // so it has to filter on that same date or the card and the
+                            // filter disagree.
+                            return !!projectData.startDate && filterDates.has(projectData.startDate);
                         });
+                    }
+                    if (filterGos.size > 0) {
+                        // A class with no go number runs once, so it belongs to Go 1.
+                        matchingDivisions = matchingDivisions.filter(entry => filterGos.has(entry.goNumber || 1));
                     }
                     if (matchingDivisions.length === 0) continue;
 
@@ -3504,7 +3859,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     }
                     const judgesList = disciplineJudges.length > 0 ? disciplineJudges : [''];
 
-                    for (const divisionName of matchingDivisions) {
+                    for (const divisionEntry of matchingDivisions) {
+                        const divisionName = divisionEntry.name;
                         const forcedForDivision = getForcedAssocForDivision(divisionName);
                         if (forcedForDivision && assocNormForDiv && forcedForDivision !== assocNormForDiv) {
                             continue;
@@ -3512,21 +3868,30 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                         if (forcedForDivision && filterAssociations.size > 0 && !filterAssociations.has(forcedForDivision)) {
                             continue;
                         }
+                        // When a date is filtered, show the day that matched rather than
+                        // the division's first day, so the card agrees with the filter.
+                        const divDatesForName = divisionEntry.dates;
+                        const displayDate = (filterDates.size > 0
+                            ? divDatesForName.find(d => filterDates.has(d))
+                            : null) || divDatesForName[0] || projectData.startDate || null;
+                        const goSuffix = divisionEntry.goNumber ? `-go${divisionEntry.goNumber}` : '';
+
                         for (const judgeName of judgesList) {
                             const assocKey = (associationId || '').toString().toUpperCase();
-                            const uniqueKey = `${assocKey}-${disciplineName}-${divisionName}-${judgeName}`;
+                            const uniqueKey = `${assocKey}-${disciplineName}-${divisionName}${goSuffix}-${judgeName}`;
                             result.push({
                                 ...(baseScoresheetData || {}),
                                 uniqueKey,
-                                id: baseScoresheetData?.id ? `${baseScoresheetData.id}-${assocKey}-${divisionName}-${judgeName}` : `gen-${uniqueKey}`,
+                                id: baseScoresheetData?.id ? `${baseScoresheetData.id}-${assocKey}-${divisionName}${goSuffix}-${judgeName}` : `gen-${uniqueKey}`,
                                 numericId: baseScoresheetData?.id || null,
                                 disciplineName,
                                 disciplineIndex: disciplines.indexOf(discipline),
                                 associationId: assocKey,
                                 association_abbrev: baseScoresheetData?.association_abbrev || abbrev || assocKey,
                                 divisionName,
+                                goNumber: divisionEntry.goNumber,
                                 judgeName,
-                                classDate: divisionDateMap[divisionName] || projectData.startDate || null,
+                                classDate: displayDate,
                                 displayName: `${disciplineName} Scoresheet`,
                                 image_url: baseScoresheetData?.image_url || null,
                                 generatedAt: new Date().toISOString(),
@@ -3541,10 +3906,18 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
 
             setGeneratedScoresheets(result);
 
+            // The old wording listed only divisions x judges, so the number never added up
+            // once classes and goes multiplied it. Show every factor that made the total.
+            const goCount = new Set(result.map(r => r.goNumber).filter(Boolean)).size;
             toast({
                 title: `Generated ${result.length} Score Sheet(s)`,
                 description: result.length > 0
-                    ? `${new Set(result.map(r => r.divisionName)).size} division(s) x ${new Set(result.map(r => r.judgeName)).size} judge(s)`
+                    ? 'Across ' + [
+                        `${new Set(result.map(r => r.disciplineName)).size} class(es)`,
+                        `${new Set(result.map(r => r.divisionName)).size} division(s)`,
+                        `${new Set(result.map(r => r.judgeName)).size} judge(s)`,
+                        goCount > 1 ? `${goCount} goes` : null,
+                    ].filter(Boolean).join(', ')
                     : 'No matching combinations found. Check your filter selections.'
             });
 
@@ -4689,7 +5062,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                         {(activeSubTab === 'patterns' || activeSubTab === 'scoreSheets') && uniqueAssociations.length > 0 && (
                                             <Popover open={associationFilterOpen} onOpenChange={(open) => { setAssociationFilterOpen(open); if (!open) setAssociationSearch(''); }}>
                                                 <PopoverTrigger asChild>
-                                                    <Button variant="outline" className="w-36 justify-between">
+                                                    <Button variant="outline" className="w-[calc(50%_-_0.25rem)] sm:w-36 justify-between">
                                                         <span className="truncate">
                                                             {filterAssociations.size === 0
                                                                 ? 'Associations'
@@ -4767,7 +5140,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                         {(activeSubTab === 'patterns' || activeSubTab === 'scoreSheets' || activeSubTab === 'accessory') && (
                                             <Popover open={disciplineFilterOpen} onOpenChange={(open) => { setDisciplineFilterOpen(open); if (!open) setDisciplineSearch(''); }}>
                                                 <PopoverTrigger asChild>
-                                                    <Button variant="outline" className="w-36 justify-between">
+                                                    <Button variant="outline" className="w-[calc(50%_-_0.25rem)] sm:w-36 justify-between">
                                                         <span className="truncate">
                                                             {filterDisciplines.size === 0
                                                                 ? 'Disciplines'
@@ -4839,7 +5212,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                         {(activeSubTab === 'patterns' || activeSubTab === 'scoreSheets') && (
                                             <Popover open={divisionFilterOpen} onOpenChange={(open) => { setDivisionFilterOpen(open); if (!open) setDivisionSearch(''); }}>
                                                 <PopoverTrigger asChild>
-                                                    <Button variant="outline" className="w-36 justify-between">
+                                                    <Button variant="outline" className="w-[calc(50%_-_0.25rem)] sm:w-36 justify-between">
                                                         <span className="truncate">
                                                             {filterDivisions.size === 0
                                                                 ? 'Divisions'
@@ -4961,7 +5334,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                         {activeSubTab === 'scoreSheets' && (
                                             <Popover open={judgeFilterOpen} onOpenChange={(open) => { setJudgeFilterOpen(open); if (!open) setJudgeSearch(''); }}>
                                                 <PopoverTrigger asChild>
-                                                    <Button variant="outline" className="w-36 justify-between">
+                                                    <Button variant="outline" className="w-[calc(50%_-_0.25rem)] sm:w-36 justify-between">
                                                         <span className="truncate">
                                                             {filterJudges.size === 0
                                                                 ? 'Judges'
@@ -5029,11 +5402,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                             </Popover>
                                         )}
 
-                                        {/* 5. Date Filter - Show for Score Sheets tab only */}
-                                        {activeSubTab === 'scoreSheets' && uniqueDates.length > 0 && (
+                                        {/* 5. Date Filter - Patterns and Score Sheets both need it */}
+                                        {(activeSubTab === 'scoreSheets' || activeSubTab === 'patterns') && uniqueDates.length > 0 && (
                                             <Popover open={dateFilterOpen} onOpenChange={setDateFilterOpen}>
                                                 <PopoverTrigger asChild>
-                                                    <Button variant="outline" className="w-36 justify-between">
+                                                    <Button variant="outline" className="w-[calc(50%_-_0.25rem)] sm:w-36 justify-between">
                                                         <span className="truncate">
                                                             {filterDates.size === 0
                                                                 ? 'Dates'
@@ -5085,6 +5458,58 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                 </div>
                                                             ))}
                                                         </div>
+                                                    </div>
+                                                </PopoverContent>
+                                            </Popover>
+                                        )}
+
+                                        {/* 6. Go Filter - only for shows that actually run a class twice */}
+                                        {(activeSubTab === 'scoreSheets' || activeSubTab === 'patterns') && hasTwoGoClasses && (
+                                            <Popover open={goFilterOpen} onOpenChange={setGoFilterOpen}>
+                                                <PopoverTrigger asChild>
+                                                    <Button variant="outline" className="w-[calc(50%_-_0.25rem)] sm:w-28 justify-between">
+                                                        <span className="truncate">
+                                                            {filterGos.size === 0
+                                                                ? 'Go'
+                                                                : filterGos.size === 1
+                                                                    ? `Go ${Array.from(filterGos)[0]}`
+                                                                    : 'Go 1 & 2'}
+                                                        </span>
+                                                        <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+                                                    </Button>
+                                                </PopoverTrigger>
+                                                <PopoverContent className="w-40 p-0 bg-popover text-popover-foreground border border-border z-50" align="start">
+                                                    <div className="p-2 border-b flex items-center justify-between">
+                                                        <span className="text-sm font-medium">Go</span>
+                                                        {filterGos.size > 0 && (
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                className="h-6 px-2 text-xs"
+                                                                onClick={() => setFilterGos(new Set())}
+                                                            >
+                                                                Clear
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                    <div className="p-2 space-y-1">
+                                                        {[1, 2].map(go => (
+                                                            <div
+                                                                key={go}
+                                                                className="flex items-center space-x-2 p-2 rounded hover:bg-muted cursor-pointer"
+                                                                onClick={() => {
+                                                                    setFilterGos(prev => {
+                                                                        const newSet = new Set(prev);
+                                                                        if (newSet.has(go)) newSet.delete(go);
+                                                                        else newSet.add(go);
+                                                                        return newSet;
+                                                                    });
+                                                                }}
+                                                            >
+                                                                <Checkbox checked={filterGos.has(go)} />
+                                                                <span className="text-sm">Go {go}</span>
+                                                            </div>
+                                                        ))}
                                                     </div>
                                                 </PopoverContent>
                                             </Popover>
@@ -5566,7 +5991,36 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                             </Label>
                                                             {selectedPatternIds.size > 0 && (
                                                                 <div className="flex items-center gap-2 ml-2">
-                                                                    {folders.length > 0 && (
+                                                                    {bulkDownloadProgress ? (
+                                                                        <div className="flex items-center gap-2 min-w-[280px]">
+                                                                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+                                                                            <div className="flex-1">
+                                                                                <div className="text-xs text-muted-foreground mb-1">
+                                                                                    {bulkDownloadProgress.message}
+                                                                                </div>
+                                                                                <Progress
+                                                                                    value={bulkDownloadProgress.total > 0
+                                                                                        ? (bulkDownloadProgress.current / bulkDownloadProgress.total) * 100
+                                                                                        : 0
+                                                                                    }
+                                                                                    className="h-2"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <>
+                                                                            {/* Separate files to sort by hand, or one packet that prints in a single job. */}
+                                                                            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleBulkDownloadPatterns('zip')}>
+                                                                                <Download className="h-3.5 w-3.5 mr-1.5" />
+                                                                                Download ({selectedPatternIds.size})
+                                                                            </Button>
+                                                                            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleBulkDownloadPatterns('pdf')}>
+                                                                                <FileText className="h-3.5 w-3.5 mr-1.5" />
+                                                                                Download as 1 PDF
+                                                                            </Button>
+                                                                        </>
+                                                                    )}
+                                                                    {folders.length > 0 && !bulkDownloadProgress && (
                                                                         <DropdownMenu>
                                                                             <DropdownMenuTrigger asChild>
                                                                                 <Button variant="outline" size="sm" className="h-7 text-xs">
@@ -5584,16 +6038,31 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                             </DropdownMenuContent>
                                                                         </DropdownMenu>
                                                                     )}
-                                                                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedPatternIds(new Set())}>
-                                                                        Clear
-                                                                    </Button>
+                                                                    {!bulkDownloadProgress && (
+                                                                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedPatternIds(new Set())}>
+                                                                            Clear
+                                                                        </Button>
+                                                                    )}
                                                                 </div>
                                                             )}
                                                         </div>
+                                                        {customPatternOrder && (
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                className="h-7 text-xs"
+                                                                onClick={() => setCustomPatternOrder(null)}
+                                                            >
+                                                                Reset order
+                                                            </Button>
+                                                        )}
                                                     </div>
                                                     {(() => {
                                                         const showAssocAbbrevs = detectShowAssociations(projectData);
-                                                        const multiBreed = showAssocAbbrevs.length > 1;
+                                                        // Association grouping and a hand-placed order cannot both be true — the
+                                                        // groups would keep pulling a dragged row back. Once an order exists the
+                                                        // list goes flat, which is also what makes the drag indexes line up.
+                                                        const multiBreed = showAssocAbbrevs.length > 1 && !customPatternOrder;
                                                         const getPatternAssocKey = (p) => {
                                                             const raw = p?.associationId || p?.association_abbrev || p?.associationAbbrev || p?.association_name || p?.associationName;
                                                             if (!raw) return 'OTHER';
@@ -5602,13 +6071,30 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                             if (upper.includes('QUARTER')) return 'AQHA';
                                                             return upper;
                                                         };
-                                                        const renderRow = (pattern, index) => {
+                                                        // draggable is false in grouped mode: dnd-kit needs the rendered order
+                                                        // to match the SortableContext list, and grouping breaks that.
+                                                        const renderRow = (pattern, index, draggable = true) => {
                                                         const selKey = pattern.uniqueKey || pattern.id || pattern.numericId || `pattern-${index}`;
-                                                        return (
+                                                        const row = ({ setNodeRef, style, handleProps } = {}) => (
                                                         <div
-                                                            key={pattern.uniqueKey || pattern.id || index}
-                                                            className="flex items-center gap-4 p-3 border rounded hover:bg-muted/50"
+                                                            ref={setNodeRef}
+                                                            style={style}
+                                                            className="no-touch-callout flex items-center gap-4 p-3 border rounded hover:bg-muted/50 bg-background"
                                                         >
+                                                        {/* touch-none on the handle only — a finger anywhere else still scrolls. */}
+                                                        {draggable ? (
+                                                            <button
+                                                                type="button"
+                                                                {...handleProps}
+                                                                title="Drag to reorder"
+                                                                aria-label="Drag to reorder"
+                                                                className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground shrink-0"
+                                                            >
+                                                                <GripVertical className="h-4 w-4" />
+                                                            </button>
+                                                        ) : (
+                                                            <span className="w-4 shrink-0" />
+                                                        )}
                                                         <Checkbox
                                                             checked={selectedPatternIds.has(selKey)}
                                                             onCheckedChange={(checked) => {
@@ -5691,6 +6177,22 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                         })()
                                                                     }
                                                                 </div>
+                                                                {/* Which day (and which go) this class runs — what people
+                                                                    need to pull the right patterns for a given day. */}
+                                                                {(pattern.classDate || pattern.goNumber) && (
+                                                                    <div>
+                                                                        {pattern.classDate && (
+                                                                            <>
+                                                                                <span className="font-medium">Date:</span> {formatClassDate(pattern.classDate)}
+                                                                            </>
+                                                                        )}
+                                                                        {pattern.goNumber && (
+                                                                            <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">
+                                                                                Go {pattern.goNumber}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         </div>
                                                         <div className="flex items-center gap-2 shrink-0">
@@ -5756,6 +6258,15 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                     </Button>
                                                                 </DropdownMenuTrigger>
                                                                 <DropdownMenuContent align="end">
+                                                                    {/* The reliable way to reorder on a tablet — no dragging involved. */}
+                                                                    <DropdownMenuItem onClick={() => movePattern(selKey, 'top')}>
+                                                                        <ChevronsUp className="h-4 w-4 mr-2" />
+                                                                        Move to top
+                                                                    </DropdownMenuItem>
+                                                                    <DropdownMenuItem onClick={() => movePattern(selKey, 'bottom')}>
+                                                                        <ChevronsDown className="h-4 w-4 mr-2" />
+                                                                        Move to bottom
+                                                                    </DropdownMenuItem>
                                                                     <DropdownMenuItem
                                                                         onClick={(e) => {
                                                                             e.stopPropagation();
@@ -5790,12 +6301,24 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         </div>
                                                     </div>
                                                         );
+                                                        if (!draggable) return <div key={pattern.uniqueKey || pattern.id || index}>{row()}</div>;
+                                                        return (
+                                                            <SortableRow key={selKey} id={selKey}>
+                                                                {row}
+                                                            </SortableRow>
+                                                        );
                                                         };
                                                         if (!multiBreed) {
-                                                            return filteredPatterns.map((p, i) => renderRow(p, i));
+                                                            return (
+                                                                <DndContext sensors={dragSensors} collisionDetection={closestCenter} onDragEnd={handlePatternDragEnd}>
+                                                                    <SortableContext items={orderedPatternEntries.map(e => e.key)} strategy={verticalListSortingStrategy}>
+                                                                        {orderedPatternEntries.map(({ p, i }) => renderRow(p, i))}
+                                                                    </SortableContext>
+                                                                </DndContext>
+                                                            );
                                                         }
                                                         const groups = {};
-                                                        filteredPatterns.forEach((p, i) => {
+                                                        orderedPatternEntries.forEach(({ p, i }) => {
                                                             const k = getPatternAssocKey(p);
                                                             if (!groups[k]) groups[k] = [];
                                                             groups[k].push({ p, i });
@@ -5803,7 +6326,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         return Object.keys(groups).sort().map(assocKey => (
                                                             <div key={`assoc-${assocKey}`} className="space-y-2">
                                                                 <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1 pt-2">{assocKey}</div>
-                                                                {groups[assocKey].map(({ p, i }) => renderRow(p, i))}
+                                                                {groups[assocKey].map(({ p, i }) => renderRow(p, i, false))}
                                                             </div>
                                                         ));
                                                     })()}
@@ -5898,11 +6421,33 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         )}
                                                     </div>
                                                     {/* Sort dropdown — the download follows this same order */}
-                                                    <Select value={scoresheetSortBy} onValueChange={setScoresheetSortBy}>
+                                                    <div className="flex items-center gap-1">
+                                                    {scoresheetSortBy === 'custom' && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-7 text-xs"
+                                                            onClick={() => { setCustomScoresheetOrder(null); setScoresheetSortBy('association'); }}
+                                                        >
+                                                            Reset order
+                                                        </Button>
+                                                    )}
+                                                    <Select
+                                                        value={scoresheetSortBy}
+                                                        onValueChange={(value) => {
+                                                            setScoresheetSortBy(value);
+                                                            // Picking a real sort key throws the hand-placed order away —
+                                                            // keeping it would make the dropdown look like it did nothing.
+                                                            if (value !== 'custom') setCustomScoresheetOrder(null);
+                                                        }}
+                                                    >
                                                         <SelectTrigger className="h-7 w-44 text-xs">
                                                             <SelectValue placeholder="Sort by" />
                                                         </SelectTrigger>
                                                         <SelectContent>
+                                                            {/* Only selectable once an order exists — Radix needs the current
+                                                                value to have an item or the trigger falls back to the placeholder. */}
+                                                            {scoresheetSortBy === 'custom' && <SelectItem value="custom">Custom order</SelectItem>}
                                                             <SelectItem value="association">Sort by Association</SelectItem>
                                                             <SelectItem value="discipline">Sort by Discipline</SelectItem>
                                                             <SelectItem value="division">Sort by Division</SelectItem>
@@ -5911,14 +6456,32 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                             <SelectItem value="name">Sort by Name</SelectItem>
                                                         </SelectContent>
                                                     </Select>
+                                                    </div>
                                                 </div>
 
-                                                {/* Scoresheet cards */}
+                                                {/* Scoresheet cards — drag to reorder; the download follows this order */}
+                                                <DndContext sensors={dragSensors} collisionDetection={closestCenter} onDragEnd={handleScoresheetDragEnd}>
+                                                <SortableContext items={displayedScoresheets.map(s => s.uniqueKey)} strategy={verticalListSortingStrategy}>
                                                 {displayedScoresheets.map((scoresheet, index) => (
+                                                    <SortableRow key={scoresheet.uniqueKey || scoresheet.id || index} id={scoresheet.uniqueKey}>
+                                                    {({ setNodeRef, style, handleProps }) => (
                                                     <div
-                                                        key={scoresheet.uniqueKey || scoresheet.id || index}
-                                                        className="flex items-center gap-4 p-3 border rounded hover:bg-muted/50"
+                                                        ref={setNodeRef}
+                                                        style={style}
+                                                        className="no-touch-callout flex items-center gap-4 p-3 border rounded hover:bg-muted/50 bg-background"
                                                     >
+                                                        {/* Drag handle. touch-none is what lets a finger drag it on iPad —
+                                                            without it Safari treats the gesture as a scroll. Only the handle
+                                                            opts out, so a finger anywhere else still scrolls the list. */}
+                                                        <button
+                                                            type="button"
+                                                            {...handleProps}
+                                                            title="Drag to reorder"
+                                                            aria-label="Drag to reorder"
+                                                            className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground shrink-0"
+                                                        >
+                                                            <GripVertical className="h-4 w-4" />
+                                                        </button>
                                                         {/* Bulk selection checkbox */}
                                                         <Checkbox
                                                             checked={selectedScoresheetIds.has(scoresheet.uniqueKey)}
@@ -5953,7 +6516,12 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                 )}
                                                                 {scoresheet.classDate && (
                                                                     <div>
-                                                                        <span className="font-medium">Date:</span> {scoresheet.classDate}
+                                                                        <span className="font-medium">Date:</span> {formatClassDate(scoresheet.classDate)}
+                                                                        {scoresheet.goNumber && (
+                                                                            <span className="ml-2 text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">
+                                                                                Go {scoresheet.goNumber}
+                                                                            </span>
+                                                                        )}
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -6020,6 +6588,15 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                     </Button>
                                                                 </DropdownMenuTrigger>
                                                                 <DropdownMenuContent align="end">
+                                                                    {/* The reliable way to reorder on a tablet — no dragging involved. */}
+                                                                    <DropdownMenuItem onClick={() => moveScoresheet(scoresheet.uniqueKey, 'top')}>
+                                                                        <ChevronsUp className="h-4 w-4 mr-2" />
+                                                                        Move to top
+                                                                    </DropdownMenuItem>
+                                                                    <DropdownMenuItem onClick={() => moveScoresheet(scoresheet.uniqueKey, 'bottom')}>
+                                                                        <ChevronsDown className="h-4 w-4 mr-2" />
+                                                                        Move to bottom
+                                                                    </DropdownMenuItem>
                                                                     <DropdownMenuItem
                                                                         onClick={(e) => {
                                                                             e.stopPropagation();
@@ -6053,7 +6630,11 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                             </DropdownMenu>
                                                         </div>
                                                     </div>
+                                                    )}
+                                                    </SortableRow>
                                                 ))}
+                                                </SortableContext>
+                                                </DndContext>
                                             </div>
                                         ) : (
                                             /* Empty state */
@@ -6089,7 +6670,8 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                         const docDiscipline = (doc) => (doc.discipline
                                             || (doc.tags || []).find(t => disciplineOptions.includes(t))
                                             || '').trim();
-                                        const accessoryDocs = (filterDisciplines.size > 0
+                                        const keyOf = (doc) => doc.filePath || doc.fileUrl || doc.url;
+                                        const sortedAccessoryDocs = (filterDisciplines.size > 0
                                             ? allAccessoryDocs.filter(d => filterDisciplines.has(docDiscipline(d)))
                                             : allAccessoryDocs
                                         ).sort((a, b) => {
@@ -6097,6 +6679,16 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                             const cmp = key(a).localeCompare(key(b), undefined, { numeric: true });
                                             return cmp !== 0 ? cmp : (a.customName || a.fileName || '').localeCompare(b.customName || b.fileName || '');
                                         });
+
+                                        // A hand-placed order beats the sort dropdown. Documents added since the
+                                        // order was set land after the placed ones, not at the front of the stack.
+                                        const accessoryDocs = customAccessoryOrder
+                                            ? (() => {
+                                                const position = new Map(customAccessoryOrder.map((k, i) => [k, i]));
+                                                const placed = (d) => position.has(keyOf(d)) ? position.get(keyOf(d)) : Number.MAX_SAFE_INTEGER;
+                                                return [...sortedAccessoryDocs].sort((a, b) => placed(a) - placed(b));
+                                            })()
+                                            : sortedAccessoryDocs;
 
                                         if (accessoryDocs.length === 0) {
                                             return (
@@ -6111,7 +6703,9 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                 </div>
                                             );
                                         }
-                                        const docKey = (doc) => doc.filePath || doc.fileUrl || doc.url;
+                                        // Same identity the ordering above uses — one definition, so selection,
+                                        // drag and reorder can never disagree about what a row is.
+                                        const docKey = keyOf;
                                         const handleShare = async (doc) => {
                                             const url = doc.fileUrl || doc.url;
                                             const title = doc.customName || doc.fileName || 'Accessory Document';
@@ -6158,42 +6752,103 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                         isDownloadingAccessory ? (
                                                             <div className="flex items-center gap-2 ml-2 text-xs text-muted-foreground">
                                                                 <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                                                                Preparing ZIP...
+                                                                {isDownloadingAccessory === 'pdf' ? 'Combining into one PDF...' : 'Preparing ZIP...'}
                                                             </div>
                                                         ) : (
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                className="h-7 text-xs ml-2"
-                                                                onClick={() => handleBulkDownloadAccessory(selectedDocs)}
-                                                            >
-                                                                <Download className="h-3.5 w-3.5 mr-1.5" />
-                                                                Download ({selectedDocs.length})
-                                                            </Button>
+                                                            <div className="flex items-center gap-2 ml-2">
+                                                                {/* Separate files to sort by hand, or one packet that prints in a single job. */}
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-7 text-xs"
+                                                                    onClick={() => handleBulkDownloadAccessory(selectedDocs, 'zip')}
+                                                                >
+                                                                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                                                                    Download ({selectedDocs.length})
+                                                                </Button>
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-7 text-xs"
+                                                                    onClick={() => handleBulkDownloadAccessory(selectedDocs, 'pdf')}
+                                                                >
+                                                                    <FileText className="h-3.5 w-3.5 mr-1.5" />
+                                                                    Download as 1 PDF
+                                                                </Button>
+                                                            </div>
                                                         )
                                                     )}
                                                 </div>
-                                                <Select value={accessorySortBy} onValueChange={setAccessorySortBy}>
-                                                    <SelectTrigger className="h-7 w-44 text-xs">
-                                                        <SelectValue placeholder="Sort by" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="discipline">Sort by Discipline</SelectItem>
-                                                        <SelectItem value="name">Sort by Name</SelectItem>
-                                                    </SelectContent>
-                                                </Select>
+                                                <div className="flex items-center gap-1">
+                                                    {customAccessoryOrder && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-7 text-xs"
+                                                            onClick={() => setCustomAccessoryOrder(null)}
+                                                        >
+                                                            Reset order
+                                                        </Button>
+                                                    )}
+                                                    <Select
+                                                        value={accessorySortBy}
+                                                        onValueChange={(value) => {
+                                                            setAccessorySortBy(value);
+                                                            // Picking a sort key throws the hand-placed order away — keeping
+                                                            // it would make the dropdown look like it did nothing.
+                                                            setCustomAccessoryOrder(null);
+                                                        }}
+                                                    >
+                                                        <SelectTrigger className="h-7 w-44 text-xs">
+                                                            <SelectValue placeholder="Sort by" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="discipline">Sort by Discipline</SelectItem>
+                                                            <SelectItem value="name">Sort by Name</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
                                             </div>
                                             {/* This list had no scroll box of its own, so anything
                                                 past the fold was clipped by the tab's overflow-hidden
                                                 and unreachable on a tablet. */}
                                             <div className="touch-scroll space-y-2 overflow-y-auto pr-2 flex-1 min-h-0">
+                                                <DndContext
+                                                    sensors={dragSensors}
+                                                    collisionDetection={closestCenter}
+                                                    onDragEnd={({ active, over }) => {
+                                                        if (!over || active.id === over.id) return;
+                                                        const keys = accessoryDocs.map(keyOf);
+                                                        const from = keys.indexOf(active.id);
+                                                        const to = keys.indexOf(over.id);
+                                                        if (from === -1 || to === -1) return;
+                                                        setCustomAccessoryOrder(arrayMove(keys, from, to));
+                                                    }}
+                                                >
+                                                <SortableContext items={accessoryDocs.map(keyOf)} strategy={verticalListSortingStrategy}>
                                                 {accessoryDocs.map((doc, idx) => {
                                                     const url = doc.fileUrl || doc.url;
                                                     const name = doc.customName || doc.fileName || `Document ${idx + 1}`;
                                                     const key = docKey(doc);
                                                     return (
-                                                        <div key={key + idx} className="flex items-center justify-between p-3 border rounded-md bg-card">
+                                                        <SortableRow key={key + idx} id={key}>
+                                                        {({ setNodeRef, style, handleProps }) => (
+                                                        <div
+                                                            ref={setNodeRef}
+                                                            style={style}
+                                                            className="no-touch-callout flex items-center justify-between p-3 border rounded-md bg-card"
+                                                        >
                                                             <div className="flex items-center gap-3 overflow-hidden">
+                                                                {/* touch-none on the handle only — a finger anywhere else still scrolls. */}
+                                                                <button
+                                                                    type="button"
+                                                                    {...handleProps}
+                                                                    title="Drag to reorder"
+                                                                    aria-label="Drag to reorder"
+                                                                    className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground shrink-0"
+                                                                >
+                                                                    <GripVertical className="h-4 w-4" />
+                                                                </button>
                                                                 <Checkbox
                                                                     checked={selectedAccessoryKeys.has(key)}
                                                                     onCheckedChange={(checked) => {
@@ -6230,8 +6885,12 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                                                                 </TooltipTrigger><TooltipContent>Print</TooltipContent></Tooltip>
                                                             </div>
                                                         </div>
+                                                        )}
+                                                        </SortableRow>
                                                     );
                                                 })}
+                                                </SortableContext>
+                                                </DndContext>
                                             </div>
                                             </TooltipProvider>
                                         );

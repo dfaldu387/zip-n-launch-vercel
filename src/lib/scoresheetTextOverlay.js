@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabaseClient';
 import QRCode from 'qrcode';
+import { resolveDivisionDate } from '@/lib/divisionDates';
 
 /**
  * Generate a QR PNG and load it as an HTMLImageElement ready for canvas drawing.
@@ -721,9 +722,11 @@ export const getOverlayDataFromContext = (project, scoresheet) => {
       for (const group of (discipline.patternGroups || [])) {
         for (const div of (group.divisions || [])) {
           const divName = div?.name || div?.divisionName || div?.division || div?.title || '';
-          const divId = div?.id;
-          if (divName.trim() === scoresheet.divisionName && divId && discipline.divisionDates?.[divId]) {
-            date = discipline.divisionDates[divId];
+          const divDate = divName.trim() === scoresheet.divisionName
+            ? resolveDivisionDate(discipline, div)
+            : null;
+          if (divDate) {
+            date = divDate;
             break;
           }
         }

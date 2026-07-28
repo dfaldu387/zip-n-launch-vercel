@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { fetchImageAsBase64 } from './pdfHelpers';
 import { createGenericScoreSheetPdf, SCORESHEET_LAYOUT } from './genericScoreSheet';
 import { parseLocalDate } from '@/lib/utils';
+import { resolveDivisionDate } from '@/lib/divisionDates';
 
 /**
  * Creates a PDF from an image (pattern or scoresheet).
@@ -419,7 +420,9 @@ export const downloadPatternBookFolder = async (projectData, projectName, onProg
                 ).join(' / ');
                 let competitionDate = projectData.startDate;
                 if (group.divisions?.length > 0) {
-                    const divDate = discipline.divisionDates?.[group.divisions[0]?.id || group.divisions[0]];
+                    const divDate = group.divisions
+                        .map(div => resolveDivisionDate(discipline, div))
+                        .find(Boolean);
                     if (divDate) competitionDate = divDate;
                 }
                 const dateStr = competitionDate ? format(parseLocalDate(competitionDate), 'MM-dd-yyyy') : '';

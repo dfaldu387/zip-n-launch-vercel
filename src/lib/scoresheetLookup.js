@@ -30,7 +30,13 @@ export const buildScoresheetDownloadName = (scoresheet, sourceUrl, ordinal = nul
     const extension = isPdf ? 'pdf' : 'png';
     const prefix = buildOrdinalPrefix(ordinal, total);
 
-    const parts = [scoresheet?.disciplineName, scoresheet?.divisionName, scoresheet?.judgeName].filter(Boolean);
+    // A two-go class produces two sheets with otherwise identical names, so the go
+    // has to be in the file name — the ordinal prefix alone doesn't say which is which.
+    const divisionLabel = scoresheet?.divisionName && scoresheet?.goNumber
+        ? `${scoresheet.divisionName} (Go ${scoresheet.goNumber})`
+        : scoresheet?.divisionName;
+
+    const parts = [scoresheet?.disciplineName, divisionLabel, scoresheet?.judgeName].filter(Boolean);
     if (parts.length === 0) {
         const fallback = scoresheet?.file_name
             || scoresheet?.storage_path?.split('/').pop()
@@ -109,21 +115,24 @@ export const imageBlobToPdfBlob = async (blob) => {
     return new Blob([await pdf.save()], { type: 'application/pdf' });
 };
 
-// The merged packet gets printed and then stacked on a table, so the file name has to say
-// whose pile it is — "Mo Holmes - Score Sheets.pdf", not "Scoresheets.pdf". Only filters
-// narrowed to a single value contribute; "2 Selected" tells the person holding it nothing.
-export const buildMergedPdfName = (filterSets = [], fallback = '') => {
+// The merged packet is printed and then stacked on a table, so the file name has to answer
+// two questions: which show, and which pile. The show name always leads — Robert keeps
+// bundles from several shows side by side, and three files called "Mo Holmes - Score
+// Sheets.pdf" are indistinguishable. Filters then narrow it, but only ones down to a single
+// value: "2 Selected" tells the person holding the stack nothing.
+export const buildMergedPdfName = (filterSets = [], showName = '', suffix = 'Score Sheets') => {
     const single = (set) => {
         if (!set || typeof set.size !== 'number' || set.size !== 1) return null;
         const value = String(Array.from(set)[0] || '').trim();
         return value || null;
     };
 
-    const label = filterSets.map(single).filter(Boolean).join(' - ')
-        || String(fallback || '').trim();
+    const label = [String(showName || '').trim(), ...filterSets.map(single)]
+        .filter(Boolean)
+        .join(' - ');
 
     const safe = label.replace(/[<>:"/\\|?*]/g, '-').replace(/\s+/g, ' ').trim();
-    return safe ? `${safe} - Score Sheets.pdf` : 'Score Sheets.pdf';
+    return safe ? `${safe} - ${suffix}.pdf` : `${suffix}.pdf`;
 };
 
 // Keep one row per discipline after a query that can return duplicates.

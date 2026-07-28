@@ -140,6 +140,35 @@ body {
   background-color: hsl(var(--muted-foreground) / 0.8);
 }
 
+/* Pressing a score sheet row on iPad used to start a text selection and raise Safari's
+   Copy / Look Up / Translate bubble over the list, which fights the drag handle. These
+   rows are controls, not prose, so opt them out of both. */
+.no-touch-callout {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .highlight-section {
   animation: section-highlight 1.5s ease-in-out;
+}
+
+/* Chrome/Safari paint autofilled inputs with their own pale blue background and dark
+   text, which ignores our theme — on the dark sign-in dialog the saved email and
+   password came out as white boxes. background-color is locked by the browser, so the
+   only way to repaint it is an inset box-shadow, and the caret/text need their own
+   -webkit properties. The long transition delay stops the pale colour flashing in
+   before our shadow is applied. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px hsl(var(--background)) inset;
+  box-shadow: 0 0 0 1000px hsl(var(--background)) inset;
+  -webkit-text-fill-color: hsl(var(--foreground));
+  caret-color: hsl(var(--foreground));
+  border-radius: inherit;
+  transition: background-color 600000s 0s, color 600000s 0s;
 }

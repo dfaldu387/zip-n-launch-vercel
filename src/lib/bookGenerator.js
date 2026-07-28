@@ -7,6 +7,7 @@ import { drawGenericScoreSheetPage, SCORESHEET_LAYOUT } from './genericScoreShee
 import { generateCustomLayoutPdf } from './customLayoutRenderer';
 import { getPatternSelectionForAssoc, isAssocKeyedEntry } from './patternSelectionHelpers';
 import { overlayCustomPatternPdfs } from './pdfUtils';
+import { resolveDivisionDate } from '@/lib/divisionDates';
 
 export const generatePatternBookPdf = async (pbbData, options = {}) => {
     console.log('Generating PDF for', pbbData);
@@ -1186,30 +1187,15 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             // Get competition date - first try divisionDates from divisions in the group, then groupDueDates, then startDate
             let competitionDate = pbbData.startDate;
             
-            // Resolve a single grouped division's competition date in a
-            // two-go-aware way. For a two-go class the grouped division id is
-            // `${baseId}-go1` / `${baseId}-go2`, which is NOT a key in
-            // divisionDates (that map is keyed by base id and only holds the Go 1
-            // date). So pull the correct Go 1 / Go 2 date from divisionGos[baseId]
-            // using the division's goNumber, and fall back to divisionDates for
-            // single-go or legacy (string) divisions.
-            const resolveDivisionDate = (div) => {
-                const divId = div?.id || div;
-                const baseId = div?.baseId || divId;
-                const goInfo = discipline.divisionGos?.[baseId];
-                if (goInfo) {
-                    if (div?.goNumber === 2) return goInfo.go2Date || null;
-                    if (div?.goNumber === 1) return goInfo.go1Date || null;
-                    return goInfo.go1Date || discipline.divisionDates?.[divId] || null;
-                }
-                return discipline.divisionDates?.[divId] || null;
-            };
+            // Two-go-aware resolution lives in @/lib/divisionDates so the portal,
+            // the score sheets and the book all read the same date.
+            const resolveDate = (div) => resolveDivisionDate(discipline, div);
 
             // Try to get date from divisions (set in Step 3, tab 2)
             if (group.divisions && group.divisions.length > 0) {
                 // Get the first division's date, or find a common date if all divisions have the same date
                 const divisionDates = group.divisions
-                    .map(resolveDivisionDate)
+                    .map(resolveDate)
                     .filter(Boolean);
 
                 if (divisionDates.length > 0) {
@@ -1234,7 +1220,7 @@ export const generatePatternBookPdf = async (pbbData, options = {}) => {
             if (group.divisions && group.divisions.length > 0) {
                 const seenDates = new Set();
                 group.divisions.forEach(div => {
-                    const d = resolveDivisionDate(div);
+                    const d = resolveDate(div);
                     if (d && !seenDates.has(d)) { seenDates.add(d); groupDates.push(d); }
                 });
             }

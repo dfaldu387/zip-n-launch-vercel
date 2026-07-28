@@ -2,6 +2,7 @@ import { format } from 'date-fns';
 import { fetchImageAsBase64, compressImage } from './pdfHelpers';
 import { supabase } from '@/lib/supabaseClient';
 import { parseLocalDate } from '@/lib/utils';
+import { resolveDivisionDate } from '@/lib/divisionDates';
 
 // Page modes supported by Layout C.
 // - full:    1 slot covering the page body
@@ -84,10 +85,7 @@ export function flattenPatternItems(pbbData) {
             let competitionDate = pbbData.startDate;
             if (group.divisions?.length) {
                 const divisionDates = group.divisions
-                    .map((div) => {
-                        const divId = div.id || div;
-                        return discipline.divisionDates?.[divId];
-                    })
+                    .map((div) => resolveDivisionDate(discipline, div))
                     .filter(Boolean);
                 if (divisionDates.length > 0) competitionDate = divisionDates[0];
             }

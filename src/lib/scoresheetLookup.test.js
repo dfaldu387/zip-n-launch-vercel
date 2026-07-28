@@ -53,22 +53,34 @@ describe('buildScoresheetDownloadName', () => {
         expect(buildScoresheetDownloadName({ ...sheet, file_name: 'template.png' }, 'https://x/y.png'))
             .toBe('Ranch Riding - custom-Junior 8-13 Intro - Mo Holmes.png');
     });
+
+    // A two-go class prints two otherwise identical sheets; the go keeps them apart.
+    it('names the go when the class runs twice', () => {
+        expect(buildScoresheetDownloadName({ ...sheet, goNumber: 2 }, 'https://x/y.pdf'))
+            .toBe('Ranch Riding - custom-Junior 8-13 Intro (Go 2) - Mo Holmes.pdf');
+    });
+
+    it('leaves single-go classes unchanged', () => {
+        expect(buildScoresheetDownloadName({ ...sheet, goNumber: null }, 'https://x/y.pdf'))
+            .toBe('Ranch Riding - custom-Junior 8-13 Intro - Mo Holmes.pdf');
+    });
 });
 
-// The merged packet is printed and stacked by judge, so its file name is how the person
-// at the table knows whose pile they picked up.
+// The merged packet is printed and stacked on a table, so its file name has to say which
+// show it came from as well as which pile it is — bundles from several shows sit side by
+// side, and "Mo Holmes - Score Sheets.pdf" three times over is useless.
 describe('buildMergedPdfName', () => {
     const judges = new Set(['Mo Holmes']);
     const disciplines = new Set(['English Equitation']);
 
-    it('names the packet after a filter narrowed to one value', () => {
+    it('leads with the show name, then narrows by a single-value filter', () => {
         expect(buildMergedPdfName([judges], 'Fall Classic'))
-            .toBe('Mo Holmes - Score Sheets.pdf');
+            .toBe('Fall Classic - Mo Holmes - Score Sheets.pdf');
     });
 
-    it('chains several single-value filters in the order given', () => {
+    it('chains several single-value filters after the show name, in the order given', () => {
         expect(buildMergedPdfName([judges, disciplines], 'Fall Classic'))
-            .toBe('Mo Holmes - English Equitation - Score Sheets.pdf');
+            .toBe('Fall Classic - Mo Holmes - English Equitation - Score Sheets.pdf');
     });
 
     it('ignores a filter with several values, since "2 Selected" names nothing', () => {
@@ -76,17 +88,24 @@ describe('buildMergedPdfName', () => {
             .toBe('Fall Classic - Score Sheets.pdf');
     });
 
-    it('falls back to the show name when nothing is filtered', () => {
+    it('is just the show name when nothing is filtered', () => {
         expect(buildMergedPdfName([new Set(), undefined], 'Fall Classic'))
             .toBe('Fall Classic - Score Sheets.pdf');
     });
 
-    it('does not repeat itself when there is no show name either', () => {
+    it('still names the packet when the show has no name', () => {
+        expect(buildMergedPdfName([judges], '')).toBe('Mo Holmes - Score Sheets.pdf');
         expect(buildMergedPdfName([], '')).toBe('Score Sheets.pdf');
+    });
+
+    it('takes a suffix so the Patterns tab does not label its packet "Score Sheets"', () => {
+        expect(buildMergedPdfName([disciplines], 'Fall Classic', 'Patterns'))
+            .toBe('Fall Classic - English Equitation - Patterns.pdf');
+        expect(buildMergedPdfName([], '', 'Patterns')).toBe('Patterns.pdf');
     });
 
     it('strips characters that are illegal in a file name', () => {
         expect(buildMergedPdfName([new Set(['Level I/II: Go 1'])], 'Show'))
-            .toBe('Level I-II- Go 1 - Score Sheets.pdf');
+            .toBe('Show - Level I-II- Go 1 - Score Sheets.pdf');
     });
 });
