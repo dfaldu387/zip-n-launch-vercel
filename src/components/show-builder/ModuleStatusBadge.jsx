@@ -56,10 +56,11 @@ export const ModuleStatusBadge = ({
   isShowLocked = false,
   onStatusChange,
   compact = false,
+  readOnly = false,
 }) => {
   const meta = STATUS_META[status] || STATUS_META[MODULE_STATUS.NOT_STARTED];
   const IconComp = ICON_MAP[meta.icon] || Circle;
-  const availableTransitions = getAvailableTransitions(status, isShowLocked);
+  const availableTransitions = readOnly ? [] : getAvailableTransitions(status, isShowLocked);
 
   const badge = (
     <button
@@ -67,7 +68,7 @@ export const ModuleStatusBadge = ({
         'flex items-center gap-1 font-medium rounded-md transition-colors',
         compact ? 'text-[10px] px-1 py-0.5' : 'text-[11px] px-1.5 py-0.5',
         meta.color,
-        isShowLocked ? 'opacity-60 cursor-not-allowed' : 'hover:bg-muted cursor-pointer',
+        isShowLocked || readOnly ? 'opacity-60 cursor-default' : 'hover:bg-muted cursor-pointer',
       )}
       onClick={(e) => e.preventDefault()}
     >
@@ -78,6 +79,9 @@ export const ModuleStatusBadge = ({
       )}
     </button>
   );
+
+  // Status is owned elsewhere (e.g. the pattern book itself) — display only.
+  if (readOnly) return badge;
 
   // If show is locked, show tooltip instead of dropdown
   if (isShowLocked) {

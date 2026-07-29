@@ -1,15 +1,93 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
-import { Shield, Crown, ArrowLeft, Loader2 } from 'lucide-react';
+import { Shield, Crown, ArrowLeft, Loader2, FolderOpen, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import Navigation from '@/components/Navigation';
 import { useUsageGate } from '@/hooks/useUsageGate';
+import { supabase } from '@/lib/supabaseClient';
+import { useAuth } from '@/contexts/SupabaseAuthContext';
 
 const TYPE_LABELS = {
   show: { singular: 'show', plural: 'shows' },
   pattern_book: { singular: 'pattern book', plural: 'pattern books' },
+};
+
+// Where "Open" sends the user for each project type.
+const editPath = (projectType, id) =>
+  projectType === 'pattern_book'
+    ? `/pattern-book-builder/${id}`
+    : `/horse-show-manager/show/${id}`;
+
+/**
+ * Lists the projects the user already owns so the limit screen is never a
+ * dead end — editing existing work is always free.
+ */
+const ExistingProjects = ({ projectType, labels }) => {
+  const { user } = useAuth();
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!user) { setLoading(false); return; }
+      const { data, error } = await supabase
+        .from('projects')
+        .select('id, project_name, status, created_at')
+        .eq('user_id', user.id)
+        .eq('project_type', projectType)
+        .order('created_at', { ascending: false });
+      if (cancelled) return;
+      if (error) console.error('Error loading existing projects:', error);
+      setProjects(data || []);
+      setLoading(false);
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [user, projectType]);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-4">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (projects.length === 0) return null;
+
+  return (
+    <div className="text-left space-y-2">
+      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <FolderOpen className="h-4 w-4 text-primary" />
+        Open one of your {labels.plural}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Editing your existing {labels.plural} is always free — no upgrade needed.
+      </p>
+      <div className="space-y-2 pt-1">
+        {projects.map((p) => (
+          <Link
+            key={p.id}
+            to={editPath(projectType, p.id)}
+            className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-4 py-3 transition-colors hover:border-primary hover:bg-accent/50"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-foreground">
+                {p.project_name || `Untitled ${labels.singular}`}
+              </span>
+              {p.status && (
+                <span className="block text-xs text-muted-foreground">{p.status}</span>
+              )}
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 /**
@@ -78,6 +156,10 @@ export const UsageLimitGate = ({ children, toolName = 'this tool', projectType =
                     style={{ width: '100%' }}
                   />
                 </div>
+              </div>
+
+              <div className="max-w-sm mx-auto">
+                <ExistingProjects projectType={projectType} labels={labels} />
               </div>
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">

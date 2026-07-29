@@ -543,10 +543,21 @@ export const AssociationSelection = ({ formData, setFormData, associationsData, 
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
   // Non-blocking duplicate show-number check (warn but allow).
+  // One event is stored as several rows — a show plus its pattern book — and
+  // they legitimately share a number. Only a *different* event is worth a warning.
   const trimmedShowNumber = String(formData.showNumber || '').trim();
+  const thisShowName = String(formData.showName || '').trim().toLowerCase();
+  const isSameEvent = (p) => {
+    if (p.id === formData.id) return true;
+    if (formData.linkedProjectId && p.id === formData.linkedProjectId) return true;
+    const ppd = p.project_data || {};
+    if (formData.id && (ppd.linkedProjectId === formData.id || ppd.linkedShowProjectId === formData.id)) return true;
+    const pName = String(p.project_name || ppd.showName || '').trim().toLowerCase();
+    return !!thisShowName && pName === thisShowName;
+  };
   const duplicateNumberShow = trimmedShowNumber
     ? (existingProjects || []).find(p =>
-        p.id !== formData.id &&
+        !isSameEvent(p) &&
         String(p.project_data?.showNumber || '').trim().toLowerCase() === trimmedShowNumber.toLowerCase()
       )
     : null;

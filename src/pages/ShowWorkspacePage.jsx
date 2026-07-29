@@ -13,8 +13,15 @@ import {
   CalendarDays, FileText, DollarSign, LayoutGrid, Building2,
   Radio, Award, Edit, ChevronRight, Users, ClipboardList,
   BarChart3, Warehouse, Check, Lock, Circle, ChevronDown, BookOpen,
-  Download, Unlock, ShieldAlert,
+  Download, Unlock, ShieldAlert, Link2, Plus,
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { generateShowPacketPdf } from '@/lib/showPacketPdfGenerator';
@@ -31,7 +38,7 @@ import {
 
 /* ── Module card ── */
 
-const ModuleCard = ({ icon: Icon, title, description, to, color = 'blue', status, moduleKey, onStatusChange, comingSoon, isShowLocked }) => {
+const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, moduleKey, onStatusChange, comingSoon, isShowLocked }) => {
   const { toast } = useToast();
   const colorMap = {
     blue: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600',
@@ -57,8 +64,24 @@ const ModuleCard = ({ icon: Icon, title, description, to, color = 'blue', status
   };
 
   const isClickable = !comingSoon && !isShowLocked;
-  const Wrapper = isClickable ? Link : 'div';
-  const wrapperProps = isClickable ? { to } : { onClick: handleClick };
+  // A module can either navigate (`to`) or run an action (`onClick`) —
+  // the Pattern Book card uses the action form when no book is linked yet.
+  let Wrapper = 'div';
+  let wrapperProps = { onClick: handleClick };
+  if (isClickable && onClick) {
+    // A div, not a <button> — the status badge inside is itself a button and
+    // nesting buttons is invalid HTML.
+    Wrapper = 'div';
+    wrapperProps = {
+      role: 'button',
+      tabIndex: 0,
+      onClick,
+      onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); } },
+    };
+  } else if (isClickable) {
+    Wrapper = Link;
+    wrapperProps = { to };
+  }
 
   return (
     <Wrapper {...wrapperProps}>
@@ -84,6 +107,7 @@ const ModuleCard = ({ icon: Icon, title, description, to, color = 'blue', status
                       moduleKey={moduleKey}
                       isShowLocked={isShowLocked}
                       onStatusChange={onStatusChange}
+                      readOnly={statusReadOnly}
                     />
                   )}
                 </div>
@@ -151,6 +175,42 @@ const OverallProgress = ({ modules }) => {
   );
 };
 
+/* ── Pattern book linking ──
+ * A show and its pattern book are two separate `projects` rows. The link is
+ * stored on the BOOK (`project_data.linkedShowProjectId`) so there is a single
+ * source of truth — the Pattern Book Builder's own "Link to Existing Show"
+ * step writes `linkedProjectId`, which we also honour.
+ */
+const bookShowLink = (book) => {
+  const bpd = book.project_data || {};
+  return bpd.linkedShowProjectId || bpd.linkedProjectId || null;
+};
+
+const findLinkedPatternBook = (showId, books) =>
+  books.find((b) => bookShowLink(b) === showId) || null;
+
+/**
+ * Pattern books carry their own status vocabulary (with legacy spellings).
+ * Translate it into the workspace's 5-status system so the Pattern Book card
+ * mirrors the real book instead of tracking a separate value.
+ */
+const bookStatusToModuleStatus = (raw) => {
+  const s = (raw || '').toLowerCase();
+  if (['final', 'publication', 'published'].includes(s)) return MODULE_STATUS.PUBLISHED;
+  if (['locked', 'lock & approve mode'].includes(s)) return MODULE_STATUS.LOCKED;
+  if (s === 'draft') return MODULE_STATUS.DRAFT;
+  if (s === 'in progress') return MODULE_STATUS.IN_PROGRESS;
+  return MODULE_STATUS.NOT_STARTED;
+};
+
+/** Name of the *other* show a book is already attached to, or null. */
+const otherShowFor = (book, showId, shows) => {
+  const linked = bookShowLink(book);
+  if (!linked || linked === showId) return null;
+  const owner = shows.find((s) => s.id === linked);
+  return owner ? (owner.project_name || 'another show') : null;
+};
+
 /* ── Page ── */
 
 const ShowWorkspacePage = () => {
@@ -163,12 +223,16 @@ const ShowWorkspacePage = () => {
   const [linkedContracts, setLinkedContracts] = useState([]);
   const [associationsData, setAssociationsData] = useState([]);
   const [isGeneratingPacket, setIsGeneratingPacket] = useState(false);
+  const [patternBooks, setPatternBooks] = useState([]);
+  const [myShows, setMyShows] = useState([]);
+  const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
+  const [linkingBookId, setLinkingBookId] = useState(null);
 
   useEffect(() => {
     const fetchShow = async () => {
       if (!user || !showId) { setIsLoading(false); return; }
 
-      const [showRes, contractsRes] = await Promise.all([
+      const [showRes, contractsRes, booksRes, showsRes] = await Promise.all([
         // No user_id filter — RLS policy allows owner OR admin
         supabase
           .from('projects')
@@ -181,12 +245,25 @@ const ShowWorkspacePage = () => {
           .eq('user_id', user.id)
           .eq('project_type', 'contract')
           .filter('project_data->>linkedProjectId', 'eq', showId),
+        supabase
+          .from('projects')
+          .select('id, project_name, project_data, status')
+          .eq('user_id', user.id)
+          .eq('project_type', 'pattern_book')
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('projects')
+          .select('id, project_name')
+          .eq('user_id', user.id)
+          .eq('project_type', 'show'),
       ]);
 
       if (!showRes.error && showRes.data) {
         setShow(showRes.data);
       }
       setLinkedContracts(contractsRes.data || []);
+      setPatternBooks(booksRes.data || []);
+      setMyShows(showsRes.data || []);
 
       // Fetch associations for packet generator
       const { data: assocs } = await supabase.from('associations').select('*');
@@ -216,6 +293,41 @@ const ShowWorkspacePage = () => {
     showId,
     onProjectDataChange: handleProjectDataChange,
   });
+
+  // Attach a pattern book to this show, then open it. Any book previously
+  // pointing at this show is detached first so the link stays one-to-one.
+  const handleLinkPatternBook = useCallback(async (book) => {
+    setLinkingBookId(book.id);
+    try {
+      const stale = patternBooks.filter((b) => b.id !== book.id && bookShowLink(b) === showId);
+      for (const b of stale) {
+        const bpd = b.project_data || {};
+        const cleared = { ...bpd, linkedShowProjectId: null };
+        // linkedProjectId doubles as the auto-fill source — only clear it when
+        // it is what was pointing at this show.
+        if (bpd.linkedProjectId === showId) cleared.linkedProjectId = null;
+        await supabase.from('projects').update({ project_data: cleared }).eq('id', b.id);
+      }
+
+      const { error } = await supabase
+        .from('projects')
+        .update({ project_data: { ...(book.project_data || {}), linkedShowProjectId: showId } })
+        .eq('id', book.id);
+      if (error) throw error;
+
+      toast({
+        title: 'Pattern book linked',
+        description: `"${book.project_name || 'Untitled'}" now opens straight from this show.`,
+      });
+      setIsLinkDialogOpen(false);
+      navigate(`/pattern-book-builder/${book.id}`);
+    } catch (err) {
+      console.error('Failed to link pattern book:', err);
+      toast({ title: 'Could not link pattern book', description: err.message, variant: 'destructive' });
+    } finally {
+      setLinkingBookId(null);
+    }
+  }, [patternBooks, showId, navigate, toast]);
 
   const handleGeneratePacket = useCallback(async () => {
     if (!show?.project_data) return;
@@ -263,6 +375,7 @@ const ShowWorkspacePage = () => {
   const showName = show.project_name || 'Untitled Show';
   const showNumber = pd.showNumber;
   const displayName = `${showName}${showNumber ? ` #${showNumber}` : ''}`;
+  const linkedBook = findLinkedPatternBook(showId, patternBooks);
 
   const modules = [
     {
@@ -272,7 +385,23 @@ const ShowWorkspacePage = () => {
         { key: 'showStructure', icon: DollarSign, title: 'Show Structure & Expenses', description: 'Manage show expenses, fee structures, and sponsors.', to: `/horse-show-manager/show-structure-expenses/${showId}`, color: 'blue' },
         { key: 'feeStructure', icon: DollarSign, title: 'Fee Structure & Sponsors', description: 'Configure entry fees, stall fees, and sponsor levels.', to: `/horse-show-manager/fee-structure/${showId}`, color: 'blue' },
         { key: 'contracts', icon: FileText, title: 'Contract Management', description: 'Create and manage employee contracts for this show.', to: `/horse-show-manager/employee-management/contracts?showId=${showId}`, color: 'blue' },
-        { key: 'patternBook', icon: BookOpen, title: 'Pattern Book', description: 'Access pattern PDFs and score sheets for this show.', to: pd.linkedProjectId ? `/pattern-book-builder/${pd.linkedProjectId}` : '/pattern-book-builder', color: 'indigo' },
+        {
+          key: 'patternBook',
+          icon: BookOpen,
+          title: 'Pattern Book',
+          description: linkedBook
+            ? `Opens "${linkedBook.project_name || 'Untitled'}" — pattern PDFs and score sheets.`
+            : 'Choose which pattern book belongs to this show.',
+          color: 'indigo',
+          // Status is owned by the book itself — mirror it, don't edit it here.
+          ...(linkedBook
+            ? {
+                to: `/pattern-book-builder/${linkedBook.id}`,
+                status: bookStatusToModuleStatus(linkedBook.status),
+                statusReadOnly: true,
+              }
+            : { onClick: () => setIsLinkDialogOpen(true) }),
+        },
       ],
     },
     {
@@ -299,7 +428,8 @@ const ShowWorkspacePage = () => {
     ...section,
     items: section.items.map(item => ({
       ...item,
-      status: getStatus(item.key),
+      // A module may supply its own status (Pattern Book mirrors its book).
+      status: item.status ?? getStatus(item.key),
     })),
   }));
 
@@ -327,9 +457,11 @@ const ShowWorkspacePage = () => {
               All Shows
             </Button>
 
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h1 className="text-3xl font-extrabold tracking-tight text-foreground mb-2">
+            {/* Stacks on tablet/phone — side by side the title + 3 action buttons
+                overflowed the viewport and pushed the page sideways. */}
+            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground mb-2 break-words">
                   {displayName}
                 </h1>
                 <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
@@ -365,7 +497,7 @@ const ShowWorkspacePage = () => {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 flex-wrap lg:shrink-0">
                 {/* Show Lock/Unlock Toggle */}
                 {isShowLocked ? (
                   <Button
@@ -524,6 +656,66 @@ const ShowWorkspacePage = () => {
           ))}
         </main>
       </div>
+
+      {/* Pick which pattern book belongs to this show (asked once, then remembered) */}
+      <Dialog open={isLinkDialogOpen} onOpenChange={setIsLinkDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Link2 className="h-5 w-5 text-primary" />
+              Which pattern book belongs to this show?
+            </DialogTitle>
+            <DialogDescription>
+              Pick it once — after that the Pattern Book card opens it in one click.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {patternBooks.length === 0 && (
+              <p className="py-2 text-sm text-muted-foreground">
+                You don't have any pattern books yet.
+              </p>
+            )}
+
+            {patternBooks.map((b) => {
+              const takenBy = otherShowFor(b, showId, myShows);
+              return (
+              <button
+                key={b.id}
+                type="button"
+                disabled={!!linkingBookId || !!takenBy}
+                title={takenBy ? `Already used by ${takenBy}` : undefined}
+                onClick={() => handleLinkPatternBook(b)}
+                className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border disabled:hover:bg-transparent"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-foreground">
+                    {b.project_name || 'Untitled pattern book'}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {takenBy ? `Already used by ${takenBy}` : b.status}
+                  </span>
+                </span>
+                {linkingBookId === b.id ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+              );
+            })}
+
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => { setIsLinkDialogOpen(false); navigate('/pattern-book-builder'); }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create a new pattern book
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

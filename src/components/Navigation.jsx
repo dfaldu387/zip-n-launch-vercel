@@ -187,7 +187,10 @@ const Navigation = () => {
                         </motion.div>
                     </Link>
 
-                    <div className="hidden md:flex items-center flex-1 ml-6">
+                    {/* Full nav needs ~1200px (7 links + name + avatar + bell + theme).
+                        Below xl it overflowed off-screen on tablets, making the avatar
+                        untappable — so tablets get the compact bar + drawer instead. */}
+                    <div className="hidden xl:flex items-center flex-1 min-w-0 ml-6">
                         <div className="flex items-center space-x-1">
                             {getVisibleNavItems().map((item) => {
                                 const needsMembership = user && !hasMembership && MEMBERSHIP_REQUIRED_PATHS.some(p => item.path.startsWith(p));
@@ -211,7 +214,7 @@ const Navigation = () => {
                             {user ? (
                                 <>
                                     <div className="flex items-center gap-2">
-                                        <span className="text-sm font-medium hidden lg:inline">{user.user_metadata?.full_name || user.email}</span>
+                                        <span className="text-sm font-medium hidden 2xl:inline">{user.user_metadata?.full_name || user.email}</span>
                                         <UserMenu />
                                     </div>
                                     <JudgeNotificationPanel userEmail={user?.email} />
@@ -225,7 +228,15 @@ const Navigation = () => {
                         </div>
                     </div>
 
-                    <div className="md:hidden flex items-center">
+                    {/* Tablet / phone bar. The avatar menu stays here (not only in the
+                        drawer) so "My Projects" is always one tap away. */}
+                    <div className="xl:hidden flex items-center gap-1">
+                        {user && (
+                            <>
+                                <JudgeNotificationPanel userEmail={user?.email} />
+                                <UserMenu />
+                            </>
+                        )}
                         <Button variant="ghost" size="icon" onClick={() => setIsMenuOpen(!isMenuOpen)}>
                             {isMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
                         </Button>
@@ -239,7 +250,7 @@ const Navigation = () => {
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className="md:hidden bg-background/95 backdrop-blur-lg border-t border-border"
+                        className="xl:hidden bg-background/95 backdrop-blur-lg border-t border-border"
                     >
                         <div className="pt-4 pb-3 border-b border-border px-5">
                             {user ? (
@@ -251,7 +262,7 @@ const Navigation = () => {
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <JudgeNotificationPanel userEmail={user?.email} />
+                                        {/* bell lives in the top bar now */}
                                         <ThemeToggle />
                                     </div>
                                 </div>
