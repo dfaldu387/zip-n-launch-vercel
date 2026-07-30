@@ -24,12 +24,25 @@ import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { getPublishReadiness } from '@/lib/patternBookReadiness';
 import { sendCustomPatternRequests, summarizeRequests } from '@/lib/customPatternEmails';
 
+// Two vocabularies reach this screen for the same four states: the builder
+// writes 'Locked' / 'Final', and the Customer Portal status dropdown writes
+// 'Lock & Approve Mode' / 'Publication'. Both must be listed here — the lookup
+// below falls back to 'In progress' for anything unknown, so a book locked from
+// the portal used to show a misleading orange "In Progress" badge while the
+// whole builder was actually read-only.
 const STATUS_CONFIG = {
-  'In progress': { label: 'In Progress', color: 'bg-orange-100 text-orange-800 border-orange-300', dotColor: 'bg-orange-500' },
-  'Draft':       { label: 'Draft',       color: 'bg-yellow-100 text-yellow-800 border-yellow-300', dotColor: 'bg-yellow-500' },
-  'Locked':      { label: 'Locked',      color: 'bg-blue-100 text-blue-800 border-blue-300',      dotColor: 'bg-blue-600' },
-  'Final':       { label: 'Published',   color: 'bg-green-100 text-green-800 border-green-300',   dotColor: 'bg-green-600' },
+  'In progress':          { label: 'In Progress',     color: 'bg-orange-100 text-orange-800 border-orange-300', dotColor: 'bg-orange-500' },
+  'Draft':                { label: 'Draft',           color: 'bg-yellow-100 text-yellow-800 border-yellow-300', dotColor: 'bg-yellow-500' },
+  'Locked':               { label: 'Locked',          color: 'bg-blue-100 text-blue-800 border-blue-300',      dotColor: 'bg-blue-600' },
+  'Lock & Approve Mode':  { label: 'Apprvd & Locked', color: 'bg-blue-100 text-blue-800 border-blue-300',      dotColor: 'bg-blue-600' },
+  'Final':                { label: 'Published',       color: 'bg-green-100 text-green-800 border-green-300',   dotColor: 'bg-green-600' },
+  'Publication':          { label: 'Published',       color: 'bg-green-100 text-green-800 border-green-300',   dotColor: 'bg-green-600' },
 };
+
+// Every status that makes the builder read-only. Kept next to STATUS_CONFIG so
+// the two lists cannot drift apart again.
+const LOCKED_STATUSES = ['Locked', 'Lock & Approve Mode'];
+const PUBLISHED_STATUSES = ['Final', 'Publication'];
 
 const accessPhases = [
     { id: 'draft', name: 'Draft, Build, Review' },
@@ -725,8 +738,14 @@ const ProjectInfoCard = ({ formData, user }) => {
 
 // --- Action Panel (Center Panel) ---
 const ActionPanel = ({ currentStatus, onStatusChange, isSaving, savingAction, isReadOnly, formData, setFormData }) => {
-  const isFinalized = currentStatus === 'Final';
-  const isLocked = currentStatus === 'Locked' || isFinalized;
+  // These two decide whether "Save Draft" turns into the "Unlock & Save as
+  // Draft" escape hatch. They previously only matched the builder's own
+  // 'Locked'/'Final', so a book locked from the Customer Portal
+  // ('Lock & Approve Mode' / 'Publication') was read-only with isLocked=false —
+  // which disabled the one button that could release it. The project was then
+  // stuck read-only for good, with no way out short of editing the database.
+  const isFinalized = PUBLISHED_STATUSES.includes(currentStatus);
+  const isLocked = LOCKED_STATUSES.includes(currentStatus) || isFinalized;
   const [showExportDialog, setShowExportDialog] = useState(false);
   const isSavingDraft = savingAction === 'Draft';
   const isSavingLock = savingAction === 'Locked';
