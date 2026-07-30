@@ -736,7 +736,7 @@ export const SponsorsStep = ({ formData, setFormData }) => {
 
                 {/* ── Sponsor Type Tabs ── */}
                 <Tabs defaultValue="level" className="w-full">
-                    <TabsList className="grid w-full grid-cols-4">
+                    <TabsList className="grid h-auto w-full grid-cols-2 sm:h-10 sm:grid-cols-4">
                         <TabsTrigger value="level" className="text-xs sm:text-sm gap-1">
                             <Crown className="h-3.5 w-3.5 hidden sm:inline" />
                             Level

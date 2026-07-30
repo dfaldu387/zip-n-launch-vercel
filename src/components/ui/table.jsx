@@ -2,7 +2,11 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 const Table = React.forwardRef(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  // touch-scroll-x gives the wrapper iOS momentum scrolling; without it a wide
+  // table on iPad only moved if you happened to start the drag on a gap
+  // between cells. overscroll-x-contain stops that drag from turning into a
+  // browser back-swipe once you hit the last column.
+  <div className="relative w-full overflow-x-auto overscroll-x-contain touch-scroll-x">
     <table
       ref={ref}
       className={cn("w-full caption-bottom text-sm", className)}

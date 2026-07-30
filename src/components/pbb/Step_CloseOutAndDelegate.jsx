@@ -441,24 +441,24 @@ const StaffDelegationCard = ({ staffMember, disciplines, onUpdate, onContactUpda
                                             </DialogDescription>
                                         </DialogHeader>
                                         <div className="grid gap-4 py-4">
-                                            <div className="grid grid-cols-4 items-center gap-4">
-                                                <Label htmlFor={`name-${staffMember.id}`} className="text-right">
+                                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                                                <Label htmlFor={`name-${staffMember.id}`} className="text-left sm:text-right">
                                                     Name
                                                 </Label>
                                                 <Input
                                                     id={`name-${staffMember.id}`}
                                                     value={editedContact.name}
                                                     onChange={(e) => setEditedContact(prev => ({ ...prev, name: e.target.value }))}
-                                                    className="col-span-3"
+                                                    className="sm:col-span-3"
                                                     placeholder="Full Name"
                                                 />
                                             </div>
                                             
-                                            <div className="grid grid-cols-4 items-center gap-4">
-                                                <Label htmlFor={`email-${staffMember.id}`} className="text-right">
+                                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                                                <Label htmlFor={`email-${staffMember.id}`} className="text-left sm:text-right">
                                                     Email
                                                 </Label>
-                                                <div className="col-span-3 space-y-2">
+                                                <div className="sm:col-span-3 space-y-2">
                                                     <div className="flex gap-2">
                                                         <Input
                                                             id={`email-${staffMember.id}`}
@@ -479,25 +479,25 @@ const StaffDelegationCard = ({ staffMember, disciplines, onUpdate, onContactUpda
                                                 </div>
                                             </div>
                                             
-                                            <div className="grid grid-cols-4 items-center gap-4">
-                                                <Label htmlFor={`phone-${staffMember.id}`} className="text-right">
+                                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                                                <Label htmlFor={`phone-${staffMember.id}`} className="text-left sm:text-right">
                                                     Phone
                                                 </Label>
                                                 <Input
                                                     id={`phone-${staffMember.id}`}
                                                     value={editedContact.phone}
                                                     onChange={(e) => setEditedContact(prev => ({ ...prev, phone: e.target.value }))}
-                                                    className="col-span-3"
+                                                    className="sm:col-span-3"
                                                     placeholder="(555) 123-4567"
                                                 />
                                             </div>
 
                                             {existingUser && existingUser.role && (
-                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
                                                     <Label className="text-right text-xs text-muted-foreground">
                                                         Current Role
                                                     </Label>
-                                                    <div className="col-span-3">
+                                                    <div className="sm:col-span-3">
                                                         <Badge variant="secondary">{existingUser.role}</Badge>
                                                     </div>
                                                 </div>

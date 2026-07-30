@@ -15,8 +15,20 @@ const SortableItem = ({ id, children }) => {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id });
   const style = { transform: CSS.Transform.toString(transform), transition };
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="flex items-center gap-2 p-3 bg-background border rounded-lg">
-      <GripVertical className="h-5 w-5 text-muted-foreground cursor-grab" />
+    // The drag listeners used to sit on the whole row, which meant a finger
+    // dragging anywhere on the row fought the page scroll and never started a
+    // drag on touch. Moving them onto the grip — the only touch-none element —
+    // makes the handle draggable and leaves the rest of the row scrollable.
+    <div ref={setNodeRef} style={style} className="flex items-center gap-2 p-3 bg-background border rounded-lg">
+      <button
+        type="button"
+        aria-label="Reorder page"
+        className="touch-none cursor-grab active:cursor-grabbing"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="h-5 w-5 text-muted-foreground" />
+      </button>
       {children}
     </div>
   );
@@ -78,7 +90,7 @@ const PacketBuilderPage = () => {
         <Navigation />
         <main className="container mx-auto px-4 py-8">
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-            <h1 className="text-4xl font-extrabold tracking-tight">Packet Builder</h1>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight">Packet Builder</h1>
             <p className="text-lg text-muted-foreground">Drag and drop pages to build your custom packet.</p>
           </motion.div>
 

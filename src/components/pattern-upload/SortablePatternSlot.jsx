@@ -83,7 +83,7 @@ const SortablePatternSlot = ({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 cursor-grab"
+            className="h-8 w-8 cursor-grab touch-none"
             {...listeners}
             {...attributes}
           >

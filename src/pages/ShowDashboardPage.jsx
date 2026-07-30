@@ -109,7 +109,7 @@ const ShowDashboardPage = () => {
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-4xl font-extrabold tracking-tight">{show.name}</h1>
+                <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight">{show.name}</h1>
                 <p className="text-lg text-muted-foreground">
                   {show.start_date && show.end_date
                     ? `${format(new Date(show.start_date), 'PPP')} - ${format(new Date(show.end_date), 'PPP')}`

@@ -54,6 +54,112 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Nothing may push the document sideways. `clip` and not `hidden` on purpose:
+     `hidden` turns the root into a scroll container, which kills the sticky
+     navbar; `clip` cuts the overflow without creating one. Browsers that don't
+     know `clip` just ignore the line and behave as before. */
+  html {
+    overflow-x: clip;
+  }
+
+  /* Safari still applies a ~300ms wait to taps on anything that isn't marked
+     `manipulation`, so every button on iPad/iPhone felt laggy and fast double
+     taps were swallowed instead of firing twice. */
+  button,
+  a,
+  label,
+  summary,
+  select,
+  [role='button'],
+  [role='tab'],
+  [role='menuitem'],
+  [role='option'] {
+    touch-action: manipulation;
+  }
+
+  /* Long words (emails, file names, IDs) were the main source of horizontal
+     overflow inside cards and table cells. */
+  h1, h2, h3, h4, h5, h6, p {
+    overflow-wrap: break-word;
+  }
+}
+
+/* iOS Safari zooms the whole page whenever a focused field's font is under
+   16px. Our fields are text-sm (14px), so every tap on a form zoomed the
+   layout and left the user scrolled sideways with no way back. Scoped to touch
+   devices so a narrow desktop window keeps the tighter type. */
+@media (pointer: coarse) and (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Apple and Google both ask for a 44px minimum. Radix renders menu, listbox
+   and command rows at ~32px, which is a coin toss to hit with a thumb. */
+@media (pointer: coarse) {
+  [role='menuitem'],
+  [role='menuitemcheckbox'],
+  [role='menuitemradio'],
+  [role='option'],
+  [cmdk-item] {
+    min-height: 44px;
+  }
+}
+
+/* Row actions across the app (delete a maneuver, remove a staged PDF, edit a
+   schedule block) are drawn at opacity-0 and revealed by group-hover. A finger
+   never produces hover, so on iPad and phones those controls were invisible and
+   effectively missing. On a device with no hover, show them permanently.
+   Targets the class Tailwind generates, so it covers every call site at once. */
+@media (hover: none) {
+  .group .group-hover\:opacity-100 {
+    opacity: 1;
+  }
+}
+
+/* Horizontal strips (tab bars, toolbars, table wrappers) that must scroll with
+   a finger but shouldn't show a bar eating into a 40px-tall control. */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Momentum scrolling for horizontal strips. Deliberately no `touch-action`
+   here: locking it to pan-x would stop a finger that lands on a tab bar or a
+   table from scrolling the page vertically. */
+.touch-scroll-x {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Dialogs must never grow past the visible viewport. dvh is the accurate value
+   on mobile (it excludes the collapsing browser chrome); vh is the fallback for
+   browsers that don't support it. Declared as a component so page-level
+   max-h-* utilities still win. */
+@layer components {
+  /* 95, not 90: four dialogs already ask for h-[92vh] / h-[95vh] and a 90%
+     cap would have silently shrunk them on desktop. At 95 those are unchanged
+     where vh == dvh, and only get clamped on mobile — which is exactly the
+     case they were overflowing in. */
+  .dialog-fit-viewport {
+    max-height: 95vh;
+    max-height: 95dvh;
+  }
+
+  /* The mobile nav drawer lives inside a `sticky top-0` header. Once the drawer
+     was taller than the screen its lower rows (Billing, Logout) could not be
+     scrolled to, because the sticky header stays pinned and the page scroll
+     moves the content underneath it instead. 5rem is the h-20 bar above it. */
+  .nav-drawer-scroll {
+    max-height: calc(100vh - 5rem);
+    max-height: calc(100dvh - 5rem);
+  }
 }
 
 body {

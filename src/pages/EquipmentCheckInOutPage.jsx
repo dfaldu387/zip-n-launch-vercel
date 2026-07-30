@@ -781,7 +781,7 @@ const EquipmentCheckInOutPage = () => {
 
             {/* Tabs */}
             <Tabs defaultValue="check-in">
-              <TabsList className="grid w-full grid-cols-4 mb-6">
+              <TabsList className="grid h-auto w-full grid-cols-2 sm:h-10 sm:grid-cols-4 mb-6">
                 <TabsTrigger value="check-in">Check In</TabsTrigger>
                 <TabsTrigger value="check-out">Check Out</TabsTrigger>
                 <TabsTrigger value="transfers">Transfers</TabsTrigger>

@@ -3,6 +3,7 @@ import {
     DndContext,
     DragOverlay,
     PointerSensor,
+    TouchSensor,
     useDraggable,
     useDroppable,
     useSensor,
@@ -307,7 +308,12 @@ const CustomLayoutBuilder = ({ open, onOpenChange, formData, setFormData }) => {
         [allItems, placedItemIds]
     );
 
-    const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+    // The whole pattern card is draggable, so it can't be touch-none without
+    // killing scrolling in the picker. Press-and-hold starts the drag on touch.
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+        useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } })
+    );
 
     // ---- Layout mutation helpers ----
     const removeItemFromSlot = useCallback((pageId, slotIndex) => {

@@ -189,7 +189,7 @@ const AccountSecurityPage = () => {
           </div>
 
           <Tabs defaultValue="2fa" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-4 lg:w-[650px]">
+            <TabsList className="grid h-auto w-full grid-cols-2 sm:h-10 sm:grid-cols-4 lg:w-[650px]">
               <TabsTrigger value="2fa" className="flex items-center gap-2">
                 <Key className="h-4 w-4" />
                 <span className="hidden sm:inline">2-Step Verification</span>

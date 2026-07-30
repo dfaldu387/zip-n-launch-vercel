@@ -22,6 +22,12 @@ const buttonVariants = cva(
 				default: 'h-10 px-4 py-2',
 				sm: 'h-9 rounded-md px-3',
 				lg: 'h-11 rounded-md px-8',
+				// Left at 40px on purpose. A coarse-pointer bump to 44px cannot be
+				// expressed here without breaking the ~30 call sites that pass an
+				// explicit `h-8 w-8`: tailwind-merge keeps a modifier-scoped
+				// default alongside an unmodified override, so those buttons would
+				// silently grow on iPad. Touch sizing for those is a per-call-site
+				// change, tracked separately.
 				icon: 'h-10 w-10',
 			},
 		},

@@ -228,7 +228,7 @@ const SortableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
             <Accordion type="single" collapsible className="w-full bg-card border rounded-lg shadow-sm overflow-hidden">
                 <AccordionItem value={fee.id} className="border-none">
                     <div className="flex items-center px-4 py-2">
-                         <div {...listeners} className="cursor-grab text-muted-foreground hover:text-foreground p-2">
+                         <div {...listeners} className="touch-none cursor-grab text-muted-foreground hover:text-foreground p-2">
                             <GripVertical className="h-5 w-5" />
                         </div>
                         <AccordionTrigger className="flex-grow text-left hover:no-underline py-0">

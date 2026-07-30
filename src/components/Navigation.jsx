@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,22 @@ const Navigation = () => {
     const hasMembership = isAdmin || isSubscribed;
 
     const isStaffPortal = location.pathname === '/staff-portal';
+
+    // The drawer used to stay open after navigating, so tapping a link on a
+    // phone left the menu covering the page you had just asked for.
+    useEffect(() => {
+        setIsMenuOpen(false);
+    }, [location.pathname]);
+
+    // Escape closes the drawer, matching every other overlay in the app.
+    useEffect(() => {
+        if (!isMenuOpen) return;
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') setIsMenuOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isMenuOpen]);
 
     const navItems = [
         { name: 'Home', path: '/', show: 'always' },
@@ -237,21 +254,50 @@ const Navigation = () => {
                                 <UserMenu />
                             </>
                         )}
-                        <Button variant="ghost" size="icon" onClick={() => setIsMenuOpen(!isMenuOpen)}>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setIsMenuOpen(!isMenuOpen)}
+                            aria-label={isMenuOpen ? 'Close menu' : 'Open menu'}
+                            aria-expanded={isMenuOpen}
+                            aria-controls="mobile-nav-drawer"
+                        >
                             {isMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
                         </Button>
                     </div>
                 </div>
             </nav>
 
+            {/* Tapping the page behind the drawer closes it, the way every other
+                menu in the app behaves. Portalled to <body> on purpose: the
+                header uses backdrop-blur, and a backdrop-filter makes its box the
+                containing block for fixed children — a click-away layer rendered
+                inside the header would have been trapped over the drawer instead
+                of covering the page. */}
+            {isMenuOpen && createPortal(
+                <div
+                    className="fixed inset-x-0 bottom-0 top-20 z-40 xl:hidden"
+                    onClick={() => setIsMenuOpen(false)}
+                    aria-hidden="true"
+                />,
+                document.body
+            )}
+
             <AnimatePresence>
                 {isMenuOpen && (
                     <motion.div
+                        id="mobile-nav-drawer"
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className="xl:hidden bg-background/95 backdrop-blur-lg border-t border-border"
+                        // overflow-hidden keeps the rows from spilling out
+                        // during the height animation; relative z-10 puts the
+                        // drawer above the click-away layer.
+                        className="xl:hidden relative z-10 overflow-hidden bg-background/95 backdrop-blur-lg border-t border-border"
                     >
+                      {/* Own scroll area: without it the tail of the account
+                          list was unreachable on any phone (see nav-drawer-scroll). */}
+                      <div className="nav-drawer-scroll overflow-y-auto overscroll-contain touch-scroll">
                         <div className="pt-4 pb-3 border-b border-border px-5">
                             {user ? (
                                 <div className="flex items-center justify-between">
@@ -282,7 +328,7 @@ const Navigation = () => {
                                     <Link
                                         key={item.name}
                                         to={needsMembership ? '/membership' : item.path}
-                                        className={`block px-3 py-2 rounded-md text-base font-medium ${item.highlight ? 'bg-primary text-primary-foreground' : (location.pathname === item.path ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent/50')}`}
+                                        className={`flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium ${item.highlight ? 'bg-primary text-primary-foreground' : (location.pathname === item.path ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent/50')}`}
                                         onClick={() => setIsMenuOpen(false)}
                                     >
                                         {item.name}
@@ -292,19 +338,23 @@ const Navigation = () => {
                         </div>
                          {user && (
                             <div className="pt-4 pb-3 border-t border-border px-5 space-y-1">
-                                {isAdmin && <Link to="/admin" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><LayoutDashboard className="inline-block mr-2 h-4 w-4"/>Admin</Link>}
-                                {isAdmin && <Link to="/admin/tracking-user" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Activity className="inline-block mr-2 h-4 w-4"/>Tracking User</Link>}
-                                <Link to={hasMembership ? "/customer-portal" : "/membership"} className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Library className="inline-block mr-2 h-4 w-4"/>My Projects</Link>
-                                {!isAdmin && <Link to="/contributor-portal" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Palette className="inline-block mr-2 h-4 w-4"/>Contributor Portal</Link>}
-                                <Link to={hasMembership ? "/archive-patterns" : "/membership"} className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Archive className="inline-block mr-2 h-4 w-4"/>Archive Pattern</Link>
-                                <Link to="/judges-portal" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Gavel className="inline-block mr-2 h-4 w-4"/>Judges Portal</Link>
-                                <Link to="/staff-portal" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Briefcase className="inline-block mr-2 h-4 w-4"/>Staff Portal</Link>
-                                <Link to="/profile" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Edit className="inline-block mr-2 h-4 w-4"/>Edit Profile</Link>
-                                <Link to="/account-security" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Shield className="inline-block mr-2 h-4 w-4"/>Account & Security</Link>
-                                <Link to="/billing-history" className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Receipt className="inline-block mr-2 h-4 w-4"/>Billing & History</Link>
-                                <a href="#" onClick={() => { signOut(); setIsMenuOpen(false); }} className="block px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50"><LogOut className="inline-block mr-2 h-4 w-4" />Logout</a>
+                                {isAdmin && <Link to="/admin" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><LayoutDashboard className="inline-block mr-2 h-4 w-4"/>Admin</Link>}
+                                {isAdmin && <Link to="/admin/tracking-user" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Activity className="inline-block mr-2 h-4 w-4"/>Tracking User</Link>}
+                                <Link to={hasMembership ? "/customer-portal" : "/membership"} className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Library className="inline-block mr-2 h-4 w-4"/>My Projects</Link>
+                                {!isAdmin && <Link to="/contributor-portal" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Palette className="inline-block mr-2 h-4 w-4"/>Contributor Portal</Link>}
+                                <Link to={hasMembership ? "/archive-patterns" : "/membership"} className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Archive className="inline-block mr-2 h-4 w-4"/>Archive Pattern</Link>
+                                <Link to="/judges-portal" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Gavel className="inline-block mr-2 h-4 w-4"/>Judges Portal</Link>
+                                <Link to="/staff-portal" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Briefcase className="inline-block mr-2 h-4 w-4"/>Staff Portal</Link>
+                                <Link to="/profile" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Edit className="inline-block mr-2 h-4 w-4"/>Edit Profile</Link>
+                                <Link to="/account-security" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Shield className="inline-block mr-2 h-4 w-4"/>Account & Security</Link>
+                                <Link to="/billing-history" className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50" onClick={() => setIsMenuOpen(false)}><Receipt className="inline-block mr-2 h-4 w-4"/>Billing & History</Link>
+                                {/* Was an <a href="#">, which jumped the page to the
+                                    top before signing out and was not reachable as a
+                                    control by keyboard or screen reader. */}
+                                <button type="button" onClick={() => { signOut(); setIsMenuOpen(false); }} className="flex w-full min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50"><LogOut className="inline-block mr-2 h-4 w-4" />Logout</button>
                             </div>
                          )}
+                      </div>
                     </motion.div>
                 )}
             </AnimatePresence>

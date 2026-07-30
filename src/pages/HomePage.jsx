@@ -158,7 +158,12 @@ const HomePage = () => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-                <Link to="/pattern-book-builder" className="block">
+                {/* The whole block used to be wrapped in a second <Link> to the
+                    same page as the button below it. That nests an <a> inside an
+                    <a>, which is invalid HTML — browsers recover from it however
+                    they like, and on touch the tap could land on either anchor.
+                    The button is the real call to action, so the outer link is
+                    gone and this block now matches its sibling on the right. */}
                   <div className="space-y-6">
                     <Badge variant="outline" className="text-primary border-primary">Management & Judges</Badge>
                     <h2 className="text-3xl sm:text-4xl font-extrabold text-foreground tracking-tight">Pattern Book Builder</h2>
@@ -172,7 +177,6 @@ const HomePage = () => {
                         <Link to="/pattern-book-builder">Pattern Book Builder <ArrowRight className="ml-2 h-5 w-5" /></Link>
                     </Button>
                   </div>
-                </Link>
                 <div className="space-y-6">
                 <Badge variant="outline" className="text-primary border-primary">For Designers</Badge>
                 <h2 className="text-3xl sm:text-4xl font-extrabold text-foreground tracking-tight">Earn Creator Benefits & Share Your Expertise</h2>

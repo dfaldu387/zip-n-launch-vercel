@@ -613,7 +613,7 @@ const DistributionPlanPage = () => {
 
                 {/* Tabs */}
                 <Tabs defaultValue="by-arena">
-                  <TabsList className="grid w-full grid-cols-4 mb-6">
+                  <TabsList className="grid h-auto w-full grid-cols-2 sm:h-10 sm:grid-cols-4 mb-6">
                     <TabsTrigger value="by-arena">By Arena</TabsTrigger>
                     <TabsTrigger value="by-discipline">By Discipline</TabsTrigger>
                     <TabsTrigger value="shortages">

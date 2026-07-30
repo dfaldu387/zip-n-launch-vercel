@@ -293,7 +293,7 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                                         {currentExpense?.reimbursed && (
                                             <div className="pt-2 space-y-2">
                                                 {expense.isMileage ? (
-                                                    <div className="grid grid-cols-3 gap-2">
+                                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                                                         <div className="space-y-1">
                                                             <Label className="text-xs">Miles</Label>
                                                             <Input type="number" disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} placeholder="e.g., 200" value={currentExpense.miles || ''} onChange={(e) => handleExpenseChange(expense.id, 'miles', e.target.value)} />
@@ -308,7 +308,7 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                                                         </div>
                                                     </div>
                                                 ) : expense.isPerDay ? (
-                                                    <div className="grid grid-cols-3 gap-2">
+                                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                                                         <div className="space-y-1">
                                                             <Label className="text-xs">Days</Label>
                                                             <Input type="number" value={currentExpense.days || 0} readOnly disabled className="bg-muted"/>

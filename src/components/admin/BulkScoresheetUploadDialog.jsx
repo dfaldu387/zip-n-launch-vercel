@@ -230,7 +230,7 @@ const BulkScoresheetUploadDialog = ({ open, onOpenChange, associations, discipli
                 </DialogHeader>
 
                 <div className="grid gap-4 py-2 overflow-y-auto pr-2">
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                         <div>
                             <Label>Document Type *</Label>
                             <Select value={docType} onValueChange={setDocType}>

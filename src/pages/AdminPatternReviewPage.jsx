@@ -1268,7 +1268,7 @@ const AdminPatternReviewPage = () => {
               <>
                 {/* Filter Tabs */}
                 <Tabs value={activeFilter} onValueChange={(v) => { setActiveFilter(v); setSelectedSets(new Set()); }} className="mb-6">
-                  <TabsList className="grid w-full grid-cols-4">
+                  <TabsList className="grid h-auto w-full grid-cols-2 sm:h-10 sm:grid-cols-4">
                     <TabsTrigger value="all" className="flex items-center gap-2">
                       All <Badge variant="secondary" className="ml-1">{pendingPatterns.length + approvedPatterns.length + rejectedPatterns.length}</Badge>
                     </TabsTrigger>

@@ -18,6 +18,17 @@ const JudgeNotificationPanel = ({ userEmail }) => {
 
     const unreadCount = notifications.filter(n => !n.is_read).length;
 
+    // The panel is a modal drawer but had no Escape handler, so on a keyboard
+    // the only way out was to find and click the small X.
+    useEffect(() => {
+        if (!isOpen) return;
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') setIsOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isOpen]);
+
     // Handle notification click — route by notification type. Pattern review
     // events (approve/reject/publish) belong in the Contributor Portal; legacy
     // judge assignments still go to /judges-portal.

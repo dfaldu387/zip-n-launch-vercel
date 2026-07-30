@@ -134,7 +134,7 @@ const CustomizePage = () => {
               <CardContent className="space-y-6">
                 <div>
                   <Label className="font-semibold">Branding Mode</Label>
-                  <RadioGroup defaultValue="Light" value={form.branding} onValueChange={(value) => handleInputChange('branding', value)} className="mt-2 grid grid-cols-3 gap-4">
+                  <RadioGroup defaultValue="Light" value={form.branding} onValueChange={(value) => handleInputChange('branding', value)} className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div><RadioGroupItem value="Light" id="r1" /><Label htmlFor="r1" className="ml-2">Default</Label></div>
                     <div className="flex items-center">
                       <RadioGroupItem value="Custom" id="r3" /><Label htmlFor="r3" className="ml-2">Custom</Label>

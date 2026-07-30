@@ -150,9 +150,9 @@ const MediaLibraryPage = () => {
               <DialogTitle>Upload to {currentUploadFolder.cat2 || currentUploadFolder.cat1}</DialogTitle>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="file" className="text-right">File</Label>
-                <Input id="file" type="file" onChange={(e) => setFileToUpload(e.target.files[0])} className="col-span-3" />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                <Label htmlFor="file" className="text-left sm:text-right">File</Label>
+                <Input id="file" type="file" onChange={(e) => setFileToUpload(e.target.files[0])} className="sm:col-span-3" />
               </div>
                <div className="flex justify-end">
                 <Button variant="ghost" onClick={handleAiGenerate} disabled={!fileToUpload || isAiGenerating}>
@@ -160,17 +160,17 @@ const MediaLibraryPage = () => {
                     AI Generate
                 </Button>
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="fileName" className="text-right">Display Name</Label>
-                <Input id="fileName" value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder="e.g., homepage_bg_horse_running.jpg" className="col-span-3" />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                <Label htmlFor="fileName" className="text-left sm:text-right">Display Name</Label>
+                <Input id="fileName" value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder="e.g., homepage_bg_horse_running.jpg" className="sm:col-span-3" />
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="altText" className="text-right">Alt Text</Label>
-                <Input id="altText" value={altText} onChange={(e) => setAltText(e.target.value)} placeholder="e.g., Brown horse running in a green field" className="col-span-3"/>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                <Label htmlFor="altText" className="text-left sm:text-right">Alt Text</Label>
+                <Input id="altText" value={altText} onChange={(e) => setAltText(e.target.value)} placeholder="e.g., Brown horse running in a green field" className="sm:col-span-3"/>
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="tags" className="text-right">Tags</Label>
-                <Textarea id="tags" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="e.g., outdoor, horse, action (comma-separated)" className="col-span-3" />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+                <Label htmlFor="tags" className="text-left sm:text-right">Tags</Label>
+                <Textarea id="tags" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="e.g., outdoor, horse, action (comma-separated)" className="sm:col-span-3" />
               </div>
             </div>
             <DialogFooter>

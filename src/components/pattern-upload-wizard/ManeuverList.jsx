@@ -45,7 +45,7 @@ const SortableManeuverItem = ({ maneuver, index, onUpdate, onDelete }) => {
       className="flex items-center gap-2 p-2 rounded-md border bg-card group"
     >
       <button
-        className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
+        className="touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
         {...attributes}
         {...listeners}
       >

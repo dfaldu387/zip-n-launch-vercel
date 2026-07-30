@@ -16,18 +16,21 @@ export function PageHeader({ title, subtitle, backTo = '/horse-show-manager', ba
   const navigate = useNavigate();
 
   return (
-    <div className="flex items-center mb-8 relative min-h-[40px]">
+    // The title used to be absolutely centred over the whole row, so on a phone
+    // it printed straight across the Back button. It only overlays from md up,
+    // where there is room for it; below that the two stack.
+    <div className="mb-8 flex flex-col gap-3 md:relative md:min-h-[40px] md:flex-row md:items-center md:gap-0">
       <Button
         variant="outline"
         size="sm"
         onClick={() => navigate(backTo)}
-        className="shrink-0 z-10"
+        className="w-fit shrink-0 z-10"
       >
         <ArrowLeft className="mr-2 h-4 w-4" />
         {backLabel}
       </Button>
-      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-        <h1 className="text-2xl font-bold text-foreground">{title}</h1>
+      <div className="flex flex-col md:pointer-events-none md:absolute md:inset-0 md:items-center md:justify-center">
+        <h1 className="text-xl font-bold text-foreground sm:text-2xl">{title}</h1>
         {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
       </div>
     </div>

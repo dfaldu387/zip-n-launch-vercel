@@ -453,7 +453,7 @@ const ExpenseDetailRow = ({ expense, onUpdateExpense, onRemoveExpense, locked, i
         <div ref={setNodeRef} style={style} className="flex items-center gap-1.5 py-1.5 px-2 border-b last:border-0 hover:bg-muted/30 bg-background">
             {/* Drag handle */}
             {!locked && (
-                <button type="button" className="flex-shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground" {...attributes} {...listeners}>
+                <button type="button" className="flex-shrink-0 touch-none cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground" {...attributes} {...listeners}>
                     <GripVertical className="h-3.5 w-3.5" />
                 </button>
             )}

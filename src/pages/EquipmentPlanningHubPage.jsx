@@ -1,7 +1,7 @@
 import React from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Package, Ruler, CalendarDays, Truck, MapPin, ClipboardCheck, RefreshCcw, FileBarChart, Calculator } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import Navigation from '@/components/Navigation';
@@ -68,6 +68,7 @@ const sections = [
 
 const EquipmentPlanningHubPage = () => {
   const { showId } = useParams();
+  const navigate = useNavigate();
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <Helmet><title>Equipment Planning - EquiPatterns</title></Helmet>
@@ -97,14 +98,24 @@ const EquipmentPlanningHubPage = () => {
                   <p className="text-gray-600 dark:text-gray-300 text-sm flex-grow">{section.description}</p>
                   {section.subLink && (
                     <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
-                      <Link
-                        to={section.subLink.path}
+                      {/* A <button>, not a <Link>: the whole card is already an
+                          <a>, and an <a> inside an <a> is invalid HTML. The
+                          stopPropagation that used to be here stopped the click
+                          bubbling but could not stop the browser splitting the
+                          two anchors apart while parsing, which is why the sub
+                          link was unreliable to tap. */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          navigate(section.subLink.path);
+                        }}
                         className="text-sm text-primary hover:underline flex items-center gap-1"
-                        onClick={(e) => e.stopPropagation()}
                       >
                         <section.subLink.icon className="h-3 w-3" />
                         {section.subLink.label}
-                      </Link>
+                      </button>
                     </div>
                   )}
                   <div className="mt-4 text-right">

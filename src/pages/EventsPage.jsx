@@ -47,7 +47,7 @@ import { Label } from '@/components/ui/label';
 import { downloadPatternBookFolder } from '@/lib/patternBookDownloader';
 import JSZip from 'jszip';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, closestCenter, pointerWithin, useDraggable, useDroppable } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors, closestCenter, pointerWithin, useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { EventCard, getComputedStatus } from '@/components/events/EventCard';
@@ -405,7 +405,10 @@ const EventsPage = () => {
       {/* Pattern Book Dialog */}
       {selectedProject && (
         <Dialog open={patternBookDialogOpen} onOpenChange={setPatternBookDialogOpen}>
-          <DialogContent className="w-[95vw] h-screen max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
+          {/* h-screen is 100vh, which on mobile Safari/Chrome is taller than the
+              visible area — the bottom of the pattern book ran under the browser
+              chrome. 100dvh tracks the area that is actually on screen. */}
+          <DialogContent className="w-[95vw] h-[100dvh] max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
             <DialogTitle className="sr-only">Pattern Book</DialogTitle>
             <EventPatternBookDialogContent
               project={selectedProject}
@@ -477,12 +480,20 @@ const EventPatternBookDialogContent = ({ project, profile, user, associationsDat
     const [activeId, setActiveId] = useState(null);
     const [draggedItem, setDraggedItem] = useState(null);
     
-    // Drag and drop sensors
+    // Drag and drop sensors. The whole row is the drag handle here, so it can't
+    // be marked touch-none — that would stop a finger scrolling the list. The
+    // TouchSensor gives touch users a press-and-hold to start a drag instead,
+    // which leaves ordinary scrolling untouched. Without it, reordering was
+    // impossible on iPad: the browser treated every drag as a scroll and
+    // cancelled the pointer events PointerSensor was waiting on.
     const sensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
                 distance: 8,
             },
+        }),
+        useSensor(TouchSensor, {
+            activationConstraint: { delay: 200, tolerance: 8 },
         })
     );
     

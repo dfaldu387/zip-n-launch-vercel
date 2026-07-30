@@ -405,7 +405,7 @@ const SortableDisciplineItem = ({ pbbDiscipline, mergedDisciplines, isOpenShowMo
             <AccordionItem value={pbbDiscipline.id} className="border-b-0">
                 <AccordionTrigger className="w-full px-3 py-2 hover:no-underline">
                     <div className="flex items-center w-full gap-3">
-                        <div {...attributes} {...listeners} className="cursor-grab p-1">
+                        <div {...attributes} {...listeners} className="touch-none cursor-grab p-1">
                             <GripVertical className="h-4 w-4 text-muted-foreground" />
                         </div>
                         <div className="flex-grow text-left min-w-0">

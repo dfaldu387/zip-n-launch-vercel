@@ -82,7 +82,7 @@ const EquiPatternsDashboard = () => {
         <Navigation />
         <main className="container mx-auto px-4 py-8">
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-            <h1 className="text-4xl font-extrabold tracking-tight">EquiPatterns Dashboard</h1>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight">EquiPatterns Dashboard</h1>
             <p className="text-lg text-muted-foreground">Your command center for pattern and show management.</p>
           </motion.div>
 
