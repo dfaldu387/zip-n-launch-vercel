@@ -237,12 +237,19 @@ export const useShowBuilder = (showId) => {
     updatedCompletedSteps.add(step);
     setCompletedSteps(updatedCompletedSteps);
 
+    // Unlock is a deliberate downgrade from a frozen (locked/published) state back to
+    // draft. It must force the module AND the top-level status to draft and clear the
+    // global lock, otherwise a stale 'locked' showStatus keeps the wizard read-only.
+    const isUnlock = statusOverride === 'force_unlock';
+
     // Auto-advance module status when moduleKey is provided.
     // Uses stampModuleStatusOnSave: NOT_STARTED→IN_PROGRESS→DRAFT (auto).
     // Explicit locked/published (e.g. from Step 8 "Save & Manage") is respected.
     let updatedModuleStatuses = formData.moduleStatuses || {};
     if (moduleKey) {
-      if (moduleStatus && [MODULE_STATUS.LOCKED, MODULE_STATUS.PUBLISHED].includes(moduleStatus)) {
+      if (isUnlock) {
+        updatedModuleStatuses = { ...updatedModuleStatuses, [moduleKey]: MODULE_STATUS.DRAFT };
+      } else if (moduleStatus && [MODULE_STATUS.LOCKED, MODULE_STATUS.PUBLISHED].includes(moduleStatus)) {
         updatedModuleStatuses = { ...updatedModuleStatuses, [moduleKey]: moduleStatus };
       } else {
         // Otherwise, auto-advance: NOT_STARTED→IN_PROGRESS, IN_PROGRESS→DRAFT
@@ -259,9 +266,18 @@ export const useShowBuilder = (showId) => {
     const promotedStatus = (editWizardStatus === MODULE_STATUS.LOCKED || editWizardStatus === MODULE_STATUS.PUBLISHED)
       ? editWizardStatus
       : null;
-    const effectiveStatus = statusOverride || promotedStatus || formData.showStatus || MODULE_STATUS.DRAFT;
+    const effectiveStatus = isUnlock
+      ? MODULE_STATUS.DRAFT
+      : (statusOverride || promotedStatus || formData.showStatus || MODULE_STATUS.DRAFT);
 
-    if (effectiveStatus !== formData.showStatus) {
+    if (isUnlock) {
+      setFormData(prev => ({
+        ...prev,
+        isShowLocked: false,
+        showStatus: MODULE_STATUS.DRAFT,
+        moduleStatuses: updatedModuleStatuses,
+      }));
+    } else if (effectiveStatus !== formData.showStatus) {
       setFormData(prev => ({ ...prev, showStatus: effectiveStatus }));
     }
 
@@ -270,6 +286,7 @@ export const useShowBuilder = (showId) => {
       showName: trimmedName,
       showStatus: effectiveStatus,
       moduleStatuses: updatedModuleStatuses,
+      isShowLocked: isUnlock ? false : formData.isShowLocked,
       currentStep: step,
       completedSteps: Array.from(updatedCompletedSteps),
     };

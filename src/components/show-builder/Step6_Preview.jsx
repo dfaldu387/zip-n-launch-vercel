@@ -116,18 +116,19 @@ const ActionPanel = ({ formData, currentStatus, onStatusChange, onExportPdf, isS
         Save, lock, and publish your show when ready.
       </p>
 
-      {/* Save as Draft */}
+      {/* Save as Draft — this is also how a locked show is unlocked, so it must stay
+          clickable when locked (only Published is terminal here, like Lock below). */}
       <Button
         variant="outline"
         size="lg"
         className="w-full justify-start text-sm h-12"
         onClick={() => onStatusChange('draft')}
-        disabled={isSaving || isLocked || isPublished}
+        disabled={isSaving || isPublished}
       >
         {isSaving ? <Loader2 className="mr-3 h-5 w-5 animate-spin" /> : <Save className="mr-3 h-5 w-5" />}
         <div className="text-left">
-          <span className="font-semibold">Draft</span>
-          <span className="block text-xs text-muted-foreground">Save to My Projects as draft</span>
+          <span className="font-semibold">{isLocked ? 'Unlock & Save as Draft' : 'Draft'}</span>
+          <span className="block text-xs text-muted-foreground">{isLocked ? 'Return to draft mode to edit' : 'Save to My Projects as draft'}</span>
         </div>
       </Button>
 
@@ -383,14 +384,20 @@ export const Step6_Preview = ({ formData, setFormData, associationsData, createO
   const handleStatusChange = useCallback(async (newStatus) => {
     setIsSaving(true);
     try {
+      // Moving from a frozen state (locked/published) back to draft is an unlock — route
+      // it through the hook's force_unlock path so the top-level status and global lock
+      // are actually cleared, not just the module status.
+      const prevStatus = (formData.moduleStatuses || {}).editWizard || 'draft';
+      const isUnlock = newStatus === 'draft' && (prevStatus === 'locked' || prevStatus === 'published');
       setFormData(prev => ({
         ...prev,
+        ...(isUnlock ? { isShowLocked: false, showStatus: 'draft' } : {}),
         moduleStatuses: {
           ...(prev.moduleStatuses || {}),
           editWizard: newStatus,
         },
       }));
-      const project = await createOrUpdateShow(null, 'editWizard', newStatus);
+      const project = await createOrUpdateShow(isUnlock ? 'force_unlock' : null, 'editWizard', newStatus);
       if (project) {
         const statusLabel = STATUS_CONFIG[newStatus]?.label || newStatus;
         toast({
@@ -411,7 +418,7 @@ export const Step6_Preview = ({ formData, setFormData, associationsData, createO
     } finally {
       setIsSaving(false);
     }
-  }, [createOrUpdateShow, setFormData, toast]);
+  }, [createOrUpdateShow, setFormData, toast, formData.moduleStatuses]);
 
   const handleExportPdf = useCallback(async () => {
     if (!formData.showBill) {

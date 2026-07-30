@@ -16,7 +16,7 @@ import { Step7_ScheduleLayout } from '@/components/show-builder/Step7_ScheduleLa
 import { Step6_Preview } from '@/components/show-builder/Step6_Preview';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Save, Loader2, GitMerge, ListPlus, Settings2, Calendar, MapPin, LayoutGrid, Palette, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Save, Loader2, GitMerge, ListPlus, Settings2, Calendar, MapPin, LayoutGrid, Palette, ShieldCheck, Lock } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { UsageLimitGate } from '@/components/shared/UsageLimitGate';
 import { useToast } from '@/components/ui/use-toast';
@@ -27,6 +27,14 @@ const CreateShowPage = () => {
     const isEditMode = !!showId;
     const { toast } = useToast();
     const navigate = useNavigate();
+
+    // A locked or published show must open read-only — Robert's rule is that once a show
+    // is finalized nobody can quietly change its associations, classes, or uploads.
+    const LOCKED_STATUSES = ['locked', 'final', 'published', 'lock & approve mode', 'publication'];
+    const norm = (value) => String(value || '').toLowerCase();
+    const isReadOnly = formData.isShowLocked === true
+        || LOCKED_STATUSES.includes(norm(formData.showStatus))
+        || LOCKED_STATUSES.includes(norm(formData.moduleStatuses?.editWizard));
 
     const handleSave = async () => {
         try {
@@ -135,7 +143,20 @@ const CreateShowPage = () => {
                             />
                         )}
 
-                        <Card className="mt-8 glass-effect">
+                        {isReadOnly && (
+                            <div className="mt-8 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                                <Lock className="h-4 w-4 flex-shrink-0" />
+                                <span>This show is locked. Every step is read-only — unlock it on Step 8 (Save &amp; Manage) to edit.</span>
+                            </div>
+                        )}
+
+                        <Card className={`mt-8 glass-effect ${isReadOnly ? 'opacity-75' : ''}`}>
+                            {/* One place locks the whole wizard: a disabled fieldset turns off every
+                                input, checkbox, select and button on every step at once, so a locked
+                                show can never be half-editable. Step 8 (Save & Manage) is exempt — it
+                                holds the Manage Status buttons (Draft = unlock), so disabling it would
+                                trap the user with no way to unlock, exactly like the Pattern Book Builder. */}
+                            <fieldset disabled={isReadOnly && currentStep !== 8} className="min-w-0 m-0 border-0 p-0">
                             <AnimatePresence mode="wait">
                                 { isLoading ? (
                                     <CardContent className="flex items-center justify-center p-16">
@@ -154,6 +175,7 @@ const CreateShowPage = () => {
                                                 isOpenShowMode={formData.showType === 'open-unaffiliated' || !!formData.associations?.['open-show']}
                                                 associationsData={associationsData}
                                                 divisionsData={divisionsData}
+                                                isReadOnly={isReadOnly}
                                             />
                                         </CardContent>
                                     </div>
@@ -171,6 +193,7 @@ const CreateShowPage = () => {
                                         createOrUpdateShow={createOrUpdateShow}
                                         onRefreshDisciplines={refreshDisciplineLibrary}
                                         showTimedAdditional={true}
+                                        isReadOnly={isReadOnly}
                                     />
                                 ) : (
                                     <CardContent className="flex items-center justify-center p-16">
@@ -178,13 +201,14 @@ const CreateShowPage = () => {
                                     </CardContent>
                                 )}
                             </AnimatePresence>
+                            </fieldset>
                             <CardFooter className="p-6 flex justify-between items-center border-t border-border">
                                 <Button variant="outline" onClick={prevStep} disabled={currentStep === 1}>
                                     <ArrowLeft className="mr-2 h-4 w-4" /> Back
                                 </Button>
                                 {currentStep < steps.length && (
                                     <div className="flex items-center gap-2">
-                                        <Button variant="secondary" onClick={handleSave} disabled={isLoading}>
+                                        <Button variant="secondary" onClick={handleSave} disabled={isLoading || isReadOnly} title={isReadOnly ? 'This show is locked — unlock it to make changes' : undefined}>
                                             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                                             Save Progress
                                         </Button>

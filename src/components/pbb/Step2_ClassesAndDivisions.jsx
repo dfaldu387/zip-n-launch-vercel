@@ -417,7 +417,7 @@ const AssociationDisciplineGroup = ({ association, disciplines, selectedDiscipli
     );
 };
 
-export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLibrary, associationsData, onRefreshDisciplines, stepNumber = 2, isHubMode = false, maxDisciplines = 0, showTimedAdditional = false }) => {
+export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLibrary, associationsData, onRefreshDisciplines, stepNumber = 2, isHubMode = false, maxDisciplines = 0, showTimedAdditional = false, isReadOnly = false }) => {
     const { toast } = useToast();
     const [customDisciplineName, setCustomDisciplineName] = React.useState('');
     const [isCustomDisciplineModalOpen, setIsCustomDisciplineModalOpen] = React.useState(false);
@@ -448,6 +448,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
     
     // Handle 4-H city selection
     const handle4HCityChange = (city) => {
+        if (isReadOnly) return;
         setFormData(prev => ({
             ...prev,
             selected4HCity: city,
@@ -466,6 +467,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
     // Handler for VRH-RHC Ranch CowWork selection (multiple selection support)
     // Creates separate discipline entries for each selected scoresheet
     const handleVrhRanchCowWorkSelect = (disciplineKey, value, checked) => {
+        if (isReadOnly) return;
         setFormData(prev => {
             const currentSelection = prev.vrhRanchCowWorkSelections?.[disciplineKey];
             
@@ -638,6 +640,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
 
     // Handler for dual-approved checkbox toggle
     const handleDualApprovedToggle = (disciplineKey, assocId, isChecked) => {
+        if (isReadOnly) return;
         setFormData(prev => {
             const newDualApprovedSelections = { ...(prev.dualApprovedSelections || {}) };
             
@@ -805,6 +808,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
     }, [formData.associations, formData.subAssociationSelections, isVrhMode, isOpenShowMode, disciplineLibrary, associationsData, searchTerm, selected4HCity]);
 
     const handleDisciplineToggle = (disc, isChecked) => {
+        if (isReadOnly) return;
         if (isVrhMode) {
             toast({ title: "Disciplines for Versatility Ranch Horse shows are fixed.", variant: "default" });
             return;
@@ -1039,14 +1043,16 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
 
     // Open custom discipline modal for a specific association
     const handleOpenAddCustomModal = useCallback((associationId, disciplineGroup = 'custom_patterns') => {
+        if (isReadOnly) return;
         setSelectedAssociationForCustom(associationId);
         setSelectedDisciplineGroup(disciplineGroup);
         setCustomDisciplineName('');
         setIsCustomDisciplineModalOpen(true);
-    }, []);
+    }, [isReadOnly]);
 
     // Bulk add classes
     const handleBulkAddClasses = () => {
+        if (isReadOnly) return;
         const lines = bulkAddText
             .split('\n')
             .map(line => line.trim())
@@ -1118,6 +1124,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
 
     // Save custom discipline to database
     const handleSaveCustomDisciplineToDb = async () => {
+        if (isReadOnly) return;
         if (!customDisciplineName.trim()) {
             toast({ title: "Custom discipline name cannot be empty.", variant: "destructive" });
             return;
@@ -1201,6 +1208,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
     };
 
     const handleAddCustomDiscipline = () => {
+        if (isReadOnly) return;
         if (!customDisciplineName.trim()) {
             toast({ title: "Custom discipline name cannot be empty.", variant: "destructive" });
             return;
@@ -1242,6 +1250,7 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
                                 variant="outline"
                                 size="sm"
                                 onClick={() => setIsBulkAddOpen(true)}
+                                disabled={isReadOnly}
                              >
                                 <ListPlus className="mr-1.5 h-4 w-4" />
                                 Bulk Add Classes

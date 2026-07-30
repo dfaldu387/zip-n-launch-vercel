@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, ArrowLeft, GitMerge, ListPlus, Calendar, UploadCloud, LayoutTemplate, Eye, FileSignature, ShieldCheck, BookCopy, Save, Loader2, Download, Settings2, Share2, RotateCcw } from 'lucide-react';
+import { ArrowRight, ArrowLeft, GitMerge, ListPlus, Calendar, UploadCloud, LayoutTemplate, Eye, FileSignature, ShieldCheck, BookCopy, Save, Loader2, Download, Settings2, Share2, RotateCcw, Lock } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
@@ -390,7 +390,18 @@ const PatternBookBuilderPage = () => {
                     </motion.div>
                     <div className="max-w-7xl mx-auto">
                         <BuilderSteps steps={steps} currentStep={currentStep} completedSteps={completedSteps} setCurrentStep={setCurrentStep} isEditMode={!!projectId} />
-                        <Card className="glass-effect">
+                        {isProjectLocked && (
+                            <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                                <Lock className="h-4 w-4 flex-shrink-0" />
+                                <span>This {formData.projectStatus === 'Final' ? 'published' : 'locked'} pattern book is read-only. Every step is view-only — unlock it on Step 8 (Save &amp; Manage) to edit.</span>
+                            </div>
+                        )}
+                        <Card className={`glass-effect ${isReadOnly ? 'opacity-75' : ''}`}>
+                            {/* Lock the whole builder in one place: a disabled fieldset turns off every
+                                control on every step, so a locked/published book is never half-editable.
+                                Step 8 (Save & Manage) is exempt — it hosts the Unlock control, and it
+                                governs its own read-only state, so disabling it would trap the user. */}
+                            <fieldset disabled={isReadOnly && currentStep !== 8} className="min-w-0 m-0 border-0 p-0">
                             <AnimatePresence mode="wait">
                                 {currentStep !== 3 ? (
                                     <CardContent className="p-0 sm:p-6">
@@ -400,6 +411,7 @@ const PatternBookBuilderPage = () => {
                                     renderStepContent()
                                 )}
                             </AnimatePresence>
+                            </fieldset>
                             <CardFooter className="p-4 flex justify-between items-center border-t border-border">
                             {isReadOnly ? (
                                     <>
