@@ -6,7 +6,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useShowBuilder } from '@/hooks/useShowBuilder';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2, Info, User, Trophy, Search, Check, Shield, TrendingDown, CalendarDays, Hash, BarChart3 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Info, User, Trophy, Search, Check, Shield, TrendingDown, CalendarDays, Hash, BarChart3, Lock } from 'lucide-react';
+import { isWizardReadOnly } from '@/lib/moduleStatusService';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { cn } from '@/lib/utils';
@@ -117,7 +118,11 @@ const ShowStructurePage = () => {
         { id: 7, component: ReviewStep },
     ];
 
+    // A locked or published section opens read-only.
+    const isReadOnly = isWizardReadOnly(formData, 'showStructure');
+
     const handleSave = useCallback(async () => {
+        if (isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
             const project = await createOrUpdateShow(null, 'showStructure', 'draft');
@@ -133,20 +138,23 @@ const ShowStructurePage = () => {
         } finally {
             setIsSaving(false);
         }
-    }, [createOrUpdateShow, formData, showId, navigate]);
+    }, [createOrUpdateShow, formData, showId, navigate, isReadOnly]);
 
     // Auto-save on Next
     const nextStep = useCallback(async () => {
         setCompletedSteps(prev => new Set([...prev, currentStep]));
 
-        // Auto-save in the background
+        // Auto-save in the background. Skipped when locked — but stepping
+        // through to read the other steps must still work.
         try {
-            const project = await createOrUpdateShow(null, 'showStructure', 'draft');
-            if (project) {
-                lastSavedDataRef.current = { ...formData };
-                setHasUnsavedChanges(false);
-                if (!showId && project.id) {
-                    navigate(`/horse-show-manager/show-structure-expenses/${project.id}`, { replace: true });
+            if (!isReadOnly) {
+                const project = await createOrUpdateShow(null, 'showStructure', 'draft');
+                if (project) {
+                    lastSavedDataRef.current = { ...formData };
+                    setHasUnsavedChanges(false);
+                    if (!showId && project.id) {
+                        navigate(`/horse-show-manager/show-structure-expenses/${project.id}`, { replace: true });
+                    }
                 }
             }
         } catch {
@@ -156,7 +164,7 @@ const ShowStructurePage = () => {
         if (currentStep < steps.length) {
             setCurrentStepState(prev => prev + 1);
         }
-    }, [currentStep, steps.length, createOrUpdateShow, formData, showId, navigate]);
+    }, [currentStep, steps.length, createOrUpdateShow, formData, showId, navigate, isReadOnly]);
 
     const prevStep = () => {
         if (currentStep > 1) {
@@ -249,7 +257,18 @@ const ShowStructurePage = () => {
                         />
                     )}
 
-                    <Card className="mt-8">
+                    {isReadOnly && (
+                        <div className="mt-8 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                            <Lock className="h-4 w-4 flex-shrink-0" />
+                            <span>This section is locked. Every step is read-only — unlock it on Step 7 (Save &amp; Manage) to edit.</span>
+                        </div>
+                    )}
+
+                    <Card className={cn('mt-8', isReadOnly && 'opacity-75')}>
+                        {/* One disabled fieldset turns off every input on every step at once, so a
+                            locked section can never be half-editable. The last step (Save & Manage)
+                            is exempt — it holds the status controls used to unlock. */}
+                        <fieldset disabled={isReadOnly && currentStep !== steps.length} className="min-w-0 m-0 border-0 p-0">
                         <AnimatePresence mode="wait">
                             {CurrentStepComponent && <CurrentStepComponent
                                 key={currentStep}
@@ -259,9 +278,11 @@ const ShowStructurePage = () => {
                                 associationsData={associationsData}
                                 divisionsData={divisionsData}
                                 existingProjects={existingProjects}
+                                isReadOnly={isReadOnly}
                                 onSave={createOrUpdateShow}
                             />}
                         </AnimatePresence>
+                        </fieldset>
                     </Card>
 
                     {currentStep < steps.length && (
@@ -271,7 +292,12 @@ const ShowStructurePage = () => {
                                 Back
                             </Button>
                             <div className="flex items-center gap-3">
-                                <Button variant="outline" onClick={handleSave} disabled={isSaving}>
+                                <Button
+                                    variant="outline"
+                                    onClick={handleSave}
+                                    disabled={isSaving || isReadOnly}
+                                    title={isReadOnly ? 'This section is locked — unlock it to make changes' : undefined}
+                                >
                                     {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                                     {isSaving ? 'Saving...' : 'Save'}
                                 </Button>

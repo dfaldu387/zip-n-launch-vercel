@@ -6,7 +6,8 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useShowBuilder } from '@/hooks/useShowBuilder';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Save, Loader2, Shield, DollarSign, HeartHandshake, Search, Check } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Save, Loader2, Shield, DollarSign, HeartHandshake, Search, Check, Lock } from 'lucide-react';
+import { isWizardReadOnly } from '@/lib/moduleStatusService';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -105,8 +106,12 @@ const CreateHorseShowWizardPage = () => {
     const autoSaveTimer = useRef(null);
     const lastSavedData = useRef(null);
 
+    // A locked or published section opens read-only.
+    const isReadOnly = isWizardReadOnly(formData, 'feeStructure');
+
     // Auto-save: debounce formData changes
     const performAutoSave = useCallback(async () => {
+        if (isReadOnly) return; // a locked section must never write back
         if (!formData.id && !showId) return; // Don't auto-save brand new unsaved shows
         setAutoSaveStatus('saving');
         try {
@@ -118,7 +123,7 @@ const CreateHorseShowWizardPage = () => {
             setAutoSaveStatus('error');
             setTimeout(() => setAutoSaveStatus(null), 3000);
         }
-    }, [createOrUpdateShow, formData, showId]);
+    }, [createOrUpdateShow, formData, showId, isReadOnly]);
 
     useEffect(() => {
         const currentData = JSON.stringify(formData);
@@ -152,6 +157,7 @@ const CreateHorseShowWizardPage = () => {
     };
 
     const handleSave = async () => {
+        if (isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
             const project = await createOrUpdateShow(null, 'feeStructure', 'draft');
@@ -231,8 +237,19 @@ const CreateHorseShowWizardPage = () => {
                         />
                     )}
 
+                    {isReadOnly && (
+                        <div className="mt-4 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                            <Lock className="h-4 w-4 flex-shrink-0" />
+                            <span>This section is locked. Every step is read-only — unlock it on Step 4 (Save &amp; Manage) to edit.</span>
+                        </div>
+                    )}
+
                     {/* Step Content */}
-                    <Card className="mt-4">
+                    <Card className={cn('mt-4', isReadOnly && 'opacity-75')}>
+                        {/* One disabled fieldset turns off every input on every step at once, so a
+                            locked section can never be half-editable. Step 4 (Save & Manage) is
+                            exempt — it holds the status controls used to unlock. */}
+                        <fieldset disabled={isReadOnly && currentStep !== STEP_COMPONENTS.length} className="min-w-0 m-0 border-0 p-0">
                         <AnimatePresence mode="wait">
                             {CurrentStepComponent && (
                                 <CurrentStepComponent
@@ -243,10 +260,15 @@ const CreateHorseShowWizardPage = () => {
                                     associationsData={associationsData}
                                     divisionsData={divisionsData}
                                     existingProjects={existingProjects}
+                                    isReadOnly={isReadOnly}
+                                    // Save & Manage changes status directly — without this the
+                                    // unlock would only live in local state and never persist.
+                                    onSave={createOrUpdateShow}
                                     variant="create"
                                 />
                             )}
                         </AnimatePresence>
+                        </fieldset>
                     </Card>
 
                     {/* Navigation Footer */}
@@ -261,7 +283,12 @@ const CreateHorseShowWizardPage = () => {
                                 Previous
                             </Button>
                             <div className="flex items-center gap-3">
-                                <Button variant="outline" onClick={handleSave} disabled={isSaving}>
+                                <Button
+                                    variant="outline"
+                                    onClick={handleSave}
+                                    disabled={isSaving || isReadOnly}
+                                    title={isReadOnly ? 'This section is locked — unlock it to make changes' : undefined}
+                                >
                                     {isSaving
                                         ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                         : <Save className="mr-2 h-4 w-4" />

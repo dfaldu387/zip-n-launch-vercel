@@ -18,7 +18,8 @@ import {
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
-import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
+import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
+import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { staffRoles } from '@/lib/staffingData';
 import { useToast } from '@/components/ui/use-toast';
@@ -668,8 +669,10 @@ const EmployeeSchedulingPage = () => {
         fetchShows();
     }, [user, showId]);
 
+    const isReadOnly = isWizardReadOnly(selectedShow?.project_data, 'employeeScheduling');
+
     const handleSave = async ({ assignments, roster }) => {
-        if (!selectedShow) return;
+        if (!selectedShow || isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
             const updatedData = stampModuleStatusOnSave({
@@ -738,7 +741,9 @@ const EmployeeSchedulingPage = () => {
 
                     {selectedShow && (
                         <div className="mt-6">
-                            <SchedulingDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                            <ModuleLockGuard isLocked={isReadOnly} moduleName="Employee / Arena Scheduling">
+                                <SchedulingDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                            </ModuleLockGuard>
                         </div>
                     )}
                 </main>

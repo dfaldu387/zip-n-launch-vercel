@@ -22,7 +22,8 @@ import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
-import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
+import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
+import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -619,8 +620,10 @@ const AwardsManagementPage = () => {
         fetchShows();
     }, [user, showId]);
 
+    const isReadOnly = isWizardReadOnly(selectedShow?.project_data, 'awards');
+
     const handleSave = async ({ classAwards, specialAwards, highPointAwards }) => {
-        if (!selectedShow) return;
+        if (!selectedShow || isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
             const updatedData = stampModuleStatusOnSave({
@@ -677,7 +680,9 @@ const AwardsManagementPage = () => {
                     )}
 
                     {selectedShow && (
-                        <AwardsDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                        <ModuleLockGuard isLocked={isReadOnly} moduleName="Awards Management">
+                            <AwardsDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                        </ModuleLockGuard>
                     )}
                 </main>
             </div>

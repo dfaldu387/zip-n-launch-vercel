@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import Navigation from '@/components/Navigation';
+import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
+import { isWizardReadOnly } from '@/lib/moduleStatusService';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -506,8 +508,10 @@ const VenueArenaSetupPage = () => {
         fetchShows();
     }, [user, showId]);
 
+    const isReadOnly = isWizardReadOnly(selectedShow?.project_data, 'employeeScheduling');
+
     const handleSave = async ({ venueName, venueAddress, arenas, sharedStaff }) => {
-        if (!selectedShow) return;
+        if (!selectedShow || isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
             const updatedData = {
@@ -579,7 +583,9 @@ const VenueArenaSetupPage = () => {
 
                     {selectedShow && (
                         <div className="mt-6">
-                            <VenueArenaSetup show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                            <ModuleLockGuard isLocked={isReadOnly} moduleName="Employee / Arena Scheduling">
+                                <VenueArenaSetup show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                            </ModuleLockGuard>
                         </div>
                     )}
                 </main>

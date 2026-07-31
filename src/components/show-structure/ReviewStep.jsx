@@ -220,11 +220,20 @@ const ActionPanel = ({ formData, currentStatus, onStatusChange, onExportBudget, 
                         : 'Save, lock, and publish your fee structure & sponsors.'}
                 </p>
 
-                <Button variant="outline" size="lg" className="w-full justify-start text-sm h-12" onClick={() => onStatusChange('draft')} disabled={isSaving || isLocked || isPublished}>
+                {/* Draft stays enabled while Locked or Published — it IS the way back.
+                    Disabling it left the user trapped with no way to edit again
+                    (TRANSITION_MAP allows locked → draft and published → draft). */}
+                <Button variant="outline" size="lg" className="w-full justify-start text-sm h-12" onClick={() => onStatusChange('draft')} disabled={isSaving}>
                     {isSaving ? <Loader2 className="mr-3 h-5 w-5 animate-spin" /> : <Save className="mr-3 h-5 w-5" />}
                     <div className="text-left">
-                        <span className="font-semibold">Draft</span>
-                        <span className="block text-xs text-muted-foreground">Save to My Projects as draft</span>
+                        <span className="font-semibold">
+                            {isPublished ? 'Unpublish (back to Draft)' : isLocked ? 'Unlock (back to Draft)' : 'Draft'}
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                            {isPublished || isLocked
+                                ? 'Reopen this section so you can edit again'
+                                : 'Save to My Projects as draft'}
+                        </span>
                     </div>
                 </Button>
 

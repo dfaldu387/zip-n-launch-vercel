@@ -69,7 +69,11 @@ const TRANSITION_MAP = Object.freeze({
   [MODULE_STATUS.IN_PROGRESS]: [MODULE_STATUS.DRAFT],
   [MODULE_STATUS.DRAFT]:       [MODULE_STATUS.IN_PROGRESS, MODULE_STATUS.LOCKED],
   [MODULE_STATUS.LOCKED]:      [MODULE_STATUS.DRAFT, MODULE_STATUS.PUBLISHED],
-  [MODULE_STATUS.PUBLISHED]:   [],  // terminal state
+  // Published can be pulled back to Draft. It used to be terminal, which meant a
+  // published module could never be corrected — a typo in a published show was
+  // permanent. Un-publishing is the escape hatch; re-publishing still has to go
+  // back through Locked.
+  [MODULE_STATUS.PUBLISHED]:   [MODULE_STATUS.DRAFT],
 });
 
 // ── Module Keys (all modules in the system) ──
@@ -176,6 +180,33 @@ export function getAvailableTransitions(currentStatus, isShowLocked = false) {
   if (isShowLocked) return [];
   const from = currentStatus || MODULE_STATUS.NOT_STARTED;
   return TRANSITION_MAP[from] || [];
+}
+
+/**
+ * Whether a builder wizard must open read-only.
+ *
+ * Robert's rule: once a show or one of its modules is finalized, nobody can
+ * quietly change it. Two signals only:
+ *   1. the explicit "Lock Show" toggle (project_data.isShowLocked), and
+ *   2. this module's own status.
+ *
+ * Deliberately NOT `showStatus`: that field is derived from the other modules
+ * (see computeShowStatus) and is 'locked' on shows whose modules were locked
+ * individually — using it made an unlocked module open read-only anyway, with
+ * no way for the user to explain or fix it.
+ *
+ * Legacy spellings still in the database ("Lock & Approve Mode", "Publication")
+ * are treated as locked.
+ *
+ * @param {Object} formData  - builder form data (isShowLocked, moduleStatuses)
+ * @param {string} moduleKey - which module this wizard edits, e.g. 'feeStructure'
+ * @returns {boolean}
+ */
+export function isWizardReadOnly(formData, moduleKey) {
+  const LOCKED = ['locked', 'final', 'published', 'lock & approve mode', 'publication'];
+  const norm = (value) => String(value || '').toLowerCase();
+  if (formData?.isShowLocked === true) return true;
+  return LOCKED.includes(norm(formData?.moduleStatuses?.[moduleKey]));
 }
 
 /**

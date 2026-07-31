@@ -9,7 +9,8 @@ import { ResultsDashboard } from '@/components/show-builder/results/ResultsDashb
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
-import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
+import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
+import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 
 const ResultsManagementPage = () => {
     const { showId } = useParams();
@@ -41,8 +42,10 @@ const ResultsManagementPage = () => {
         fetchShows();
     }, [user, showId]);
 
+    const isReadOnly = isWizardReadOnly(selectedShow?.project_data, 'results');
+
     const handleSave = async (updatedProjectData) => {
-        if (!selectedShow) return;
+        if (!selectedShow || isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
             const dataWithStatus = stampModuleStatusOnSave(updatedProjectData, 'results');
@@ -96,7 +99,9 @@ const ResultsManagementPage = () => {
                     )}
 
                     {selectedShow && (
-                        <ResultsDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                        <ModuleLockGuard isLocked={isReadOnly} moduleName="Results Entry">
+                            <ResultsDashboard show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                        </ModuleLockGuard>
                     )}
                 </main>
             </div>

@@ -19,6 +19,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Save, Loader2, GitMerge, ListPlus, Settings2, Calendar, MapPin, LayoutGrid, Palette, ShieldCheck, Lock } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { UsageLimitGate } from '@/components/shared/UsageLimitGate';
+import { isWizardReadOnly } from '@/lib/moduleStatusService';
 import { useToast } from '@/components/ui/use-toast';
 
 const CreateShowPage = () => {
@@ -30,11 +31,7 @@ const CreateShowPage = () => {
 
     // A locked or published show must open read-only — Robert's rule is that once a show
     // is finalized nobody can quietly change its associations, classes, or uploads.
-    const LOCKED_STATUSES = ['locked', 'final', 'published', 'lock & approve mode', 'publication'];
-    const norm = (value) => String(value || '').toLowerCase();
-    const isReadOnly = formData.isShowLocked === true
-        || LOCKED_STATUSES.includes(norm(formData.showStatus))
-        || LOCKED_STATUSES.includes(norm(formData.moduleStatuses?.editWizard));
+    const isReadOnly = isWizardReadOnly(formData, 'editWizard');
 
     const handleSave = async () => {
         try {

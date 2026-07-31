@@ -13,6 +13,8 @@ import {
     Receipt, Briefcase, FileSpreadsheet,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
+import { isWizardReadOnly } from '@/lib/moduleStatusService';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
@@ -403,6 +405,8 @@ const EmployeeBudgetingToolPage = () => {
         return contractProjects.find(cp => cp.project_data?.linkedProjectId === selectedShow.id) || null;
     }, [selectedShow, contractProjects]);
 
+    const isReadOnly = isWizardReadOnly(selectedShow?.project_data, 'budgeting');
+
     if (isLoading) {
         return (
             <div className="flex h-screen items-center justify-center">
@@ -437,7 +441,9 @@ const EmployeeBudgetingToolPage = () => {
 
                     {selectedShow && (
                         <div className="mt-6">
-                            <BudgetDashboard show={selectedShow} contractProject={linkedContract} />
+                            <ModuleLockGuard isLocked={isReadOnly} moduleName="Employee Budgeting Tool">
+                                <BudgetDashboard show={selectedShow} contractProject={linkedContract} />
+                            </ModuleLockGuard>
                         </div>
                     )}
                 </main>

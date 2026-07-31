@@ -3,7 +3,7 @@ import { Helmet } from 'react-helmet-async';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, ArrowRight, Building2, Users, FileText, Send, FolderOpen, CheckCircle, Save, Loader2, RotateCcw, FileSignature } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Building2, Users, FileText, Send, FolderOpen, CheckCircle, Save, Loader2, RotateCcw, FileSignature, Lock } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import Navigation from '@/components/Navigation';
@@ -13,7 +13,8 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import { BuilderSteps } from '@/components/pbb/BuilderSteps';
 import { applyLinkedProjectData, isBudgetFrozen } from '@/lib/contractUtils';
-import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
+import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
+import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 
 // Step Components
@@ -97,6 +98,12 @@ const ContractManagementPage = () => {
   const [existingProjects, setExistingProjects] = useState([]);
   const [associationsData, setAssociationsData] = useState([]);
   const [formData, setFormData] = useState(initialFormData);
+  // The 'contracts' status lives on the SHOW this contract belongs to, not on the
+  // contract row itself — so read it from the linked show project.
+  const linkedShowId = showIdFromQuery || formData.linkedProjectId;
+  const linkedShow = existingProjects.find((p) => p.id === linkedShowId);
+  const isReadOnly = isWizardReadOnly(linkedShow?.project_data, 'contracts');
+
   const skipReloadRef = useRef(false);
   const formDataRef = useRef(formData);
   const saveProjectRef = useRef(null);
@@ -286,6 +293,8 @@ const ContractManagementPage = () => {
     const latestStep = currentStepRef.current;
     const latestCompleted = completedStepsRef.current;
 
+    if (isReadOnly) return null; // a locked section must never write back
+
     if (!user) {
       if (!silent) toast({ title: 'Authentication Error', description: 'You must be logged in to save.', variant: 'destructive' });
       return null;
@@ -467,7 +476,7 @@ const ContractManagementPage = () => {
     } finally {
       setIsSaving(false);
     }
-  }, [sanitizedProjectId, toast, navigate, user]);
+  }, [sanitizedProjectId, toast, navigate, user, isReadOnly]);
 
   // Keep saveProject ref in sync for auto-save on unmount
   useEffect(() => { saveProjectRef.current = saveProject; }, [saveProject]);
@@ -565,12 +574,24 @@ const ContractManagementPage = () => {
           <PageHeader title="Contract Management" backTo={showIdFromQuery ? `/horse-show-manager/show/${showIdFromQuery}` : formData.linkedProjectId ? `/horse-show-manager/show/${formData.linkedProjectId}` : '/horse-show-manager'} />
           <div className="max-w-7xl mx-auto">
             <BuilderSteps steps={steps} currentStep={currentStep} completedSteps={completedSteps} setCurrentStep={handleStepClick} isEditMode={!!sanitizedProjectId} />
-            <Card className="glass-effect">
-              <CardContent className="p-0 sm:p-6">
-                <AnimatePresence mode="wait">
-                  {renderStep()}
-                </AnimatePresence>
-              </CardContent>
+
+            {isReadOnly && (
+              <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                <Lock className="h-4 w-4 flex-shrink-0" />
+                <span>This section is locked. Set Contract Management back to Draft on the show page to make changes.</span>
+              </div>
+            )}
+
+            <Card className={cn('glass-effect', isReadOnly && 'opacity-75')}>
+              {/* The unlock control lives on the show workspace card, not here, so the
+                  whole page is disabled rather than exempting a step. */}
+              <fieldset disabled={isReadOnly} className="min-w-0 m-0 border-0 p-0">
+                <CardContent className="p-0 sm:p-6">
+                  <AnimatePresence mode="wait">
+                    {renderStep()}
+                  </AnimatePresence>
+                </CardContent>
+              </fieldset>
               <CardFooter className="p-4 flex justify-between items-center border-t border-border">
                 <div className="flex items-center gap-2">
                   <Button variant="outline" onClick={handlePrev} disabled={currentStep === 1}>
@@ -581,7 +602,12 @@ const ContractManagementPage = () => {
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="secondary" onClick={handleSaveProject} disabled={isSaving}>
+                  <Button
+                    variant="secondary"
+                    onClick={handleSaveProject}
+                    disabled={isSaving || isReadOnly}
+                    title={isReadOnly ? 'This section is locked — set it back to Draft on the show page' : undefined}
+                  >
                     {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                     Save Project
                   </Button>
