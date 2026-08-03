@@ -2,8 +2,19 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { Twitter, Facebook, Instagram } from 'lucide-react';
 import logoImage from '@/assets/logo.png';
+import { useAuth } from '@/contexts/SupabaseAuthContext';
+
+// These were three `href="#"` links: clicking one just jumped the page to the top.
+// Fill an entry's url in and the icon appears; blank entries stay hidden.
+const SOCIAL_LINKS = [
+  { name: 'Twitter', Icon: Twitter, url: '' },
+  { name: 'Facebook', Icon: Facebook, url: '' },
+  { name: 'Instagram', Icon: Instagram, url: '' },
+];
 
 const Footer = () => {
+  const { isAdmin } = useAuth();
+  const activeSocialLinks = SOCIAL_LINKS.filter(link => link.url);
   const associations = [
     { name: 'AQHA', image: 'American Quarter Horse Association logo' },
     { name: 'APHA', image: 'American Paint Horse Association logo' },
@@ -23,11 +34,22 @@ const Footer = () => {
             <p className="text-muted-foreground text-sm">
               The Professional Platform for Horse Show Patterns and Event Management.
             </p>
-            <div className="flex space-x-4">
-              <a href="#" className="text-muted-foreground hover:text-primary"><Twitter className="h-5 w-5" /></a>
-              <a href="#" className="text-muted-foreground hover:text-primary"><Facebook className="h-5 w-5" /></a>
-              <a href="#" className="text-muted-foreground hover:text-primary"><Instagram className="h-5 w-5" /></a>
-            </div>
+            {activeSocialLinks.length > 0 && (
+              <div className="flex space-x-4">
+                {activeSocialLinks.map(({ name, Icon, url }) => (
+                  <a
+                    key={name}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={name}
+                    className="text-muted-foreground hover:text-primary"
+                  >
+                    <Icon className="h-5 w-5" />
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
           <div>
             <p className="font-semibold text-foreground">Quick Links</p>
@@ -36,7 +58,11 @@ const Footer = () => {
               <li><Link to="/pattern-book-builder" className="text-muted-foreground hover:text-primary text-sm">Pattern Book Builder</Link></li>
               <li><Link to="/events" className="text-muted-foreground hover:text-primary text-sm">Events</Link></li>
               <li><Link to="/events/past" className="text-muted-foreground hover:text-primary text-sm">Past Events</Link></li>
-              <li><Link to="/admin" className="text-muted-foreground hover:text-primary text-sm">Admin Portal</Link></li>
+              {/* Was shown to everyone, so a normal visitor clicking it only ever
+                  landed on Access Denied. */}
+              {isAdmin && (
+                <li><Link to="/admin" className="text-muted-foreground hover:text-primary text-sm">Admin Portal</Link></li>
+              )}
             </ul>
           </div>
           <div>
@@ -45,7 +71,13 @@ const Footer = () => {
               <li><Link to="/contributor-portal" className="text-muted-foreground hover:text-primary text-sm">Contributor Portal</Link></li>
               <li><Link to="/social-media" className="text-muted-foreground hover:text-primary text-sm">Social Feed</Link></li>
               <li><Link to="/advertisement" className="text-muted-foreground hover:text-primary text-sm">Advertisement</Link></li>
-              <li><Link to="/database-schema" className="text-muted-foreground hover:text-primary text-sm">Database Schema</Link></li>
+              <li><Link to="/support" className="text-muted-foreground hover:text-primary text-sm">Support</Link></li>
+              <li><Link to="/terms-of-service" className="text-muted-foreground hover:text-primary text-sm">Terms of Service</Link></li>
+              <li><Link to="/privacy-policy" className="text-muted-foreground hover:text-primary text-sm">Privacy Policy</Link></li>
+              {/* Database Schema is an internal design document — it is admin-only now. */}
+              {isAdmin && (
+                <li><Link to="/database-schema" className="text-muted-foreground hover:text-primary text-sm">Database Schema</Link></li>
+              )}
             </ul>
           </div>
           <div>

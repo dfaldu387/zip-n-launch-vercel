@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { ShieldAlert, Home, LogIn } from 'lucide-react';
@@ -10,9 +10,6 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 
 const NotAuthorizedPage = () => {
     const { user, openAuthModal } = useAuth();
-    const location = useLocation();
-
-    const from = location.state?.from?.pathname || '/';
 
     return (
         <>
@@ -70,8 +67,11 @@ const NotAuthorizedPage = () => {
                                                 <LogIn className="mr-2 h-4 w-4" />
                                                 Log In
                                             </Button>
+                                            {/* Was `to={from}` — the page that had just blocked
+                                                them — so "Go to Homepage" bounced straight back
+                                                here in a loop. */}
                                             <Button asChild variant="outline">
-                                                <Link to={from}>
+                                                <Link to="/">
                                                     <Home className="mr-2 h-4 w-4" />
                                                      Go to Homepage
                                                 </Link>

@@ -1,9 +1,10 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 
 // Catches any JavaScript error thrown while rendering a page and shows a
 // friendly fallback instead of unmounting the whole app (blank white screen).
-class ErrorBoundary extends React.Component {
+class ErrorBoundaryInner extends React.Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false };
@@ -11,6 +12,15 @@ class ErrorBoundary extends React.Component {
 
   static getDerivedStateFromError() {
     return { hasError: true };
+  }
+
+  // Once a page threw, the boundary stayed broken for the rest of the session —
+  // navigating away (or using browser back) kept showing the error screen. Clearing
+  // on a route change lets a healthy page render normally again.
+  componentDidUpdate(prevProps) {
+    if (this.state.hasError && prevProps.pathname !== this.props.pathname) {
+      this.setState({ hasError: false });
+    }
   }
 
   componentDidCatch(error, errorInfo) {
@@ -47,5 +57,12 @@ class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
+
+// Error boundaries have to be class components, and classes cannot use hooks —
+// so the current path is passed in from this thin wrapper.
+const ErrorBoundary = ({ children }) => {
+  const location = useLocation();
+  return <ErrorBoundaryInner pathname={location.pathname}>{children}</ErrorBoundaryInner>;
+};
 
 export default ErrorBoundary;

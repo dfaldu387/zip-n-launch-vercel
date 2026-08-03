@@ -29,9 +29,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { format } from 'date-fns';
 import { cn, parseLocalDate } from '@/lib/utils';
 
-// Admin email that has full access
-const ADMIN_EMAIL = 'johndoe@mailinator.com';
-
 // Component to fetch and display pattern preview image
 const PatternPreviewImage = ({ patternId, patternName }) => {
     const [imageUrl, setImageUrl] = useState(null);
@@ -92,12 +89,14 @@ const PatternPreviewImage = ({ patternId, patternName }) => {
 };
 
 const JudgesPortalPage = () => {
-    const { user, updateUserProfile } = useAuth();
+    const { user, isAdmin, updateUserProfile } = useAuth();
     const { toast } = useToast();
     const navigate = useNavigate();
-    
-    // Check if current user is admin (has full access)
-    const isAdminUser = user?.email === ADMIN_EMAIL;
+
+    // Full access comes from the account's role, the same source every other page
+    // uses. It used to be a hardcoded test address, which meant real admins got the
+    // restricted view and anyone claiming that public inbox got the unrestricted one.
+    const isAdminUser = isAdmin;
     
     // Judge Profile State
     const [isCardedJudge, setIsCardedJudge] = useState(false);
@@ -182,7 +181,11 @@ const JudgesPortalPage = () => {
                 const { data: notifications, error: notifError } = await supabase
                     .from('judge_notifications')
                     .select('project_id, project_name')
-                    .eq('judge_email', user.email);
+                    // Notifications are always written lowercase, so the lookup has to
+                    // match that. This one query was using the address as typed — with the
+                    // deny-by-default filter that would leave a real judge with an empty
+                    // portal, not a full one.
+                    .eq('judge_email', user.email.toLowerCase());
                 
                 if (notifError) throw notifError;
                 
@@ -431,7 +434,30 @@ const JudgesPortalPage = () => {
                     };
                 });
                 
-                setNotificationsTableData(tableData);
+                // One row per show, not one row per notification. A show that sent the
+                // judge several notifications (re-saved by the organizer, or a judge and
+                // staff assignment for the same show) was listed once per notification —
+                // the same show repeated five times, while the counter above the table
+                // correctly said "1 assignment". Newest notification wins.
+                const byProject = new Map();
+                tableData
+                    .filter(row => row.project_id)
+                    .forEach(row => {
+                        const seen = byProject.get(row.project_id);
+                        if (!seen) {
+                            byProject.set(row.project_id, row);
+                            return;
+                        }
+                        // Keep whichever row actually carries pattern/discipline detail,
+                        // then fall back to the most recent.
+                        const seenHasDetail = seen.pattern_items.length || seen.discipline_names.length;
+                        const rowHasDetail = row.pattern_items.length || row.discipline_names.length;
+                        if ((rowHasDetail && !seenHasDetail) || (row.created_at || '') > (seen.created_at || '')) {
+                            byProject.set(row.project_id, row);
+                        }
+                    });
+
+                setNotificationsTableData([...byProject.values()]);
             } catch (error) {
                 console.error('Error fetching notifications table data:', error);
                 setNotificationsTableData([]);
@@ -552,12 +578,20 @@ const JudgesPortalPage = () => {
         }
         
         let baseList = scoresheets;
-        
-        // For non-admin users, filter to only assigned project scoresheets
-        if (!isAdminUser && assignedProjectData.length > 0) {
+
+        // For non-admin users, filter to only assigned project scoresheets.
+        // Deny by default: while the assignment lookup is still running, or when the
+        // assigned project rows could not be loaded, the list stays empty. Falling
+        // through here used to leave baseList as "every score sheet in the database".
+        if (!isAdminUser) {
+            if (isLoadingAssignments || assignedProjectData.length === 0) {
+                setFilteredScoresheets([]);
+                return;
+            }
+
             // Extract patternIds from assigned projects
             const assignedPatternIds = new Set();
-            
+
             assignedProjectData.forEach(project => {
                 const data = project.project_data;
                 
@@ -579,12 +613,8 @@ const JudgesPortalPage = () => {
             baseList = scoresheets.filter(s => {
                 return s.pattern_id && assignedPatternIds.has(s.pattern_id);
             });
-        } else if (!isAdminUser && assignedProjects.length === 0 && !isLoadingAssignments) {
-            // No assignments - show empty
-            setFilteredScoresheets([]);
-            return;
         }
-        
+
         const filtered = baseList.filter(s => {
             // Normalize association - get abbreviation for matching
             const rawAssoc = s.pattern?.association_name || s.association_abbrev;
@@ -608,7 +638,7 @@ const JudgesPortalPage = () => {
         });
         
         setFilteredScoresheets(filtered);
-    }, [scoresheets, scoresheetFilters, isAdminUser, assignedProjectData, assignedProjects, isLoadingAssignments, associationsData]);
+    }, [scoresheets, scoresheetFilters, isAdminUser, assignedProjectData, isLoadingAssignments, associationsData]);
     
     // Fetch patterns
     useEffect(() => {
@@ -647,11 +677,16 @@ const JudgesPortalPage = () => {
         }
         
         let baseList = patterns;
-        
-        // For non-admin users, filter to only assigned project patterns
-        if (!isAdminUser && assignedProjectData.length > 0) {
+
+        // Same deny-by-default rule as the score sheet list above.
+        if (!isAdminUser) {
+            if (isLoadingAssignments || assignedProjectData.length === 0) {
+                setFilteredPatterns([]);
+                return;
+            }
+
             const assignedPatternNames = new Set();
-            
+
             assignedProjectData.forEach(project => {
                 const data = project.project_data;
                 
@@ -674,12 +709,8 @@ const JudgesPortalPage = () => {
                 // Match pdf_file_name against patternName from patternSelections
                 return assignedPatternNames.has(p.pdf_file_name);
             });
-        } else if (!isAdminUser && assignedProjects.length === 0 && !isLoadingAssignments) {
-            // No assignments - show empty
-            setFilteredPatterns([]);
-            return;
         }
-        
+
         const filtered = baseList.filter(p => {
             const matchAssoc = patternFilters.association === 'all' || 
                 p.association_name === patternFilters.association;
@@ -693,7 +724,7 @@ const JudgesPortalPage = () => {
         });
         
         setFilteredPatterns(filtered);
-    }, [patterns, patternFilters, isAdminUser, assignedProjectData, assignedProjects, isLoadingAssignments]);
+    }, [patterns, patternFilters, isAdminUser, assignedProjectData, isLoadingAssignments]);
     
     // Fetch pattern image
     useEffect(() => {
@@ -1525,10 +1556,14 @@ const JudgesPortalPage = () => {
                                                             
                                                             {scoresheet.image_url && (
                                                                 <div className="rounded-md overflow-hidden border bg-muted/20">
-                                                                    <img 
-                                                                        src={scoresheet.image_url} 
-                                                                        alt="Scoresheet Preview" 
+                                                                    <img
+                                                                        src={scoresheet.image_url}
+                                                                        alt="Scoresheet Preview"
                                                                         className="w-full h-auto max-h-32 object-contain"
+                                                                        // Some stored preview URLs no longer resolve. Showing the
+                                                                        // browser's broken-image icon made the card look faulty;
+                                                                        // the card works fine without a thumbnail.
+                                                                        onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
                                                                     />
                                                                 </div>
                                                             )}

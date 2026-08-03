@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -407,6 +408,7 @@ export const ReviewStep = ({ formData, setFormData, setCurrentStep, variant = 'f
     const { associations = {} } = formData;
     const { toast } = useToast();
     const { user, profile } = useAuth();
+    const navigate = useNavigate();
     const [associationsData, setAssociationsData] = useState([]);
     const [isSaving, setIsSaving] = useState(false);
     const [successDialog, setSuccessDialog] = useState({ open: false, statusLabel: '' });
@@ -498,9 +500,10 @@ export const ReviewStep = ({ formData, setFormData, setCurrentStep, variant = 'f
         if (onNavigateToDashboard) {
             onNavigateToDashboard();
         } else {
-            window.location.href = '/horse-show-manager';
+            // In-app navigation: window.location.href reloaded the whole app after a save.
+            navigate('/horse-show-manager');
         }
-    }, [onNavigateToDashboard]);
+    }, [onNavigateToDashboard, navigate]);
 
     const handleStatusChange = useCallback(async (newStatus) => {
         setIsSaving(true);

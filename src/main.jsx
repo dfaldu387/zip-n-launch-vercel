@@ -8,6 +8,9 @@ import { SiteBrandingProvider } from '@/contexts/SiteBrandingContext';
 import { MarketingContentProvider } from '@/contexts/MarketingContentContext';
 import { HelmetProvider } from 'react-helmet-async';
 import { BrowserRouter } from 'react-router-dom';
+import { registerGlobalErrorHandlers } from '@/lib/globalErrorHandlers';
+
+registerGlobalErrorHandlers();
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

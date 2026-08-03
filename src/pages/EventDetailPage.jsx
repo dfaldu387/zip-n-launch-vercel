@@ -439,18 +439,16 @@ const EventDetailPage = () => {
     });
   };
 
+  // Only the legacy static events (the fallback list) carry a `patternBook` field.
+  // Project-backed events use the "View Pattern Book" button above, which scrolls to
+  // the patterns rendered on this page.
+  //
+  // The live branch used to link to /pattern-books/view/:id — a route that does not
+  // exist, so the catch-all silently dropped the visitor on the home page. A legacy
+  // event has no book to open, so the button is gone; only the "posted on" note stays.
   const getPatternStatus = () => {
-    if (!event.patternBook) return null;
+    if (!event.patternBook || event.patternBook.isLive) return null;
 
-    if (event.patternBook.isLive) {
-      return (
-        <Button asChild className="w-full bg-green-500 hover:bg-green-600">
-          <Link to={`/pattern-books/view/${event.patternBook.id}`}>
-            <BookOpen className="h-4 w-4 mr-2" /> View Pattern Book
-          </Link>
-        </Button>
-      );
-    }
     return (
       <div className="text-center text-sm text-muted-foreground p-3 bg-secondary rounded-md">
         Patterns will be posted on {format(new Date(event.patternBook.publishDate), 'PPP')}

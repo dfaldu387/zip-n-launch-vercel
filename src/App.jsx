@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { Toaster } from '@/components/ui/toaster';
 import ErrorBoundary from '@/components/ErrorBoundary';
@@ -76,6 +76,7 @@ const ProfilePage = lazy(() => import('@/pages/ProfilePage'));
 const JudgesPortalPage = lazy(() => import('@/pages/JudgesPortalPage'));
 const StaffPortalPage = lazy(() => import('@/pages/StaffPortalPage'));
 const NotAuthorizedPage = lazy(() => import('@/pages/NotAuthorizedPage'));
+const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'));
 const AdminUserManagementPage = lazy(() => import('@/pages/AdminUserManagementPage'));
 const AdminDisciplineManagementPage = lazy(() => import('@/pages/AdminDisciplineManagementPage'));
 const AdminAssociationManagementPage = lazy(() => import('@/pages/AdminAssociationManagementPage'));
@@ -172,7 +173,8 @@ function App() {
                   <Route path="/refund-policy" element={<PolicyPage />} />
                   <Route path="/support" element={<SupportPage />} />
                   <Route path="/membership" element={<PricingPage />} />
-                  <Route path="/database-schema" element={<DatabaseSchemaPage />} />
+                  {/* Internal design document — was reachable by any visitor. */}
+                  <Route path="/database-schema" element={<AdminRoute><DatabaseSchemaPage /></AdminRoute>} />
                   <Route path="/not-authorized" element={<NotAuthorizedPage />} />
                   <Route path="/book-stalls" element={<PublicShowsListPage />} />
                   <Route path="/show/:showId" element={<PublicShowPage />} />
@@ -244,8 +246,11 @@ function App() {
 
                   <Route path="/customer-portal" element={<MembershipRoute><CustomerPortalPage /></MembershipRoute>} />
                   <Route path="/archive-patterns" element={<MembershipRoute><ArchivePatternsPage /></MembershipRoute>} />
-                  <Route path="/judges-portal" element={<JudgesPortalPage />} />
-                  <Route path="/staff-portal" element={<StaffPortalPage />} />
+                  {/* Judges and staff are not necessarily subscribers, so these ask for a
+                      login only (no membership, no permission code). Without a guard the
+                      pages loaded as an empty shell for signed-out visitors. */}
+                  <Route path="/judges-portal" element={<RoleBasedRoute><JudgesPortalPage /></RoleBasedRoute>} />
+                  <Route path="/staff-portal" element={<RoleBasedRoute><StaffPortalPage /></RoleBasedRoute>} />
                   <Route path="/pattern-hub" element={<MembershipRoute><PatternHubPage /></MembershipRoute>} />
                   <Route path="/pattern-hub/:projectId" element={<MembershipRoute><PatternHubPage /></MembershipRoute>} />
                   <Route path="/store" element={<StorePage />} />
@@ -296,8 +301,10 @@ function App() {
                   <Route path="/s/:id/results" element={<ScoreSheetResultsPage />} />
                   {/* Public results: every completed score sheet posted for a show */}
                   <Route path="/event-results/:id" element={<ShowResultsPage />} />
-                  {/* Catch-all: any unknown URL redirects to home instead of a blank page */}
-                  <Route path="*" element={<Navigate to="/" replace />} />
+                  {/* Catch-all: any unknown URL shows a "page not found" screen. It used to
+                      redirect to home, which made typos and dead links look like the app had
+                      lost the page. */}
+                  <Route path="*" element={<NotFoundPage />} />
                 </Routes>
                 </Suspense>
                 </ErrorBoundary>

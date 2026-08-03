@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Circle, Loader2, FileEdit, Lock, Check, ChevronDown, AlertTriangle,
+  Circle, Loader2, FileEdit, Lock, Check, ChevronDown, AlertTriangle, Info,
 } from 'lucide-react';
 import {
   MODULE_STATUS,
@@ -49,6 +49,8 @@ const ALL_STATUSES = [
  * @param {boolean}  props.isShowLocked  - Whether the show is globally locked
  * @param {Function} props.onStatusChange - (moduleKey, newStatus) => void
  * @param {boolean}  props.compact       - Smaller variant for tight spaces
+ * @param {boolean}  props.readOnly      - Status is owned by another record; display only
+ * @param {string}   props.readOnlyReason - Tooltip text explaining where the status is edited
  */
 export const ModuleStatusBadge = ({
   status = MODULE_STATUS.NOT_STARTED,
@@ -57,6 +59,7 @@ export const ModuleStatusBadge = ({
   onStatusChange,
   compact = false,
   readOnly = false,
+  readOnlyReason = 'This status is managed on another page.',
 }) => {
   const meta = STATUS_META[status] || STATUS_META[MODULE_STATUS.NOT_STARTED];
   const IconComp = ICON_MAP[meta.icon] || Circle;
@@ -68,20 +71,35 @@ export const ModuleStatusBadge = ({
         'flex items-center gap-1 font-medium rounded-md transition-colors',
         compact ? 'text-[10px] px-1 py-0.5' : 'text-[11px] px-1.5 py-0.5',
         meta.color,
-        isShowLocked || readOnly ? 'opacity-60 cursor-default' : 'hover:bg-muted cursor-pointer',
+        readOnly && 'opacity-70 cursor-help',
+        isShowLocked && !readOnly && 'opacity-60 cursor-default',
+        !isShowLocked && !readOnly && 'hover:bg-muted cursor-pointer',
       )}
       onClick={(e) => e.preventDefault()}
     >
       <IconComp className={compact ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
       {meta.label}
-      {!isShowLocked && availableTransitions.length > 0 && (
+      {readOnly && <Info className="h-3 w-3 opacity-60" />}
+      {!isShowLocked && !readOnly && availableTransitions.length > 0 && (
         <ChevronDown className="h-3 w-3 opacity-50" />
       )}
     </button>
   );
 
-  // Status is owned elsewhere (e.g. the pattern book itself) — display only.
-  if (readOnly) return badge;
+  // Status is owned elsewhere (e.g. the pattern book itself) — display only,
+  // but say so, otherwise the greyed badge just reads as broken.
+  if (readOnly) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>{badge}</TooltipTrigger>
+          <TooltipContent side="left" className="max-w-[240px] text-xs">
+            {readOnlyReason}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
 
   // If show is locked, show tooltip instead of dropdown
   if (isShowLocked) {

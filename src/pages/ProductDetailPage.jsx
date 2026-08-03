@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useCart } from '@/hooks/useCart';
 import { useToast } from '@/components/ui/use-toast';
 import { ShoppingCart, Loader2, ArrowLeft, CheckCircle, Minus, Plus, XCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import Navigation from '@/components/Navigation';
 
 const placeholderImage = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMzc0MTUxIi8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzlDQTNBRiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPk5vIEltYWdlPC90ZXh0Pgo8L3N2Zz4K";
 
@@ -117,25 +118,35 @@ function ProductDetailPage() {
     fetchProductData();
   }, [id, navigate]);
 
+  // This page rendered with no header at all, so a visitor arriving from a shared
+  // product link had no way into the rest of the site. Same shell as the Store page.
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-[60vh]">
-        <Loader2 className="h-16 w-16 text-white animate-spin" />
+      <div className="min-h-screen bg-background text-foreground">
+        <Navigation />
+        <div className="flex justify-center items-center h-[60vh]">
+          <Loader2 className="h-16 w-16 text-primary animate-spin" />
+        </div>
       </div>
     );
   }
 
   if (error || !product) {
     return (
-      <div className="max-w-5xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-white hover:text-purple-300 transition-colors mb-6">
-          <ArrowLeft size={16} />
-          Go back
-        </Link>
-        <div className="text-center text-red-400 p-8 glass-card rounded-2xl">
-          <XCircle className="mx-auto h-16 w-16 mb-4" />
-          <p className="mb-6">Error loading product: {error}</p>
-        </div>
+      <div className="min-h-screen bg-background text-foreground">
+        <Navigation />
+        <main className="container mx-auto px-4 py-8">
+          <div className="max-w-5xl mx-auto">
+            <Link to="/store" className="inline-flex items-center gap-2 hover:text-primary transition-colors mb-6">
+              <ArrowLeft size={16} />
+              Back to Store
+            </Link>
+            <div className="text-center text-destructive p-8 glass-card rounded-2xl">
+              <XCircle className="mx-auto h-16 w-16 mb-4" />
+              <p className="mb-6">Error loading product: {error}</p>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
@@ -155,8 +166,11 @@ function ProductDetailPage() {
         <title>{product.title} - Our Store</title>
         <meta name="description" content={product.description?.substring(0, 160) || product.title} />
       </Helmet>
+      <div className="min-h-screen bg-background text-foreground">
+      <Navigation />
+      <main className="container mx-auto px-4 py-8">
       <div className="max-w-5xl mx-auto">
-        <Link to="/store" className="inline-flex items-center gap-2 text-white hover:text-purple-300 transition-colors mb-6">
+        <Link to="/store" className="inline-flex items-center gap-2 hover:text-primary transition-colors mb-6">
           <ArrowLeft size={16} />
           Back to Store
         </Link>
@@ -308,6 +322,8 @@ function ProductDetailPage() {
             </div>
           </motion.div>
         </div>
+      </div>
+      </main>
       </div>
     </>
   );

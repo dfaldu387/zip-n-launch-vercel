@@ -38,7 +38,7 @@ import {
 
 /* ── Module card ── */
 
-const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, moduleKey, onStatusChange, comingSoon, isShowLocked }) => {
+const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, statusReadOnlyReason, moduleKey, onStatusChange, comingSoon, isShowLocked }) => {
   const { toast } = useToast();
   const colorMap = {
     blue: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600',
@@ -108,6 +108,7 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
                       isShowLocked={isShowLocked}
                       onStatusChange={onStatusChange}
                       readOnly={statusReadOnly}
+                      readOnlyReason={statusReadOnlyReason}
                     />
                   )}
                 </div>
@@ -399,6 +400,7 @@ const ShowWorkspacePage = () => {
                 to: `/pattern-book-builder/${linkedBook.id}`,
                 status: bookStatusToModuleStatus(linkedBook.status),
                 statusReadOnly: true,
+                statusReadOnlyReason: `This status comes from the pattern book "${linkedBook.project_name || 'Untitled'}". Open the Pattern Book Builder to change it.`,
               }
             : { onClick: () => setIsLinkDialogOpen(true) }),
         },

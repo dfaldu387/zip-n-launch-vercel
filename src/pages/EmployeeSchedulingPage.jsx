@@ -472,6 +472,7 @@ const SchedulingDashboard = ({ show, onSave, isSaving }) => {
     const sharedStaff = pd.sharedStaff || [];
     const dates = useMemo(() => getShowDates(pd), [pd]);
     const { toast } = useToast();
+    const navigate = useNavigate();
 
     const [assignments, setAssignments] = useState(() => pd.staffSchedule?.assignments || []);
     const [roster, setRoster] = useState(() => pd.staffSchedule?.roster || []);
@@ -528,7 +529,9 @@ const SchedulingDashboard = ({ show, onSave, isSaving }) => {
                     <Building2 className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                     <h3 className="text-lg font-semibold mb-2">No Arenas Configured</h3>
                     <p className="text-sm text-muted-foreground mb-6">Set up venues and arenas with staff positions first.</p>
-                    <Button onClick={() => window.location.href = '/horse-show-manager/venue-arena-setup'}>
+                    {/* In-app navigation: window.location.href reloaded the whole app,
+                        which threw away unsaved schedule edits. */}
+                    <Button onClick={() => navigate('/horse-show-manager/venue-arena-setup')}>
                         Go to Venue & Arena Setup
                     </Button>
                 </CardContent>
