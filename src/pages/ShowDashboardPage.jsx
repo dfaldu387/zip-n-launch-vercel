@@ -4,6 +4,7 @@ import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { isRole, ROLE } from '@/lib/roles';
 import { useToast } from '@/components/ui/use-toast';
 import { Loader2, Calendar, ShieldCheck, Play, Archive, FilePlus, QrCode, Upload, BarChart, Edit } from 'lucide-react';
 import Navigation from '@/components/Navigation';
@@ -45,7 +46,7 @@ const ActionCard = ({ title, description, icon: Icon, onClick, disabled = false,
 const ShowDashboardPage = () => {
   const { showId } = useParams();
   const { toast } = useToast();
-  const { profile } = useAuth();
+  const { profile, isAdmin } = useAuth();
   const [show, setShow] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -95,8 +96,10 @@ const ShowDashboardPage = () => {
     );
   }
 
-  const isShowManager = profile?.role === 'ShowManager' || profile?.role === 'Admin';
-  const isSecretary = profile?.role === 'ShowSecretary' || isShowManager;
+  // Was an exact string comparison, so a role stored as 'admin' lost show-manager
+  // rights here while the rest of the app still treated the account as an admin.
+  const isShowManager = isAdmin || isRole(profile?.role, ROLE.SHOW_MANAGER);
+  const isSecretary = isRole(profile?.role, ROLE.SHOW_SECRETARY) || isShowManager;
 
   return (
     <>

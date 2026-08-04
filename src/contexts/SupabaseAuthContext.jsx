@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { supabase } from '@/lib/supabaseClient';
 import { useToast } from '@/components/ui/use-toast';
 import { useNavigate } from 'react-router-dom';
+import { isRole, escapeLikePattern, ROLE } from '@/lib/roles';
 
 const AuthContext = createContext(undefined);
 
@@ -37,7 +38,7 @@ export const AuthProvider = ({ children }) => {
       
       setProfile(data);
       const userRole = data?.role;
-      const isAdminUser = userRole?.toLowerCase() === 'admin';
+      const isAdminUser = isRole(userRole, ROLE.ADMIN);
       setIsAdmin(isAdminUser);
 
       if (isAdminUser) {
@@ -45,10 +46,16 @@ export const AuthProvider = ({ children }) => {
         if (permsError) throw permsError;
         setPermissions(allPerms.map(p => p.code));
       } else if (userRole) {
+        // ilike is an exact match that ignores capitalisation, so a profile saved
+        // as 'showmanager' still finds the 'SHOW_MANAGER' row instead of silently
+        // ending up with zero permissions. The value has to be escaped first:
+        // role codes contain underscores, and in SQL an unescaped '_' matches any
+        // single character.
+        const rolePattern = escapeLikePattern(userRole);
         const { data: rolePerms, error: rolePermsError } = await supabase
           .from('role_permissions')
           .select('permission_code')
-          .eq('role_code', userRole); // Use role from profile
+          .ilike('role_code', rolePattern);
         if(rolePermsError) throw rolePermsError;
         setPermissions(rolePerms.map(p => p.permission_code));
       } else {
