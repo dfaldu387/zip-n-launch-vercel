@@ -39,6 +39,34 @@ const randomPassword = () => {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 };
 
+/**
+ * Finds an account by email across every page of the user list.
+ *
+ * listUsers() returns only the FIRST PAGE — 50 users by default. Once the site
+ * passed 50 accounts, anyone further down the list looked new, so the function
+ * tried to create them again and Supabase answered "A user with this email
+ * address has already been registered". Adding an existing person to a show
+ * simply failed.
+ */
+const findAuthUserByEmail = async (supabaseAdmin: any, normalizedEmail: string) => {
+  const perPage = 1000;
+  // Bounded so a bad response can never spin forever; 20 pages = 20,000 accounts.
+  for (let page = 1; page <= 20; page += 1) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error('Error listing users on page', page, error);
+      return null;
+    }
+    const users = data?.users ?? [];
+    const match = users.find(
+      (u: { email?: string }) => (u.email ?? '').toLowerCase() === normalizedEmail
+    );
+    if (match) return match;
+    if (users.length < perPage) return null;
+  }
+  return null;
+};
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -124,10 +152,7 @@ serve(async (req: Request) => {
       .ilike('email', normalizedEmail)
       .maybeSingle();
 
-    const { data: userList } = await supabaseAdmin.auth.admin.listUsers();
-    const existingAuthUser = (userList?.users ?? []).find(
-      (u: { email?: string }) => (u.email ?? '').toLowerCase() === normalizedEmail
-    );
+    const existingAuthUser = await findAuthUserByEmail(supabaseAdmin, normalizedEmail);
 
     const existingUserId = existingAuthUser?.id ?? existingCustomer?.user_id ?? null;
 
@@ -178,6 +203,33 @@ serve(async (req: Request) => {
     });
 
     if (createError || !newUser?.user) {
+      // Safety net: if the account turns out to exist after all, treat it as an
+      // existing user instead of failing. Adding a colleague to a show must never
+      // stop because of how the lookup was done.
+      const alreadyRegistered = /already .*registered|already exists|duplicate/i.test(
+        createError?.message ?? ''
+      );
+
+      if (alreadyRegistered) {
+        const recovered = await findAuthUserByEmail(supabaseAdmin, normalizedEmail);
+        if (recovered?.id) {
+          console.log('Account already existed, reusing:', recovered.id);
+          const lastNameExisting = name.split(/\s+/).slice(1).join(' ') || null;
+          await supabaseAdmin
+            .from('customers')
+            .upsert(
+              { user_id: recovered.id, email, full_name: name, last_name: lastNameExisting },
+              { onConflict: 'user_id' }
+            );
+          return json({
+            success: true,
+            message: 'User already exists',
+            userId: recovered.id,
+            created: false,
+          });
+        }
+      }
+
       console.error('Error creating user:', createError);
       throw createError ?? new Error('User creation returned no user');
     }
