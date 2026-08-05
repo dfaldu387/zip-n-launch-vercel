@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { isRememberMe, setRememberMe as persistRememberMe } from '@/lib/authStorage';
 import { Loader2, Eye, EyeOff, User, MapPin, Award, Users, ChevronRight, ChevronLeft, Plus, Trash2, Camera, AlertTriangle, Sparkles, CheckCircle2, PartyPopper } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -87,7 +88,10 @@ const AuthModal = () => {
     // Form States - Sign In
     const [signInEmail, setSignInEmail] = useState('');
     const [signInPassword, setSignInPassword] = useState('');
-    const [rememberMe, setRememberMe] = useState(false);
+    // Starts from the saved preference, and defaults to on — that matches how the
+    // app behaved before the checkbox did anything, so nobody is unexpectedly
+    // signed out when the browser closes.
+    const [rememberMe, setRememberMe] = useState(isRememberMe);
     const [showSignInPassword, setShowSignInPassword] = useState(false);
     
     // Form States - Sign Up Step 1 (Basic)
@@ -96,6 +100,7 @@ const AuthModal = () => {
     const [signUpEmail, setSignUpEmail] = useState('');
     const [mobile, setMobile] = useState('');
     const [signUpPassword, setSignUpPassword] = useState('');
+    const [signUpPasswordConfirm, setSignUpPasswordConfirm] = useState('');
     const [showSignUpPassword, setShowSignUpPassword] = useState(false);
     
     // Form States - Sign Up Step 2 (Profile)
@@ -138,7 +143,10 @@ const AuthModal = () => {
     const handleSignIn = async (e) => {
         e.preventDefault();
         setIsLoading(true);
-        const { error } = await signIn(signInEmail, signInPassword);
+        // Set before signing in, so the new session is written to the store the
+        // checkbox asks for rather than being moved afterwards.
+        persistRememberMe(rememberMe);
+        const { error } = await signIn(signInEmail.trim(), signInPassword);
         if (!error) {
             toast({ title: "Welcome back!", description: "You've been successfully signed in." });
             closeAuthModal();
@@ -155,6 +163,11 @@ const AuthModal = () => {
         }
         if (signUpPassword.length < 6) {
             toast({ title: "Weak Password", description: "Your password must be at least 6 characters long.", variant: "destructive" });
+            setIsSubmitting(false);
+            return;
+        }
+        if (signUpPassword !== signUpPasswordConfirm) {
+            toast({ title: "Passwords do not match", description: "Please retype the same password in both boxes.", variant: "destructive" });
             setIsSubmitting(false);
             return;
         }
@@ -209,12 +222,15 @@ const AuthModal = () => {
             // Reset all form fields
             setSignInEmail('');
             setSignInPassword('');
-            setRememberMe(false);
+            // Back to the saved preference rather than a hardcoded false, so
+            // closing the dialog does not silently change the user's choice.
+            setRememberMe(isRememberMe());
             setFirstName('');
             setLastName('');
             setSignUpEmail('');
             setMobile('');
             setSignUpPassword('');
+            setSignUpPasswordConfirm('');
             setForgotPasswordEmail('');
             setIsLoading(false);
             setShowSignInPassword(false);
@@ -297,12 +313,17 @@ const AuthModal = () => {
 
     const nextStep = () => {
         if (signUpStep === 1) {
-            if (!firstName || !lastName || !signUpEmail || !signUpPassword) {
+            if (!firstName || !lastName || !signUpEmail || !signUpPassword || !signUpPasswordConfirm) {
                 toast({ title: "Required Fields", description: "Please fill in all required fields.", variant: "destructive" });
                 return;
             }
             if (signUpPassword.length < 6) {
                 toast({ title: "Weak Password", description: "Password must be at least 6 characters.", variant: "destructive" });
+                return;
+            }
+            // Caught here on step 1 rather than after three more steps of typing.
+            if (signUpPassword !== signUpPasswordConfirm) {
+                toast({ title: "Passwords do not match", description: "Please retype the same password in both boxes.", variant: "destructive" });
                 return;
             }
         }
@@ -354,6 +375,23 @@ const AuthModal = () => {
                     </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">Must be at least 6 characters.</p>
+            </div>
+            {/* Sign-up used to take the password once. A typo created an account that
+                nobody could sign into — the person had to use "forgot password" to get
+                in. Every other password form in the app already confirms. */}
+            <div className="space-y-1">
+                <Label htmlFor="password-signup-confirm" className="text-xs">Confirm Password *</Label>
+                <Input
+                    id="password-signup-confirm"
+                    type={showSignUpPassword ? "text" : "password"}
+                    required
+                    value={signUpPasswordConfirm}
+                    onChange={(e) => setSignUpPasswordConfirm(e.target.value)}
+                    className="h-9"
+                />
+                {signUpPasswordConfirm && signUpPassword !== signUpPasswordConfirm && (
+                    <p className="text-xs text-destructive">Passwords do not match.</p>
+                )}
             </div>
         </div>
     );

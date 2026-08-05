@@ -3,8 +3,10 @@ project_id = "akvmndheosffcgvxuxbr"
 [functions.send-pattern-book]
 verify_jwt = false
 
+# Creates accounts and assigns roles, so it must never run for an anonymous
+# caller. The function checks the caller's token itself as well.
 [functions.create-staff-user]
-verify_jwt = false
+verify_jwt = true
 
 [functions.send-status-notification]
 verify_jwt = false

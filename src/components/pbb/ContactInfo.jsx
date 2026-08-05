@@ -13,7 +13,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
+// One shared client — see the note in Step_CloseOutAndDelegate.jsx.
+import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { useToast } from '@/components/ui/use-toast';
 import { Loader2 } from 'lucide-react';
 
@@ -64,21 +66,28 @@ export const ContactInfo = ({ official, onUpdate, children }) => {
     
     setIsCheckingUser(true);
     try {
-      // Check if user exists in profiles table
-      const { data: profiles, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, email, role')
-        .eq('email', emailValue)
-        .single();
+      // This used to query profiles by email. The profiles table has no email
+      // column, so the query always failed and the error was swallowed — the
+      // lookup silently reported "no existing user" every single time.
+      //
+      // Emails live on the customers table, which a user may only read for their
+      // own record. find_user_by_email does the lookup on the server and returns
+      // just the id and the name — no email, role or subscription comes back.
+      const { data, error } = await supabase.rpc('find_user_by_email', {
+        p_email: emailValue,
+      });
 
-      if (profiles && !error) {
-        setExistingUser(profiles);
-        setName(profiles.full_name || name);
+      const match = Array.isArray(data) ? data[0] : data;
+
+      if (match?.user_id && !error) {
+        setExistingUser({ id: match.user_id, full_name: match.full_name });
+        setName(match.full_name || name);
         toast({
           title: 'User Found',
-          description: `Found existing user: ${profiles.full_name}`,
+          description: `Found existing user: ${match.full_name}`,
         });
       } else {
+        if (error) console.error('Error checking user:', error);
         setExistingUser(null);
       }
     } catch (error) {
@@ -106,12 +115,10 @@ export const ContactInfo = ({ official, onUpdate, children }) => {
     // If user doesn't exist and email is provided, create the user
     if (!existingUser && currentEmail && currentEmail.includes('@')) {
       try {
-        const { data, error } = await supabase.functions.invoke('create-staff-user', {
-          body: {
-            email: currentEmail,
-            name: currentName,
-            role: roleName
-          }
+        const { data, error } = await invokeAsUser('create-staff-user', {
+          email: currentEmail,
+          name: currentName,
+          role: roleName
         });
 
         if (error) throw error;

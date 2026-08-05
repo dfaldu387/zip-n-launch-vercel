@@ -19,19 +19,25 @@ const UpdatePasswordPage = () => {
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [error, setError] = useState('');
     const [isMounted, setIsMounted] = useState(false);
+    const [linkExpired, setLinkExpired] = useState(false);
 
     useEffect(() => {
       setIsMounted(true);
-      // Give Supabase time to exchange the recovery token and establish a session.
-      // The URL may contain hash fragments or query params depending on the auth flow.
-      // Wait for loading to finish, then check if we have a valid session.
-      const timeout = setTimeout(() => {
-        if (!loading && !session) {
-          navigate('/');
-        }
-      }, 3000); // Allow 3 seconds for token exchange
+    }, []);
+
+    // Supabase has to exchange the recovery token from the URL before a session
+    // exists. This used to be a flat 3-second timer, so on a slow connection the
+    // reset link simply bounced the user to the home page and looked broken.
+    // Now the timer only starts once Supabase has finished loading and still has
+    // no session, and it explains itself instead of redirecting silently.
+    useEffect(() => {
+      if (loading || session) {
+        setLinkExpired(false);
+        return;
+      }
+      const timeout = setTimeout(() => setLinkExpired(true), 8000);
       return () => clearTimeout(timeout);
-    }, [session, loading, navigate]);
+    }, [session, loading]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -54,10 +60,29 @@ const UpdatePasswordPage = () => {
         }
     };
     
-    if (loading || !isMounted) {
+    if (loading || !isMounted || (!session && !linkExpired)) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background">
                 <Loader2 className="h-12 w-12 animate-spin text-primary" />
+            </div>
+        );
+    }
+
+    if (!session) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-background p-4">
+                <Card className="w-full max-w-md text-center">
+                    <CardHeader>
+                        <CardTitle className="text-2xl font-bold">Reset link expired</CardTitle>
+                        <CardDescription>
+                            This password reset link is no longer valid. Reset links can only be
+                            used once, and they expire after a while.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <Button onClick={() => navigate('/')}>Back to Home</Button>
+                    </CardContent>
+                </Card>
             </div>
         );
     }

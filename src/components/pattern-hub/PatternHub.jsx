@@ -18,7 +18,9 @@ import { Step6_Preview } from '@/components/pbb/Step6_Preview';
 
 import { BuilderSteps } from '@/components/pbb/BuilderSteps';
 import { useToast } from '@/components/ui/use-toast';
-import { supabase } from '@/integrations/supabase/client';
+// One shared client — a second instance keeps its own session and silently loses
+// the signed-in user on some calls.
+import { supabase } from '@/lib/supabaseClient';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 
 // All possible steps — matches Pattern Book Builder flow

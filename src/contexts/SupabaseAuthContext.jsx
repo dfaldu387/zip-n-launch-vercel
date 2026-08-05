@@ -134,13 +134,16 @@ export const AuthProvider = ({ children }) => {
         description: error.message || "Something went wrong",
       });
     } else if (data.user) {
-        // Create profile row with default 'Customer' role
+        // The profile row itself is created by the handle_new_user() database
+        // trigger, which also sets role = 'Customer'. The browser must never send
+        // `role` — that is how an account could ask to be created as an admin.
+        // This only fills in the name, in case the trigger ran before the metadata
+        // was available.
         const { error: profileError } = await supabase
           .from('profiles')
           .upsert({
             id: data.user.id,
             full_name: `${firstName} ${lastName}`.trim(),
-            role: 'Customer',
           }, { onConflict: 'id' });
 
         if (profileError) {
@@ -282,18 +285,17 @@ export const AuthProvider = ({ children }) => {
         })
         .eq('user_id', data.user.id);
 
+      // The profile itself has already saved by this point. A failure here only
+      // means the secondary customers record did not sync, so saying "Profile
+      // Update Failed" told the user their change was lost when it was not.
       if (customerError) {
-        toast({
-          variant: "destructive",
-          title: "Profile Update Failed",
-          description: `Could not update customer record: ${customerError.message}`,
-        });
-      } else {
-        toast({
-          title: "Profile Updated!",
-          description: "Your information has been successfully updated.",
-        });
+        console.error('Error syncing customers table:', customerError);
       }
+
+      toast({
+        title: "Profile Updated!",
+        description: "Your information has been successfully updated.",
+      });
     }
     return { data, error };
   }, [toast]);

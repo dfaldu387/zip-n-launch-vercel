@@ -369,7 +369,7 @@ const PatternBookBuilderPage = () => {
             case 5: return <Step6_PatternAndLayout formData={formData} setFormData={setFormData} associationsData={associationsData} isReadOnly={isReadOnly} />;
             case 6: return <Step4_Uploads formData={formData} setFormData={setFormData} isReadOnly={isReadOnly} />;
             case 7: return <Step6_Preview formData={formData} setFormData={setFormData} isReadOnly={isReadOnly} onGoToStep={setCurrentStep} />;
-            case 8: return <Step_CloseOutAndDelegate formData={formData} setFormData={setFormData} isReadOnly={isReadOnly} createOrUpdateProject={createOrUpdateProject} />;
+            case 8: return <Step_CloseOutAndDelegate formData={formData} setFormData={setFormData} isReadOnly={isReadOnly} createOrUpdateProject={createOrUpdateProject} onGoToStep={setCurrentStep} />;
             default: return null;
         }
     };

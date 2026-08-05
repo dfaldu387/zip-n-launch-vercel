@@ -94,6 +94,10 @@ const AccountSecurityPage = () => {
   };
 
   const handleChangePassword = async () => {
+    if (!currentPassword) {
+      toast({ title: 'Error', description: 'Please enter your current password.', variant: 'destructive' });
+      return;
+    }
     if (newPassword !== confirmPassword) {
       toast({ title: 'Error', description: 'New passwords do not match.', variant: 'destructive' });
       return;
@@ -102,8 +106,29 @@ const AccountSecurityPage = () => {
       toast({ title: 'Error', description: 'Password must be at least 6 characters.', variant: 'destructive' });
       return;
     }
+    if (newPassword === currentPassword) {
+      toast({ title: 'Error', description: 'The new password must be different from the current one.', variant: 'destructive' });
+      return;
+    }
     setIsLoading(true);
     try {
+      // Prove the person at the keyboard is the account owner before letting them
+      // change the password. Without this, anyone finding a signed-in browser could
+      // take the account over and lock the owner out. Signing in again is the only
+      // way Supabase offers to verify a password.
+      const { error: reauthError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: currentPassword,
+      });
+      if (reauthError) {
+        toast({
+          title: 'Incorrect password',
+          description: 'The current password you entered is not correct.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
       toast({ title: 'Success', description: 'Password changed successfully.' });
@@ -389,11 +414,26 @@ const AccountSecurityPage = () => {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {/* The state for this field already existed but the input was never
+                        rendered and the value never checked, so anyone at a signed-in
+                        browser could change the password without knowing it. */}
+                    <div className="space-y-2">
+                      <Label htmlFor="currentPassword">Current Password</Label>
+                      <Input
+                        id="currentPassword"
+                        type="password"
+                        autoComplete="current-password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        placeholder="Enter your current password"
+                      />
+                    </div>
                     <div className="space-y-2">
                       <Label htmlFor="newPassword">New Password</Label>
                       <Input
                         id="newPassword"
                         type="password"
+                        autoComplete="new-password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         placeholder="Enter new password"
@@ -404,12 +444,16 @@ const AccountSecurityPage = () => {
                       <Input
                         id="confirmPassword"
                         type="password"
+                        autoComplete="new-password"
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="Confirm new password"
                       />
                     </div>
-                    <Button onClick={handleChangePassword} disabled={isLoading || !newPassword || !confirmPassword}>
+                    <Button
+                      onClick={handleChangePassword}
+                      disabled={isLoading || !currentPassword || !newPassword || !confirmPassword}
+                    >
                       {isLoading ? 'Changing...' : 'Change Password'}
                     </Button>
                   </CardContent>

@@ -12,245 +12,213 @@ interface CreateStaffUserRequest {
   role: string;
 }
 
+// Roles this endpoint may never hand out, whatever the caller asks for. The
+// request used to be trusted as sent, so anyone could call the function with
+// role "Admin" and be given an administrator account.
+const PRIVILEGED_ROLES = ['admin'];
+
+// Callers send the role in whatever form their screen has: ContactInfo sends the
+// display name ("Show Manager"), the close-out step sends the stored value
+// ("SHOW_MANAGER"). Dropping case and every separator lets both find the same row.
+const normalizeRole = (value: string | null | undefined) =>
+  (value ?? '').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+
+// A one-time password nobody needs to know. The account is reached through the
+// set-password link in the welcome email instead. Every account used to be
+// created with the same hardcoded "12345", so knowing a judge's email address
+// was enough to sign in as them.
+const randomPassword = () => {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+};
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
+      supabaseUrl,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-      {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false
-        }
-      }
+      { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
     const postmarkApiToken = Deno.env.get('POSTMARK_API_TOKEN') ?? '';
+    const siteUrl = Deno.env.get('SITE_URL') ?? 'https://equipatterns.com';
 
-    const { email, name, role }: CreateStaffUserRequest = await req.json();
+    // --- 1. The caller must be signed in -------------------------------------
+    // This function creates accounts and assigns roles using admin rights, so it
+    // must never act for an anonymous request. supabase.functions.invoke sends
+    // the caller's session token automatically.
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const accessToken = authHeader.replace(/^Bearer\s+/i, '').trim();
 
-    // Normalize email (trim and lowercase)
-    const normalizedEmail = email.trim().toLowerCase();
-    const trimmedEmail = email.trim();
-    console.log(`Processing user for email: ${normalizedEmail}, original: ${email}, name: ${name}, role: ${role}`);
+    if (!accessToken) {
+      return json({ success: false, error: 'Sign in required.', created: false }, 401);
+    }
 
-    // First, check if customer exists in customers table by email (case-insensitive)
-    let existingCustomerByEmail = null;
-    let customerCheckError = null;
-    
-    // Try case-insensitive check first
-    const { data: customerIlike, error: errorIlike } = await supabaseAdmin
+    const { data: caller, error: callerError } =
+      await supabaseAdmin.auth.getUser(accessToken);
+
+    if (callerError || !caller?.user) {
+      return json({ success: false, error: 'Sign in required.', created: false }, 401);
+    }
+
+    const { data: callerProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', caller.user.id)
+      .maybeSingle();
+
+    const callerIsAdmin = normalizeRole(callerProfile?.role) === 'admin';
+
+    // --- 2. Validate the request ---------------------------------------------
+    const body: CreateStaffUserRequest = await req.json();
+    const email = (body?.email ?? '').trim();
+    const normalizedEmail = email.toLowerCase();
+    const name = (body?.name ?? '').trim();
+    const requestedRole = (body?.role ?? '').trim();
+
+    if (!email.includes('@') || !name) {
+      return json({ success: false, error: 'A name and a valid email are required.', created: false }, 400);
+    }
+
+    // The role has to be one the system actually knows, so a typo or an invented
+    // value cannot be written onto an account. Matched against both the stored
+    // code and the display name, because the two callers send different ones.
+    const { data: knownRoles } = await supabaseAdmin.from('roles').select('role_code, name');
+    const wanted = normalizeRole(requestedRole);
+    const matchedRole = (knownRoles ?? []).find(
+      (r: { role_code: string; name: string }) =>
+        normalizeRole(r.role_code) === wanted || normalizeRole(r.name) === wanted
+    );
+
+    if (!matchedRole) {
+      return json({ success: false, error: `Unknown role: ${requestedRole}`, created: false }, 400);
+    }
+
+    const role = matchedRole.role_code;
+
+    // Checked on the resolved code, not on what was sent — asking for the Admin
+    // role by its display name must be refused just the same.
+    if (!callerIsAdmin && PRIVILEGED_ROLES.includes(normalizeRole(role))) {
+      console.warn('Blocked privileged role request from', caller.user.id, 'for', requestedRole);
+      return json({ success: false, error: 'That role cannot be assigned here.', created: false }, 403);
+    }
+
+    console.log(`create-staff-user by ${caller.user.id}: ${normalizedEmail} as ${role}`);
+
+    // --- 3. Existing account? -------------------------------------------------
+    const { data: existingCustomer } = await supabaseAdmin
       .from('customers')
       .select('id, user_id, email, full_name')
       .ilike('email', normalizedEmail)
       .maybeSingle();
-    
-    if (errorIlike) {
-      console.error('Error with ilike check:', errorIlike);
-      // Fallback to exact match
-      const { data: customerExact, error: errorExact } = await supabaseAdmin
-        .from('customers')
-        .select('id, user_id, email, full_name')
-        .eq('email', trimmedEmail)
-        .maybeSingle();
-      
-      existingCustomerByEmail = customerExact;
-      customerCheckError = errorExact;
-    } else {
-      existingCustomerByEmail = customerIlike;
-      customerCheckError = errorIlike;
-    }
 
-    if (customerCheckError) {
-      console.error('Error checking customers table:', customerCheckError);
-    }
+    const { data: userList } = await supabaseAdmin.auth.admin.listUsers();
+    const existingAuthUser = (userList?.users ?? []).find(
+      (u: { email?: string }) => (u.email ?? '').toLowerCase() === normalizedEmail
+    );
 
-    // If customer exists in customers table, don't create anything
-    if (existingCustomerByEmail) {
-      console.log('Customer already exists in customers table:', existingCustomerByEmail.id, 'with email:', existingCustomerByEmail.email);
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          message: 'Customer already exists',
-          userId: existingCustomerByEmail.user_id,
-          created: false
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    } else {
-      console.log('No customer found with email:', normalizedEmail, '- proceeding with user creation');
-    }
+    const existingUserId = existingAuthUser?.id ?? existingCustomer?.user_id ?? null;
 
-    // Check if user already exists in auth.users
-    const { data: { users }, error: listError } = await supabaseAdmin.auth.admin.listUsers();
-    
-    if (listError) {
-      console.error('Error listing users:', listError);
-      throw listError;
-    }
-
-    const existingAuthUser = users.find(user => user.email === email);
-
-    if (existingAuthUser) {
-      console.log('User already exists in auth.users:', existingAuthUser.id);
-      
-      // Check if customer exists by email (already checked above, but double-check by user_id)
-      const { data: existingCustomerByUserId, error: customerCheckByUserIdError } = await supabaseAdmin
-        .from('customers')
-        .select('id')
-        .eq('user_id', existingAuthUser.id)
+    if (existingUserId) {
+      // An account that already exists keeps the role it has. profiles.role is the
+      // person's identity across the whole site — being staff on somebody's show is
+      // not the same thing, and that is recorded on the show itself.
+      //
+      // Overwriting it did real damage in both directions: adding an administrator
+      // to a show as a ring steward removed their admin rights, and adding a paying
+      // member as a judge turned their account from Customer into JUDGE, which took
+      // away the member features they had paid for.
+      const { data: existingProfile } = await supabaseAdmin
+        .from('profiles')
+        .select('role, full_name')
+        .eq('id', existingUserId)
         .maybeSingle();
 
-      if (customerCheckByUserIdError) {
-        console.error('Error checking customer by user_id:', customerCheckByUserIdError);
+      // Only fill in a name that is missing; never replace one the person set.
+      if (!existingProfile?.full_name && name) {
+        await supabaseAdmin
+          .from('profiles')
+          .upsert({ id: existingUserId, full_name: name }, { onConflict: 'id' });
       }
 
-      // If customer doesn't exist, create profile first, then customer
-      if (!existingCustomerByUserId) {
-        // Step 1: Ensure profile exists first
-        const { data: profileData, error: profileError } = await supabaseAdmin
-          .from('profiles')
-          .upsert({
-            id: existingAuthUser.id,
-            full_name: name,
-            role: role
-          }, {
-            onConflict: 'id'
-          })
-          .select('id')
-          .single();
-
-        if (profileError) {
-          console.error('Error upserting profile for existing user:', profileError);
-        } else {
-          console.log('Profile ensured for existing user:', profileData.id);
-        }
-
-        // Step 2: Create customer record using profile id
-        const nameParts = name.trim().split(/\s+/);
-        const lastName = nameParts.slice(1).join(' ') || null;
-
-        const { error: customerCreateError } = await supabaseAdmin
+      if (!existingCustomer) {
+        const lastName = name.split(/\s+/).slice(1).join(' ') || null;
+        await supabaseAdmin
           .from('customers')
-          .upsert({
-            user_id: existingAuthUser.id,
-            email: email,
-            full_name: name,
-            last_name: lastName,
-          }, {
-            onConflict: 'user_id'
-          });
-
-        if (customerCreateError) {
-          console.error('Error creating customer record for existing user:', customerCreateError);
-        } else {
-          console.log('Customer record created for existing user:', existingAuthUser.id);
-        }
-      } else {
-        // Customer exists, just update profile role
-        const { error: updateError } = await supabaseAdmin
-          .from('profiles')
-          .update({ role: role, full_name: name })
-          .eq('id', existingAuthUser.id);
-
-        if (updateError) {
-          console.error('Error updating role for existing user:', updateError);
-        }
+          .upsert({ user_id: existingUserId, email, full_name: name, last_name: lastName }, { onConflict: 'user_id' });
       }
 
-      console.log('Processed existing user:', existingAuthUser.id);
-      
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          message: 'User processed',
-          userId: existingAuthUser.id,
-          created: false
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return json({
+        success: true,
+        message: 'User already exists',
+        userId: existingUserId,
+        created: false,
+        existingRole: existingProfile?.role ?? null,
+      });
     }
 
-    // Create new user with default password
+    // --- 4. Create the account ------------------------------------------------
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email: email,
-      password: '12345',
+      email,
+      password: randomPassword(),
       email_confirm: true,
-      user_metadata: {
-        full_name: name
-      }
+      user_metadata: { full_name: name },
     });
 
-    if (createError) {
+    if (createError || !newUser?.user) {
       console.error('Error creating user:', createError);
-      throw createError;
+      throw createError ?? new Error('User creation returned no user');
     }
 
-    console.log('User created successfully:', newUser.user.id);
+    const userId = newUser.user.id;
+    console.log('User created:', userId);
 
-    // Step 1: Create/Insert profile first
-    const { data: profileData, error: profileError } = await supabaseAdmin
+    const { error: profileError } = await supabaseAdmin
       .from('profiles')
-      .insert({
-        id: newUser.user.id,
-        full_name: name,
-        role: role
-      })
-      .select('id')
-      .single();
+      .upsert({ id: userId, full_name: name, role }, { onConflict: 'id' });
 
     if (profileError) {
-      console.error('Error creating profile:', profileError);
-      // Try upsert as fallback (in case profile was created by trigger)
-      const { error: upsertError } = await supabaseAdmin
-        .from('profiles')
-        .upsert({
-          id: newUser.user.id,
-          full_name: name,
-          role: role
-        }, {
-          onConflict: 'id'
-        });
-      
-      if (upsertError) {
-        console.error('Error upserting profile (fallback):', upsertError);
-        throw new Error(`Failed to create profile: ${upsertError.message}`);
-      } else {
-        console.log('Profile upserted successfully (fallback) for user:', newUser.user.id);
-      }
-    } else {
-      console.log('Profile created successfully with id:', profileData.id);
+      console.error('Error saving profile:', profileError);
+      throw new Error(`Failed to save profile: ${profileError.message}`);
     }
 
-    // Step 2: Use profile id to create customer record
-    // Parse name to get first and last name
-    const nameParts = name.trim().split(/\s+/);
-    const lastName = nameParts.slice(1).join(' ') || null;
-
-    // Create customer record using the profile id (user_id)
+    const lastName = name.split(/\s+/).slice(1).join(' ') || null;
     const { error: customerError } = await supabaseAdmin
       .from('customers')
-      .upsert({
-        user_id: newUser.user.id,
-        email: email,
-        full_name: name,
-        last_name: lastName,
-      }, {
-        onConflict: 'user_id'
-      });
+      .upsert({ user_id: userId, email, full_name: name, last_name: lastName }, { onConflict: 'user_id' });
 
     if (customerError) {
       console.error('Error creating customer record:', customerError);
       throw new Error(`Failed to create customer record: ${customerError.message}`);
-    } else {
-      console.log('Customer record created successfully using profile id:', newUser.user.id);
     }
 
-    // Send welcome email with role-specific message via Postmark
+    // --- 5. Invite by link, never by password ---------------------------------
+    let setPasswordLink = '';
+    try {
+      const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
+        type: 'recovery',
+        email,
+        options: { redirectTo: `${siteUrl}/update-password` },
+      });
+
+      if (linkError) console.error('Error generating set-password link:', linkError);
+      setPasswordLink = linkData?.properties?.action_link ?? '';
+    } catch (linkError) {
+      console.error('Error generating set-password link:', linkError);
+    }
+
     try {
       const emailResponse = await fetch('https://api.postmarkapp.com/email', {
         method: 'POST',
@@ -266,57 +234,42 @@ serve(async (req: Request) => {
           HtmlBody: `
             <h1>Welcome to EquiPatterns, ${name}!</h1>
             <p>You have been added to EquiPatterns as <strong>${role}</strong>.</p>
-            <p><strong>Your Login Credentials:</strong></p>
-            <ul>
-              <li>Email: ${email}</li>
-              <li>Temporary Password: <strong>12345</strong></li>
-            </ul>
-            <p>Please log in and change your password immediately for security reasons.</p>
+            <p>Your account uses the email address <strong>${email}</strong>.</p>
+            ${
+              setPasswordLink
+                ? `<p>Choose your password to get started:</p>
+                   <p><a href="${setPasswordLink}"
+                         style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;
+                                text-decoration:none;border-radius:6px;font-weight:600;">Set your password</a></p>
+                   <p style="font-size:12px;color:#666;">This link can only be used once. If it has expired,
+                      use "Forgot password?" on the sign-in page.</p>`
+                : `<p>To get started, open the sign-in page and choose
+                      <strong>"Forgot password?"</strong> to set your password.</p>`
+            }
             <p>Best regards,<br>The EquiPatterns Team</p>
           `,
           MessageStream: 'outbound',
         }),
       });
 
-      if (emailResponse.ok) {
-        console.log('Welcome email sent to:', email);
-      } else {
-        const errorText = await emailResponse.text();
-        console.error('Postmark error sending welcome email:', errorText);
+      if (!emailResponse.ok) {
+        console.error('Postmark error sending welcome email:', await emailResponse.text());
       }
     } catch (emailError) {
+      // A failed email must not undo an account that already exists.
       console.error('Error sending email:', emailError);
-      // Don't fail the request if email fails
     }
 
-    return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: 'User created successfully',
-        userId: newUser.user.id,
-        created: true
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return json({
+      success: true,
+      message: 'User created successfully',
+      userId,
+      created: true,
+    });
 
   } catch (error: any) {
-    console.error('Error in create-staff-user function:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error occurred';
-    console.error('Error details:', {
-      message: errorMessage,
-      stack: error?.stack,
-      name: error?.name
-    });
-    return new Response(
-      JSON.stringify({ 
-        success: false,
-        error: errorMessage,
-        created: false
-      }),
-      { 
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
-    );
+    console.error('Error in create-staff-user function:', errorMessage, error?.stack);
+    return json({ success: false, error: errorMessage, created: false }, 500);
   }
 });

@@ -1,21 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
-
-const FREE_LIMITS = {
-  show: 2,
-  pattern_book: 2,
-};
+import { computeUsageAllowance, freeLimitFor } from '@/lib/usageAllowance';
 
 /**
  * @param {'show' | 'pattern_book'} projectType - which project type to count
  */
 export function useUsageGate(projectType = 'show') {
-  const { user } = useAuth();
+  const { user, isSubscribed, isAdmin } = useAuth();
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const freeLimit = FREE_LIMITS[projectType] ?? 2;
+  const freeLimit = freeLimitFor(projectType);
 
   const fetchCount = useCallback(async () => {
     if (!user) {
@@ -48,11 +44,16 @@ export function useUsageGate(projectType = 'show') {
     fetchCount();
   }, [fetchCount]);
 
-  const canCreate = count < freeLimit;
-  const remainingFree = Math.max(0, freeLimit - count);
+  const { isUnlimited, canCreate, remainingFree } = computeUsageAllowance({
+    isSubscribed,
+    isAdmin,
+    count,
+    freeLimit,
+  });
 
   return {
     canCreate,
+    isUnlimited,
     showCount: count,
     remainingFree,
     freeLimit,

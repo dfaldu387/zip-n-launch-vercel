@@ -16,7 +16,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
-import { supabase } from '@/integrations/supabase/client';
+// The app has one Supabase client, in lib/supabaseClient. This file used to import
+// a second one from integrations/supabase/client — a separate instance with its own
+// session, so calls made through it went out without the signed-in user's token and
+// the edge function answered "Sign in required".
+import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { useToast } from '@/components/ui/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
@@ -88,7 +93,6 @@ const StaffDelegationCard = ({ staffMember, disciplines, onUpdate, onContactUpda
         phone: staffMember.phone || ''
     });
     const { toast } = useToast();
-    const { signUp } = useAuth();
 
     // Sync editedContact when dialog opens
     React.useEffect(() => {
@@ -107,38 +111,30 @@ const StaffDelegationCard = ({ staffMember, disciplines, onUpdate, onContactUpda
         
         setIsCheckingUser(true);
         try {
-            // Check customers table by email (profiles table doesn't have email column)
-            const { data: customerData, error: customerError } = await supabase
-                .from('customers')
-                .select('id, user_id, email, full_name')
-                .ilike('email', emailValue.trim().toLowerCase())
-                .maybeSingle();
+            // Emails live on the customers table, which an organiser may only read
+            // for their own record — reading it for someone else needs the
+            // users:manage permission, which ordinary members do not have. So this
+            // lookup ran on the server instead: find_user_by_email returns just the
+            // id and the name, and never the email, role or subscription.
+            const { data, error } = await supabase.rpc('find_user_by_email', {
+                p_email: emailValue,
+            });
 
-            if (customerData && !customerError && customerData.user_id) {
-                // If customer exists, get profile data using user_id
-                const { data: profileData, error: profileError } = await supabase
-                    .from('profiles')
-                    .select('id, full_name, role')
-                    .eq('id', customerData.user_id)
-                    .maybeSingle();
+            const match = Array.isArray(data) ? data[0] : data;
 
-                if (profileData && !profileError) {
-                    setExistingUser({
-                        ...profileData,
-                        email: customerData.email
-                    });
-                    setEditedContact(prev => ({ ...prev, name: customerData.full_name || profileData.full_name || prev.name }));
-                    toast({
-                        title: 'User Found',
-                        description: `Found existing user: ${customerData.full_name || profileData.full_name}`,
-                    });
-                } else {
-                    setExistingUser(null);
-                }
+            if (match?.user_id && !error) {
+                setExistingUser({ id: match.user_id, full_name: match.full_name });
+                setEditedContact(prev => ({ ...prev, name: match.full_name || prev.name }));
+                toast({
+                    title: 'User Found',
+                    description: `Found existing user: ${match.full_name}`,
+                });
             } else {
+                if (error) console.error('Error checking user:', error);
                 setExistingUser(null);
             }
         } catch (error) {
+            console.error('Error checking user:', error);
             setExistingUser(null);
         } finally {
             setIsCheckingUser(false);
@@ -165,170 +161,28 @@ const StaffDelegationCard = ({ staffMember, disciplines, onUpdate, onContactUpda
         const currentPhone = editedContact.phone;
         
         try {
-            // First, check if user exists in customers table by email (primary check)
-            let userExistsInCustomers = false;
-            
+            // Account creation runs on the server through the create-staff-user edge
+            // function — the same call ContactInfo already makes. This used to be done
+            // here in the browser: signUp() with a hardcoded password, a five second
+            // wait for the database trigger, then an update of the new person's profile
+            // to set their role. That last write is only allowed for admins, so an
+            // organiser adding a judge ended up creating an account stuck on the
+            // default Customer role. The edge function runs with admin rights and sets
+            // the role correctly.
             if (currentEmail && currentEmail.includes('@')) {
-                // Normalize email (trim and lowercase for comparison)
-                const normalizedEmail = currentEmail.trim().toLowerCase();
-                const trimmedEmail = currentEmail.trim();
-                
-                // Try case-insensitive check first
-                let customerData = null;
-                let customerCheckError = null;
-                
-                const { data: customerDataIlike, error: errorIlike } = await supabase
-                    .from('customers')
-                    .select('id, user_id, email, full_name')
-                    .ilike('email', normalizedEmail)
-                    .maybeSingle();
-                
-                if (errorIlike) {
-                    // Fallback to exact match
-                    const { data: customerDataExact, error: errorExact } = await supabase
-                        .from('customers')
-                        .select('id, user_id, email, full_name')
-                        .eq('email', trimmedEmail)
-                        .maybeSingle();
-                    
-                    customerData = customerDataExact;
-                    customerCheckError = errorExact;
-                } else {
-                    customerData = customerDataIlike;
-                    customerCheckError = errorIlike;
-                }
+                const { data, error } = await invokeAsUser('create-staff-user', {
+                    email: currentEmail,
+                    name: currentName,
+                    role: staffMember.role,
+                });
 
-                if (customerCheckError) {
-                    // Error checking customers - continue
-                } else if (customerData) {
-                    userExistsInCustomers = true;
-                    // If customer exists, also check profiles to set existingUser state
-                    if (customerData.user_id) {
-                        const { data: profileData } = await supabase
-                            .from('profiles')
-                            .select('id, full_name, role')
-                            .eq('id', customerData.user_id)
-                            .maybeSingle();
-                        if (profileData) {
-                            setExistingUser({
-                                ...profileData,
-                                email: customerData.email
-                            });
-                        }
-                    }
-                }
-            }
+                if (error) throw error;
 
-            // If user exists in customers table, just save to project (don't create account)
-            // If user doesn't exist in customers table, create the user account using signUp (same as signup flow)
-            if (!userExistsInCustomers && currentEmail && currentEmail.includes('@')) {
-                // Parse name to get firstName and lastName (same as signup flow)
-                const nameParts = currentName.trim().split(/\s+/);
-                const firstName = nameParts[0] || currentName;
-                const lastName = nameParts.slice(1).join(' ') || '';
-                
-                // Create metadata (same structure as signup flow)
-                const metadata = {
-                    firstName: firstName,
-                    lastName: lastName,
-                    mobile: currentPhone || '',
-                };
-                
-                // Use default password (must be at least 6 characters)
-                const defaultPassword = '123456';
-                
-                // Call signUp (same as AuthModal handleSignUp)
-                const { data, error } = await signUp(currentEmail, defaultPassword, metadata);
-
-                if (error) {
-                    toast({
-                        title: 'Error',
-                        description: `Failed to create user account: ${error.message || 'Unknown error'}`,
-                        variant: 'destructive'
-                    });
-                    // Don't throw - continue to save contact info to project
-                } else if (data?.user) {
-                    if (data.user.id) {
-                        // Wait for database triggers to create profile (signup flow relies on triggers)
-                        // Try multiple times to wait for trigger
-                        let profileExists = false;
-                        let retries = 0;
-                        const maxRetries = 5;
-                        
-                        while (!profileExists && retries < maxRetries) {
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                            const { data: profileCheck } = await supabase
-                                .from('profiles')
-                                .select('id')
-                                .eq('id', data.user.id)
-                                .maybeSingle();
-                            
-                            if (profileCheck) {
-                                profileExists = true;
-                            }
-                            retries++;
-                        }
-                        
-                        // Step 1: Update profile with role and full_name (profile should exist from trigger)
-                        const { error: profileUpdateError } = await supabase
-                            .from('profiles')
-                            .update({ 
-                                full_name: currentName,
-                                role: staffMember.role 
-                            })
-                            .eq('id', data.user.id);
-                        
-                        if (profileUpdateError) {
-                            // If profile doesn't exist, try to insert it
-                            const { error: profileInsertError } = await supabase
-                                .from('profiles')
-                                .insert({
-                                    id: data.user.id,
-                                    full_name: currentName,
-                                    role: staffMember.role
-                                });
-                            
-                            // Profile insert attempted (error handling silent)
-                        }
-                        
-                        // Step 2: Check if customer record exists, create if it doesn't
-                        // Note: Customer creation might be handled by database triggers from signup
-                        // Wait a bit for potential triggers
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                        
-                        const { data: existingCustomer, error: customerCheckError } = await supabase
-                            .from('customers')
-                            .select('id')
-                            .eq('user_id', data.user.id)
-                            .maybeSingle();
-                        
-                        if (!existingCustomer) {
-                            // Try to create customer record (may fail due to RLS - that's okay, might be created by trigger later)
-                            const { error: customerCreateError } = await supabase
-                                .from('customers')
-                                .insert({
-                                    id: crypto.randomUUID(),
-                                    user_id: data.user.id,
-                                    email: currentEmail,
-                                    full_name: currentName,
-                                    last_name: lastName,
-                                    created_at: new Date().toISOString()
-                                });
-                            
-                            // Customer creation attempted (error handling silent - RLS or trigger may handle)
-                        }
-                    }
-                    
-                    toast({
-                        title: 'User Created',
-                        description: `New user account created for ${currentName}. Login credentials sent to ${currentEmail}.`,
-                    });
-                }
-            } else if (userExistsInCustomers) {
-                // User exists in customers table, just save to project (no account creation needed)
                 toast({
-                    title: 'Contact Info Saved',
-                    description: `Contact information saved for existing user ${currentName}.`,
+                    title: data?.created ? 'User Created' : 'Contact Info Saved',
+                    description: data?.created
+                        ? `New user account created for ${currentName}. Sign-in details sent to ${currentEmail}.`
+                        : `Contact information saved for existing user ${currentName}.`,
                 });
             }
             
@@ -338,9 +192,19 @@ const StaffDelegationCard = ({ staffMember, disciplines, onUpdate, onContactUpda
             }
             setIsEditDialogOpen(false);
         } catch (error) {
+            // The reason used to be swallowed, so a rejected role or an expired
+            // session both showed the same "please try again" and there was nothing
+            // to act on.
+            console.error('Failed to save contact information:', error);
+            const detail =
+                error?.context?.body?.error ||
+                error?.message ||
+                (typeof error === 'string' ? error : '');
             toast({
                 title: 'Error',
-                description: 'Failed to save contact information. Please try again.',
+                description: detail
+                    ? `Could not save contact information: ${detail}`
+                    : 'Failed to save contact information. Please try again.',
                 variant: 'destructive'
             });
         } finally {
@@ -1106,7 +970,7 @@ const SuccessConfirmationDialog = ({ open, onClose, onGoHome, onGoToMyProjects, 
   </Dialog>
 );
 
-export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8, isReadOnly = false, createOrUpdateProject }) => {
+export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8, isReadOnly = false, createOrUpdateProject, onGoToStep }) => {
     const { user, profile } = useAuth();
     const { toast } = useToast();
     const navigate = useNavigate();
@@ -1173,9 +1037,18 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
 
     const staffList = useMemo(() => {
         const staff = new Map();
+        // A judge entered on one screen and again on another is one person, so the
+        // list is deduplicated by name as well as by id.
+        const seenNames = new Set();
 
-        const addStaffMember = (member, role, id) => {
+        // `source` records where the person is stored, so a contact edit can be
+        // written back to the right place without having to parse it out of the id.
+        const addStaffMember = (member, role, id, source) => {
+            const nameKey = member?.name ? member.name.trim().toLowerCase() : '';
+            if (nameKey && seenNames.has(nameKey)) return;
+
             if (member && member.name && !staff.has(id)) {
+                seenNames.add(nameKey);
                 // Get existing delegation or create new one
                 let delegation = formData.delegations?.[id] || { accessPhase: [], roles: [] };
                 
@@ -1302,21 +1175,47 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                     email: member.email,
                     phone: member.phone,
                     role: role,
+                    source: source,
                     delegation: delegation
                 });
             }
         };
 
-        (formData.officials || []).forEach(official => addStaffMember(official, official.role, official.id));
+        (formData.officials || []).forEach(official =>
+            addStaffMember(official, official.role, official.id, { kind: 'official' })
+        );
+
         Object.entries(formData.associationJudges || {}).forEach(([assocId, assocData]) => {
             (assocData.judges || []).forEach((judge, index) => {
-                const judgeId = `judge-${assocId}-${index}`;
-                addStaffMember(judge, 'Judge', judgeId);
+                addStaffMember(judge, 'Judge', `judge-${assocId}-${index}`, {
+                    kind: 'assocJudge', assocId, index,
+                });
+            });
+        });
+
+        // Judges can also be recorded on the Show Details screen, either under
+        // officials.JUDGE or under judges. Only associationJudges was read here, so a
+        // book whose judges were entered there showed "Judges: 2 added" in the summary
+        // while Staff & Delegation stayed empty — and because the whole section is
+        // hidden when the list is empty, those judges could not be delegated to at all.
+        Object.entries(formData.showDetails?.officials || {}).forEach(([assocId, assocRoles]) => {
+            (assocRoles?.JUDGE || []).forEach((judge, index) => {
+                addStaffMember(judge, 'Judge', `sd-official-judge-${assocId}-${index}`, {
+                    kind: 'showDetailsOfficialJudge', assocId, index,
+                });
+            });
+        });
+
+        Object.entries(formData.showDetails?.judges || {}).forEach(([groupKey, list]) => {
+            (list || []).forEach((judge, index) => {
+                addStaffMember(judge, 'Judge', `sd-judge-${groupKey}-${index}`, {
+                    kind: 'showDetailsJudge', groupKey, index,
+                });
             });
         });
 
         return Array.from(staff.values());
-    }, [formData.officials, formData.associationJudges, formData.delegations, formData.groupJudges, formData.judgeSelections, formData.groupDueDates, formData.disciplineDueDates, formData.dueDateSelections, formData.disciplines]);
+    }, [formData.officials, formData.associationJudges, formData.showDetails, formData.delegations, formData.groupJudges, formData.judgeSelections, formData.groupDueDates, formData.disciplineDueDates, formData.dueDateSelections, formData.disciplines]);
 
     const handleUpdateStaffDelegation = (staffId, updates) => {
         if (isReadOnly) return;
@@ -1332,43 +1231,75 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
         });
     };
 
-    // Handle contact updates - syncs back to Step 4 data (associationJudges or officials)
+    // Handle contact updates - syncs back to the Step 4 data the person came from.
+    //
+    // The location used to be worked out by splitting the id on "-", which only held
+    // while association ids contained no dashes, and had no case at all for judges
+    // stored under Show Details. Each staff entry now carries where it came from.
     const handleContactUpdate = (staffId, contactData) => {
         if (isReadOnly) return;
-        
+
+        const source = staffList.find(m => m.id === staffId)?.source;
+        const withContact = (person) => ({
+            ...person,
+            name: contactData.name,
+            email: contactData.email,
+            phone: contactData.phone,
+        });
+
         setFormData(prev => {
             const newFormData = { ...prev };
-            
-            // Check if this is a judge (staffId format: judge-{assocId}-{index})
-            if (staffId.startsWith('judge-')) {
-                const parts = staffId.split('-');
-                const assocId = parts[1];
-                const judgeIndex = parseInt(parts[2], 10);
-                
-                if (newFormData.associationJudges?.[assocId]?.judges?.[judgeIndex]) {
+
+            if (source?.kind === 'assocJudge') {
+                const { assocId, index } = source;
+                if (newFormData.associationJudges?.[assocId]?.judges?.[index]) {
                     newFormData.associationJudges = {
                         ...newFormData.associationJudges,
                         [assocId]: {
                             ...newFormData.associationJudges[assocId],
-                            judges: newFormData.associationJudges[assocId].judges.map((judge, idx) => 
-                                idx === judgeIndex 
-                                    ? { ...judge, name: contactData.name, email: contactData.email, phone: contactData.phone }
-                                    : judge
-                            )
-                        }
+                            judges: newFormData.associationJudges[assocId].judges.map(
+                                (judge, idx) => (idx === index ? withContact(judge) : judge)
+                            ),
+                        },
                     };
                 }
-            } else {
-                // This is an official/staff member
-                if (newFormData.officials) {
-                    newFormData.officials = newFormData.officials.map(official => 
-                        official.id === staffId 
-                            ? { ...official, name: contactData.name, email: contactData.email, phone: contactData.phone }
-                            : official
-                    );
+            } else if (source?.kind === 'showDetailsOfficialJudge') {
+                const { assocId, index } = source;
+                const assocRoles = newFormData.showDetails?.officials?.[assocId];
+                if (assocRoles?.JUDGE?.[index]) {
+                    newFormData.showDetails = {
+                        ...newFormData.showDetails,
+                        officials: {
+                            ...newFormData.showDetails.officials,
+                            [assocId]: {
+                                ...assocRoles,
+                                JUDGE: assocRoles.JUDGE.map(
+                                    (judge, idx) => (idx === index ? withContact(judge) : judge)
+                                ),
+                            },
+                        },
+                    };
                 }
+            } else if (source?.kind === 'showDetailsJudge') {
+                const { groupKey, index } = source;
+                const list = newFormData.showDetails?.judges?.[groupKey];
+                if (list?.[index]) {
+                    newFormData.showDetails = {
+                        ...newFormData.showDetails,
+                        judges: {
+                            ...newFormData.showDetails.judges,
+                            [groupKey]: list.map(
+                                (judge, idx) => (idx === index ? withContact(judge) : judge)
+                            ),
+                        },
+                    };
+                }
+            } else if (newFormData.officials) {
+                newFormData.officials = newFormData.officials.map(official =>
+                    official.id === staffId ? withContact(official) : official
+                );
             }
-            
+
             return newFormData;
         });
     };
@@ -1558,14 +1489,35 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                     </Popover>
                 </div>
 
-                {/* 4. Staff Delegation */}
-                {staffList.length > 0 && (
-                    <div className="space-y-4 p-4 border rounded-lg">
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                            <Users className="h-5 w-5 text-purple-600" />
-                            Staff & Delegation ({staffList.length})
-                        </h3>
-                        <p className="text-sm text-muted-foreground">Manage access phases and delegation for judges and show staff.</p>
+                {/* 4. Staff Delegation — always shown. It used to disappear entirely when
+                    the list was empty, which read as a missing feature rather than as
+                    "nobody has been added yet", and gave no hint where people are added. */}
+                <div className="space-y-4 p-4 border rounded-lg">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Users className="h-5 w-5 text-purple-600" />
+                        Staff &amp; Delegation ({staffList.length})
+                    </h3>
+                    <p className="text-sm text-muted-foreground">Manage access phases and delegation for judges and show staff.</p>
+                    {staffList.length === 0 ? (
+                        <div className="rounded-md border border-dashed p-6 text-center">
+                            <Users className="mx-auto h-8 w-8 text-muted-foreground/60" />
+                            <p className="mt-2 text-sm font-medium text-foreground">No judges or officials added yet</p>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                                Add them in <span className="font-medium">Step 4: Show Details</span>, then come back here to
+                                set their access and delegate work.
+                            </p>
+                            {!isReadOnly && onGoToStep && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="mt-4"
+                                    onClick={() => onGoToStep(4)}
+                                >
+                                    Go to Show Details
+                                </Button>
+                            )}
+                        </div>
+                    ) : (
                         <div className="space-y-3">
                             {staffList.map(member => (
                                 <StaffDelegationCard
@@ -1578,8 +1530,8 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                                 />
                             ))}
                         </div>
-                    </div>
-                )}
+                    )}
+                </div>
 
                 {/* 5. Review & Finalize Summary - BOTTOM */}
                 <div className="space-y-4 p-4 border rounded-lg bg-muted/30">
