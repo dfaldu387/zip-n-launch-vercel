@@ -228,8 +228,11 @@ export default function BillingHistoryPage() {
                       <div className="text-center py-10">
                         <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-3" />
                         <p className="text-destructive font-medium">Failed to load invoices</p>
+                        {/* Was a fixed "make sure the edge function is deployed" hint,
+                            shown whatever had actually gone wrong — so a session or
+                            Stripe problem looked like a deployment problem. */}
                         <p className="text-sm text-muted-foreground mt-1">
-                          Make sure the stripe-fetch-invoices edge function is deployed.
+                          {invoicesError || 'Please try again in a moment.'}
                         </p>
                         <Button
                           variant="outline"

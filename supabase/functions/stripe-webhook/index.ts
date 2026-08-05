@@ -56,6 +56,46 @@ async function stripeGet(endpoint: string): Promise<any> {
   return response.json();
 }
 
+// ───── Live booking pricing (same rule as stalls-create-checkout) ─────
+
+// Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
+function assignedStallsForBooking(projectData: any, bookingId: string) {
+  const barns = projectData?.stallingService?.barns || [];
+  const result: Array<{ barnId: string; pricePerNight: number }> = [];
+  for (const barn of barns) {
+    for (const stall of barn.stalls || []) {
+      if (stall.bookingId === bookingId) {
+        result.push({ barnId: barn.id, pricePerNight: Number(barn.pricePerNight) || 0 });
+      }
+    }
+  }
+  return result;
+}
+
+// Live total = assigned stalls × nights × current price/night, plus non-stall items.
+function computeBookingTotal(projectData: any, booking: any): number {
+  const nights = Number(booking?.nights) || 1;
+  const assigned = assignedStallsForBooking(projectData, booking?.id);
+  const items = Array.isArray(booking?.items) ? booking.items : [];
+  let total = 0;
+
+  if (items.length > 0) {
+    for (const it of items) {
+      if (it.type === "stall") {
+        const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
+        const count = stallsInThisBarn.length || Number(it.qty) || 0;
+        const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
+        total += count * nights * price;
+      } else {
+        total += Number(it.amount) || 0;
+      }
+    }
+  } else {
+    total += Number(booking?.amount) || 0;
+  }
+  return total;
+}
+
 // Add a payment to a housing booking inside project_data and flip its
 // paymentStatus. Additive, so a later top-up (pay-the-difference) adds on. Shared
 // by both the checkout (pay now) and invoice (pay later) flows.
@@ -78,7 +118,16 @@ async function markStallBookingPaid(
   const bookings = (svc.bookings || []).map((b: any) => {
     if (b.id !== bookingId) return b;
     found = true;
-    const total = Number(b.totalAmount ?? b.amount ?? 0);
+
+    // Checkout charges the LIVE total (stalls × nights × current price), so the
+    // paid/partial decision has to use the same figure. It used to compare against
+    // the stored totalAmount, which freezes at booking time — a booking whose stall
+    // fee was set afterwards was charged in full and still marked "partial", and
+    // the show office chased money that had already been paid.
+    const liveTotal = computeBookingTotal(pd, b);
+    const storedTotal = Number(b.totalAmount ?? b.amount ?? 0);
+    const total = liveTotal > 0 ? liveTotal : storedTotal;
+
     const prevPaid = Number(
       b.paidAmount ?? (b.paymentStatus === "paid" ? total : 0)
     );
@@ -151,6 +200,32 @@ serve(async (req: Request): Promise<Response> => {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  // ── Process each Stripe event once ──────────────────────────────────────────
+  // Stripe re-sends an event whenever it does not get a clean reply, and can also
+  // deliver the same one more than once by design. Recording a payment is
+  // additive, so a repeat used to add the money a second time: a $300 payment
+  // could end up stored as $600. The insert below is the guard — event_id is the
+  // primary key, so the second attempt fails and we stop here.
+  if (event.id) {
+    const { error: seenError } = await adminClient
+      .from("stripe_webhook_events")
+      .insert({ event_id: event.id, event_type: event.type });
+
+    if (seenError) {
+      // 23505 = unique violation: this event has already been handled.
+      if (seenError.code === "23505") {
+        console.log("Duplicate Stripe event ignored:", event.id);
+        return new Response(JSON.stringify({ received: true, duplicate: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // Any other problem (for example the table is missing) must not silently
+      // drop a real payment — carry on and let the event be processed.
+      console.error("Could not record webhook event id:", seenError);
+    }
+  }
 
   try {
     switch (event.type) {
