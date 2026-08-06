@@ -810,8 +810,6 @@ const PublicBookingPage = () => {
         const pd = show?.project_data || {};
         return pd.moduleStatuses?.housing || pd.stallingService?.publishStatus || 'draft';
     }, [show]);
-    const isOpenForBooking = housingStatus === 'published';
-
     // Hard move-in / move-out limits set by the organizer in Housing → Inventory.
     // Exhibitors can't book arrival/departure outside this window. Falls back to the
     // show's competition dates when the organizer hasn't set a move-in/out window.
@@ -822,6 +820,19 @@ const PublicBookingPage = () => {
             end: s.moveOutDate || showWindow.end || '',
         };
     }, [show, showWindow]);
+
+    // A show that is already over cannot be booked. There was no date check at all
+    // here: an organizer who left a finished show published kept taking reservations
+    // and payments for dates in the past, and the arrival/departure pickers offered
+    // nothing but past dates. Compared as yyyy-MM-dd strings, which is date-correct
+    // and free of timezone drift.
+    const hasEnded = useMemo(() => {
+        const lastDay = bookWindow.end || showWindow.end;
+        if (!lastDay) return false;
+        return lastDay < new Date().toISOString().slice(0, 10);
+    }, [bookWindow.end, showWindow.end]);
+
+    const isOpenForBooking = housingStatus === 'published' && !hasEnded;
 
     const orderSummary = useMemo(() => {
         const nights = calcNights(details.arrivalDate, details.departureDate);
@@ -1263,7 +1274,7 @@ const PublicBookingPage = () => {
     // shows for anyone who already submitted while it was open.)
     if (!isOpenForBooking) {
         const isLockedClosed = housingStatus === 'locked';
-        const Icon = isLockedClosed ? Lock : CalendarClock;
+        const Icon = isLockedClosed || hasEnded ? Lock : CalendarClock;
         return (
             <>
                 <Helmet><title>Booking Not Open - {show.project_name}</title></Helmet>
@@ -1276,12 +1287,14 @@ const PublicBookingPage = () => {
                                     <Icon className="h-8 w-8 text-muted-foreground" />
                                 </div>
                                 <CardTitle className="text-2xl">
-                                    {isLockedClosed ? 'Booking is closed' : 'Booking is not open yet'}
+                                    {hasEnded ? 'This show has finished' : isLockedClosed ? 'Booking is closed' : 'Booking is not open yet'}
                                 </CardTitle>
                                 <CardDescription className="text-base">
-                                    {isLockedClosed
-                                        ? <>Online reservations for <strong>{show.project_name}</strong> are currently closed. Please contact the show organizer.</>
-                                        : <>Reservations for <strong>{show.project_name}</strong> haven't opened yet. Please check back soon, or contact the show organizer.</>}
+                                    {hasEnded
+                                        ? <><strong>{show.project_name}</strong> has already taken place, so reservations are no longer being accepted.</>
+                                        : isLockedClosed
+                                            ? <>Online reservations for <strong>{show.project_name}</strong> are currently closed. Please contact the show organizer.</>
+                                            : <>Reservations for <strong>{show.project_name}</strong> haven't opened yet. Please check back soon, or contact the show organizer.</>}
                                 </CardDescription>
                             </CardHeader>
                         </Card>

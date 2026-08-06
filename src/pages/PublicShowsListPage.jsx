@@ -82,6 +82,7 @@ const ShowCard = ({ show }) => {
 
     let dateLabel = 'Dates TBA';
     let dateBadge = null;
+    let hasEnded = false;
     if (startDate) {
         try {
             const start = parseISO(startDate);
@@ -91,6 +92,7 @@ const ShowCard = ({ show }) => {
             if (isAfter(start, today)) {
                 dateBadge = <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Upcoming</Badge>;
             } else if (isBefore(end, today)) {
+                hasEnded = true;
                 dateBadge = <Badge variant="outline" className="text-muted-foreground">Ended</Badge>;
             } else {
                 dateBadge = <Badge className="bg-emerald-500 text-white">Happening Now</Badge>;
@@ -163,13 +165,18 @@ const ShowCard = ({ show }) => {
                         </div>
                     )}
                 </CardContent>
-                <CardFooter className="grid grid-cols-2 gap-2 pt-0">
+                {/* A finished show gets Details only. The card already knew it had
+                    ended — it prints the "Ended" badge — but still offered Book Now,
+                    which took reservations and payments for dates in the past. */}
+                <CardFooter className={`grid gap-2 pt-0 ${hasEnded ? 'grid-cols-1' : 'grid-cols-2'}`}>
                     <Button variant="outline" size="sm" onClick={() => navigate(`/show/${show.id}`)}>
                         Details
                     </Button>
-                    <Button size="sm" onClick={() => navigate(`/show/${show.id}/book`)}>
-                        Book Now <ArrowRight className="h-3.5 w-3.5 ml-1" />
-                    </Button>
+                    {!hasEnded && (
+                        <Button size="sm" onClick={() => navigate(`/show/${show.id}/book`)}>
+                            Book Now <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                        </Button>
+                    )}
                 </CardFooter>
             </Card>
         </motion.div>
@@ -195,13 +202,21 @@ const PublicShowsListPage = () => {
 
                 if (error) throw error;
 
-                // Only keep shows that have inventory configured
-                const withInventory = (data || []).filter(s => {
-                    const stalling = s.project_data?.stallingService || {};
-                    return summarizeInventory(stalling).hasInventory;
+                // Keep shows that have inventory AND are actually open for booking.
+                //
+                // The list used to check inventory only, so a show still in Draft — or
+                // one closed again after the show — was listed with a "Book Now"
+                // button that led straight to "Booking is not open yet". Same rule as
+                // the booking page: published means open, draft and locked do not.
+                const bookable = (data || []).filter(s => {
+                    const pd = s.project_data || {};
+                    const stalling = pd.stallingService || {};
+                    if (!summarizeInventory(stalling).hasInventory) return false;
+                    const housingStatus = pd.moduleStatuses?.housing || stalling.publishStatus || 'draft';
+                    return housingStatus === 'published';
                 });
 
-                setShows(withInventory);
+                setShows(bookable);
             } catch (err) {
                 toast({
                     title: 'Could not load shows',
