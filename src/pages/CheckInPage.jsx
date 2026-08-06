@@ -18,7 +18,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
-import { getAssignedStallsForBooking } from '@/lib/stallAssignment';
+import { getAssignedStallsForBooking, unassignBookingStalls } from '@/lib/stallAssignment';
+import { computeBookingTotal } from '@/lib/bookingPricing';
 import { cn } from '@/lib/utils';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -46,6 +47,17 @@ const FILTERS = [
 const BookingCard = ({ booking, barns, onUpdateStatus, isSaving }) => {
     const meta = STATUS_META[booking.status] || STATUS_META.pending;
     const stalls = getAssignedStallsForBooking(booking, barns);
+
+    // Priced live (stalls × nights × the barn's current price) — the same figure the
+    // invoice and Stripe use. The card used to show the stored totalAmount, which
+    // freezes at booking time, so at the gate a booking taken before the stall fee was
+    // set showed no amount at all and later price changes never appeared.
+    const pricedStalls = stalls.map(s => ({
+        ...s,
+        pricePerNight: (barns || []).find(b => b.id === s.barnId)?.pricePerNight || 0,
+    }));
+    const bookingTotal = computeBookingTotal(booking, pricedStalls);
+
     const rvItems = (booking.items || []).filter(i => i.type === 'rv');
     const supportItems = (booking.items || []).filter(i => i.type === 'support');
     const supplyItems = (booking.items || []).filter(i => i.type === 'supply');
@@ -105,9 +117,9 @@ const BookingCard = ({ booking, barns, onUpdateStatus, isSaving }) => {
                                 {booking.nights ? ` · ${booking.nights}n` : ''}
                             </span>
                         )}
-                        {(booking.totalAmount || booking.amount) ? (
+                        {bookingTotal > 0 ? (
                             <span className="flex items-center gap-1.5 text-muted-foreground">
-                                <DollarSign className="h-4 w-4" /> {money(booking.totalAmount || booking.amount)}
+                                <DollarSign className="h-4 w-4" /> {money(bookingTotal)}
                                 {booking.paymentStatus && (
                                     <Badge variant="outline" className="ml-1 text-xs capitalize">
                                         {booking.paymentStatus.replace('_', ' ')}
@@ -323,9 +335,23 @@ const CheckInPage = () => {
                     }
                     : b
             );
+            // Cancelling gives the stalls back, exactly as it does in Housing &
+            // Grounds. Without this the stalls stayed pinned to the cancelled booking
+            // and could never be re-sold — and the gate is the most likely place for a
+            // cancellation to be entered.
+            let updatedBarns = stalling.barns || [];
+            let releasedStalls = 0;
+            if (newStatus === 'cancelled') {
+                releasedStalls = updatedBarns.reduce(
+                    (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId === bookingId).length,
+                    0
+                );
+                if (releasedStalls > 0) updatedBarns = unassignBookingStalls(updatedBarns, bookingId);
+            }
+
             const updatedData = stampModuleStatusOnSave({
                 ...show.project_data,
-                stallingService: { ...stalling, bookings: updatedBookings },
+                stallingService: { ...stalling, bookings: updatedBookings, barns: updatedBarns },
             }, 'housing');
             const { error } = await supabase
                 .from('projects')
@@ -335,7 +361,9 @@ const CheckInPage = () => {
             setShow(prev => ({ ...prev, project_data: updatedData }));
             toast({
                 title: 'Status updated',
-                description: `Booking marked as ${STATUS_META[newStatus]?.label || newStatus}`,
+                description: releasedStalls > 0
+                    ? `Booking cancelled. ${releasedStalls} stall${releasedStalls !== 1 ? 's' : ''} released.`
+                    : `Booking marked as ${STATUS_META[newStatus]?.label || newStatus}`,
             });
         } catch (e) {
             toast({ title: 'Save failed', description: e.message, variant: 'destructive' });

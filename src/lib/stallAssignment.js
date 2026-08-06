@@ -33,13 +33,36 @@ export function isFullyAssigned(booking, barns) {
     return getAssignedStallsForBooking(booking, barns).length >= getRequestedStallCount(booking);
 }
 
-// Build a quick map: barnId → array of available (unassigned) stall objects
-function indexAvailableStalls(barns) {
+// A stall is free when nothing holds it, or when whatever holds it is no longer a
+// live booking. Cancelling used to leave the stall pinned to the cancelled booking,
+// so it looked taken forever; treating that as free here means shows cancelled
+// before that was fixed heal themselves without a data migration.
+export function isStallAvailable(stall, liveBookingIds) {
+    if ((stall?.type || 'stall') !== 'stall') return false;
+    if (!stall.bookingId) return true;
+    return liveBookingIds ? !liveBookingIds.has(stall.bookingId) : false;
+}
+
+// The opposite of isStallAvailable, for screens that ask "is this box sold?".
+export function isStallHeld(stall, liveBookingIds) {
+    if (!stall?.bookingId) return false;
+    return liveBookingIds ? liveBookingIds.has(stall.bookingId) : true;
+}
+
+// The ids of every booking that still holds space (anything not cancelled).
+export function getLiveBookingIds(bookings) {
+    return new Set(
+        (bookings || []).filter(b => b && b.status !== 'cancelled').map(b => b.id)
+    );
+}
+
+// Build a quick map: barnId → array of available stall objects
+function indexAvailableStalls(barns, liveBookingIds) {
     const map = {};
     for (const barn of barns || []) {
-        // Only real, unbooked stalls are assignable — skip office/feed/wash/tack/
-        // aisle/empty/blocked boxes from the barn layout.
-        map[barn.id] = (barn.stalls || []).filter(s => !s.bookingId && (s.type || 'stall') === 'stall');
+        // Only real stalls are assignable — skip office/feed/wash/tack/aisle/
+        // empty/blocked boxes from the barn layout.
+        map[barn.id] = (barn.stalls || []).filter(s => isStallAvailable(s, liveBookingIds));
     }
     return map;
 }
@@ -86,7 +109,8 @@ export function planAutoAssign(bookings, barns) {
     const skipped = [];
     const handledBookingIds = new Set();
 
-    const available = indexAvailableStalls(barns);
+    const liveBookingIds = getLiveBookingIds(bookings);
+    const available = indexAvailableStalls(barns, liveBookingIds);
     const barnById = Object.fromEntries((barns || []).map(b => [b.id, b]));
     const assignable = getAssignableBookings(bookings, barns);
 

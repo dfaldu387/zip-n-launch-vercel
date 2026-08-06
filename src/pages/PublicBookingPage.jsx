@@ -82,7 +82,7 @@ const QtyStepper = ({ value, onChange, max, min = 0 }) => (
 
 // ───────────────────────── Step 1: Select Items ─────────────────────────
 
-const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = {} }) => {
+const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = {}, spotsBooked = { rv: {}, support: {} }, stallsTaken = {} }) => {
     const { barns, rvAreas, supportSpaces, supplies } = inventory;
 
     const updateQty = (key, qty) => {
@@ -111,15 +111,16 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = 
                         {barns.map(barn => {
                             // Only real stalls are bookable — exclude aisle/room/empty/blocked boxes.
                             const totalStalls = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length || barn.stallCount || 0;
-                            const bookedStalls = (barn.stalls || []).filter(s => s.bookingId).length;
-                            const available = Math.max(totalStalls - bookedStalls, 0);
+                            const available = Math.max(totalStalls - (stallsTaken[barn.id] || 0), 0);
+                            const soldOut = totalStalls > 0 && available === 0;
                             const qty = selection.stalls?.[barn.id] || 0;
                             return (
                                 <div key={barn.id} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div className="flex-1">
                                         <p className="font-semibold text-sm">{barn.name}</p>
                                         <p className="text-xs text-muted-foreground">
-                                            {money(barn.pricePerNight)}/night · {available} of {totalStalls} available
+                                            {money(barn.pricePerNight)}/night ·{' '}
+                                            {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
                                             {barn.stallSize && ` · ${barn.stallSize}`}
                                         </p>
                                     </div>
@@ -150,6 +151,8 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = 
                     <CardContent className="space-y-3">
                         {rvAreas.map(rv => {
                             const total = rv.spotCount || 0;
+                            const available = Math.max(total - (spotsBooked.rv?.[rv.id] || 0), 0);
+                            const soldOut = total > 0 && available === 0;
                             const qty = selection.rvs?.[rv.id] || 0;
                             const pricingModel = rv.pricingModel || 'nightly';
                             const isFlatRate = pricingModel === 'flat';
@@ -169,7 +172,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = 
                                                 )}
                                             </p>
                                             <p className="text-xs text-muted-foreground">
-                                                {priceLabel} · {total} spots ·{' '}
+                                                {priceLabel} · {soldOut ? 'Sold out' : `${available} of ${total} available`} ·{' '}
                                                 {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}
                                                 {rv.maxLength > 0 && <> · Max {rv.maxLength}ft</>}
                                             </p>
@@ -186,7 +189,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = 
                                         </div>
                                         <QtyStepper
                                             value={qty}
-                                            max={total}
+                                            max={available}
                                             onChange={(v) => setSelection(prev => ({
                                                 ...prev,
                                                 rvs: { ...(prev.rvs || {}), [rv.id]: v },
@@ -243,19 +246,22 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, suppliesSold = 
                     <CardContent className="space-y-3">
                         {supportSpaces.map(space => {
                             const total = space.unitCount || 0;
+                            const available = Math.max(total - (spotsBooked.support?.[space.id] || 0), 0);
+                            const soldOut = total > 0 && available === 0;
                             const qty = selection.support?.[space.id] || 0;
                             return (
                                 <div key={space.id} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div className="flex-1">
                                         <p className="font-semibold text-sm">{space.name}</p>
                                         <p className="text-xs text-muted-foreground">
-                                            {money(space.pricePerNight)}/night · {total} available
+                                            {money(space.pricePerNight)}/night ·{' '}
+                                            {soldOut ? 'Sold out' : `${available} of ${total} available`}
                                             {space.size && ` · ${space.size}`}
                                         </p>
                                     </div>
                                     <QtyStepper
                                         value={qty}
-                                        max={total}
+                                        max={available}
                                         onChange={(v) => setSelection(prev => ({
                                             ...prev,
                                             support: { ...(prev.support || {}), [space.id]: v },
@@ -724,6 +730,73 @@ const PublicBookingPage = () => {
             }
         }
         return sold;
+    }, [show]);
+
+    // How many stalls in each barn are already spoken for.
+    //
+    // This used to count only stalls the office had already ASSIGNED. A booking that
+    // was paid for but not yet placed in a stall did not reduce availability at all —
+    // so twenty exhibitors could each book one of the same twenty stalls and the page
+    // would still offer "20 of 20 available" to the next person. Assignment normally
+    // happens later, so that was the usual case, not an edge case.
+    //
+    // Taken = stalls assigned to a live booking + stalls a live booking has paid for
+    // but not yet received. The second part is counted per booking so a booking that
+    // asked for 4 and already holds 2 adds 2, not 4.
+    const stallsTaken = useMemo(() => {
+        const svc = show?.project_data?.stallingService || {};
+        const existing = svc.bookings || [];
+        const allBarns = svc.barns || [];
+        const liveBookingIds = new Set(
+            existing.filter(b => b.status !== 'cancelled').map(b => b.id)
+        );
+
+        const taken = {};
+        const assignedPerBookingBarn = {};
+
+        for (const barn of allBarns) {
+            let assigned = 0;
+            for (const stall of barn.stalls || []) {
+                // A stall left pinned to a cancelled booking is free, whatever it says.
+                if (!stall.bookingId || !liveBookingIds.has(stall.bookingId)) continue;
+                assigned += 1;
+                const key = `${stall.bookingId}|${barn.id}`;
+                assignedPerBookingBarn[key] = (assignedPerBookingBarn[key] || 0) + 1;
+            }
+            taken[barn.id] = assigned;
+        }
+
+        for (const b of existing) {
+            if (b.status === 'cancelled') continue;
+            for (const it of b.items || []) {
+                if (it.type !== 'stall' || it.refId == null) continue;
+                const alreadyAssigned = assignedPerBookingBarn[`${b.id}|${it.refId}`] || 0;
+                const outstanding = Math.max((Number(it.qty) || 0) - alreadyAssigned, 0);
+                taken[it.refId] = (taken[it.refId] || 0) + outstanding;
+            }
+        }
+
+        return taken;
+    }, [show]);
+
+    // The same count for RV spots and support spaces, keyed by area id.
+    //
+    // These two were the only things on the page with no availability check at all:
+    // the stepper's limit was the TOTAL number of spots, every time. Ten spots could
+    // be sold ten times over, and the page still offered "10 available" to the next
+    // exhibitor. Stalls and supplies already subtracted what was taken; these did not.
+    const spotsBooked = useMemo(() => {
+        const existing = show?.project_data?.stallingService?.bookings || [];
+        const booked = { rv: {}, support: {} };
+        for (const b of existing) {
+            if (b.status === 'cancelled') continue;
+            for (const it of b.items || []) {
+                if (it.refId == null) continue;
+                if (it.type === 'rv') booked.rv[it.refId] = (booked.rv[it.refId] || 0) + (it.qty || 0);
+                if (it.type === 'support') booked.support[it.refId] = (booked.support[it.refId] || 0) + (it.qty || 0);
+            }
+        }
+        return booked;
     }, [show]);
 
     const showWindow = useMemo(() => {
@@ -1268,7 +1341,7 @@ const PublicBookingPage = () => {
                         {/* Step body */}
                         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                             <div className="lg:col-span-3">
-                                {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} suppliesSold={suppliesSold} />}
+                                {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} suppliesSold={suppliesSold} spotsBooked={spotsBooked} stallsTaken={stallsTaken} />}
                                 {step === 2 && <Step2_Details details={details} setDetails={setDetails} showWindow={showWindow} bookWindow={bookWindow} />}
                                 {step === 3 && <Step3_Review orderSummary={orderSummary} details={details} onSubmit={handleSubmit} isSubmitting={isSubmitting} />}
                             </div>

@@ -39,7 +39,7 @@ import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
-import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls } from '@/lib/stallAssignment';
+import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import {
@@ -349,7 +349,7 @@ const GridHandle = ({ onInsert, onDelete, canDelete, insertTitle, deleteTitle })
 // handle for that exact row or column — the organizer never has to rebuild a layout
 // just to squeeze one more row in.
 const StallMap = ({
-    stalls, cols, centerAisle = false, tight = false, onCellClick = null,
+    stalls, cols, centerAisle = false, tight = false, onCellClick = null, liveBookingIds = null,
     aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null,
     rowLabels = [], colLabels = [], onRenameRow = null, onRenameCol = null,
     onInsertRow = null, onDeleteRow = null, onInsertCol = null, onDeleteCol = null,
@@ -518,7 +518,10 @@ const StallMap = ({
                                     const type = stall.type || 'stall';
                                     const isStall = type === 'stall';
                                     const isPhysical = isStall || type === 'blocked';
-                                    const isBooked = isStall && !!stall.bookingId;
+                                    // A stall left pinned to a cancelled booking is free, whatever it
+                                    // still says — shows cancelled before stalls were released on
+                                    // cancel would otherwise keep showing those boxes as sold.
+                                    const isBooked = isStall && isStallHeld(stall, liveBookingIds);
                                     const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
                                     const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
                                     const showCenter = useCenterAisle && ci === leftCount;
@@ -591,7 +594,7 @@ const StallMap = ({
 
 // ── Barn/Area Card ──
 
-const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId }) => {
+const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId, liveBookingIds }) => {
     const { toast } = useToast();
     const fileInputRef = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
@@ -1035,6 +1038,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                 {/* The barn diagram (boxes = the barn) — click to paint types. Locked = view only. */}
                                 <StallMap
                                     stalls={barn.stalls}
+                                    liveBookingIds={liveBookingIds}
                                     cols={cols}
                                     centerAisle={barn.centerAisle}
                                     tight={!showAisles}
@@ -2204,6 +2208,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const supportSpaces = pd.stallingService?.supportSpaces || [];
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
+    // Everything that still holds space. Passed to the barn map so a box pinned to a
+    // cancelled booking is not drawn as sold.
+    const liveBookingIds = useMemo(() => getLiveBookingIds(bookings), [bookings]);
     const [searchTerm, setSearchTerm] = useState('');
 
     // Move-in / Move-out window for the whole show. Exhibitors can only book an
@@ -2518,6 +2525,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
     };
 
+    // Status changes are saved by the page above, which also releases the stalls of a
+    // cancelled booking. This dashboard keeps its own copy of barns and bookings (it
+    // only remounts when a different show is picked), so both are refreshed from what
+    // was actually written — otherwise the barn map would keep showing the released
+    // stalls as booked until the page was reloaded.
+    const changeBookingStatus = async (bookingId, newStatus) => {
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: newStatus } : b));
+        const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
+        if (result?.barns) setBarns(result.barns);
+        if (result?.bookings) setBookings(result.bookings);
+    };
+
     // Change how many stalls a booking is booked for (its quota). The quota lives on
     // the stall line-items' qty, so we rewrite those items to hit the new total and
     // recompute the booking amount. This is what lifts the assignment cap — and the
@@ -2678,15 +2697,22 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         let total = 0;
         for (const b of bookings) {
             if (b.status === 'cancelled') continue;
-            // Prefer the stored booking total (full subtotal the exhibitor was quoted).
-            const stored = Number(b.totalAmount ?? b.amount ?? 0);
-            if (stored > 0) { total += stored; continue; }
-            // Next best: sum the booking's line items (stall + rv + supply + support).
-            if (Array.isArray(b.items) && b.items.length) {
-                total += b.items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
-                continue;
-            }
-            // Legacy fallback: a single assigned stall with no stored total/items.
+
+            // Recomputed live (stalls × nights × current price, plus RV, supplies and
+            // support) — the same figure the invoice, the balance due and Stripe all
+            // use. This used to prefer the stored totalAmount, which freezes at
+            // booking time: a booking made before the stall fee was set stored $0 and
+            // counted as nothing here, and after any price change this figure
+            // disagreed with every invoice being sent out.
+            const pricedStalls = getAssignedStallsForBooking(b, barns).map(s => ({
+                ...s,
+                pricePerNight: barns.find(x => x.id === s.barnId)?.pricePerNight || 0,
+            }));
+            const live = computeBookingTotal(b, pricedStalls);
+            if (live > 0) { total += live; continue; }
+
+            // Legacy fallback: an old single-stall booking with no line items and no
+            // stored amount — price it from the barn it sits in.
             if (b.stallId) {
                 for (const barn of barns) {
                     const stall = (barn.stalls || []).find(s => s.id === b.stallId);
@@ -2762,9 +2788,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
         for (const b of bookings) {
             if (b.status === 'cancelled') { cancelledCount += 1; continue; }
-            const amt = Number(b.totalAmount ?? b.amount ?? 0);
             const isActive = ACTIVE_STATUSES.has(b.status);
-            if (isActive) realizedRevenue += amt;
+
+            // Stall money is priced live — assigned stalls (or the booked quantity, if
+            // none are assigned yet) × nights × the barn's CURRENT price. The stored
+            // item amount freezes at booking time, so a booking taken before the stall
+            // fee was set counted as $0 here while its invoice charged the full amount.
+            // Realized Revenue is built up from these parts, so the "Revenue by Source"
+            // slices still add up to it exactly.
+            const nights = Number(b.nights) || 1;
+            const assignedForBooking = getAssignedStallsForBooking(b, barns);
 
             // Per-item breakdown. Revenue sums count only realized (active) bookings
             // so the "Revenue by Source" slices always add up to Realized Revenue.
@@ -2773,20 +2806,35 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             for (const it of b.items || []) {
                 const itAmt = Number(it.amount || 0);
                 if (it.type === 'stall') {
-                    if (isActive) stallRevenue += itAmt;
                     const barn = barns.find(x => x.id === it.refId);
+                    const assignedHere = assignedForBooking.filter(s => s.barnId === it.refId).length;
+                    const count = assignedHere || Number(it.qty) || 0;
+                    const price = barn ? Number(barn.pricePerNight) || 0 : Number(it.unitPrice) || 0;
+                    const liveStallAmt = count * nights * price;
+                    if (isActive) {
+                        stallRevenue += liveStallAmt;
+                        realizedRevenue += liveStallAmt;
+                    }
                     if (barn) recordDemand(barn.id, barn.name, 'stall');
                 } else if (it.type === 'rv' || it.type === 'rv_fee') {
-                    if (isActive) rvRevenue += itAmt;
+                    if (isActive) { rvRevenue += itAmt; realizedRevenue += itAmt; }
                     if (it.type === 'rv') {
                         const area = rvAreas.find(x => x.id === it.refId);
                         if (area) recordDemand(area.id, area.name, 'rv');
                     }
                 } else if (it.type === 'support') {
-                    if (isActive) supportRevenue += itAmt;
+                    if (isActive) { supportRevenue += itAmt; realizedRevenue += itAmt; }
                 } else if (it.type === 'supply') {
-                    if (isActive) supplyRevenue += itAmt;
+                    if (isActive) { supplyRevenue += itAmt; realizedRevenue += itAmt; }
+                } else if (isActive) {
+                    // Anything else still belongs in the total, even if it has no slice.
+                    realizedRevenue += itAmt;
                 }
+            }
+
+            // Legacy booking with no line items: fall back to whatever was stored.
+            if ((!b.items || b.items.length === 0) && isActive) {
+                realizedRevenue += Number(b.totalAmount ?? b.amount ?? 0);
             }
             // Legacy single-stall bookings have no items[]
             if ((!b.items || b.items.length === 0) && b.stallId) {
@@ -3147,6 +3195,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onUpdateFields={(patch) => updateBarnFields(barn.id, patch)}
                                             onRemove={() => removeBarn(barn.id)}
                                             onDuplicate={() => duplicateBarn(barn.id)}
+                                            liveBookingIds={liveBookingIds}
                                         />
                                     ))}
                                 </div>
@@ -3459,7 +3508,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             barns={barns}
                                             onUpdate={(field, value) => updateBooking(booking.id, field, value)}
                                             onRemove={() => removeBooking(booking.id)}
-                                            onStatusChange={onUpdateBookingStatus}
+                                            onStatusChange={changeBookingStatus}
                                             onAssignStall={(stallId) => assignSingleStall(booking, stallId)}
                                             onUpdateStallCount={(n) => updateBookingStallCount(booking.id, n)}
                                         />
@@ -4053,9 +4102,10 @@ const HousingGroundsManagerPage = () => {
 
     // Persist a single booking's status immediately (no Save All needed).
     const updateBookingStatusImmediate = useCallback(async (bookingId, newStatus) => {
-        if (!selectedShow) return;
+        if (!selectedShow) return null;
         try {
-            const currentBookings = selectedShow.project_data?.stallingService?.bookings || [];
+            const svc = selectedShow.project_data?.stallingService || {};
+            const currentBookings = svc.bookings || [];
             const updatedBookings = currentBookings.map(b =>
                 b.id === bookingId
                     ? {
@@ -4066,9 +4116,31 @@ const HousingGroundsManagerPage = () => {
                     }
                     : b
             );
+
+            // Cancelling has to give the stalls back. Only the status used to change,
+            // so the stalls stayed pinned to the cancelled booking — the occupancy
+            // chart stopped counting them, but every "is this stall free?" check still
+            // said taken: the barn map, auto-assign, the Assign Board and the public
+            // booking page. Those stalls could not be sold again until somebody
+            // unassigned each one by hand.
+            //
+            // Released in the SAME write as the status, so a second save cannot put
+            // the old stall assignments back.
+            let updatedBarns = svc.barns || [];
+            let releasedStalls = 0;
+            if (newStatus === 'cancelled') {
+                releasedStalls = updatedBarns.reduce(
+                    (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId === bookingId).length,
+                    0
+                );
+                if (releasedStalls > 0) {
+                    updatedBarns = unassignBookingStalls(updatedBarns, bookingId);
+                }
+            }
+
             const updatedData = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
-                stallingService: { ...(selectedShow.project_data?.stallingService || {}), bookings: updatedBookings },
+                stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns },
             }, 'housing');
             const { error } = await supabase
                 .from('projects')
@@ -4077,9 +4149,16 @@ const HousingGroundsManagerPage = () => {
             if (error) throw error;
             setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
             setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
-            toast({ title: 'Status updated', description: `Booking is now ${newStatus.replace('_', ' ')}.` });
+            toast({
+                title: 'Status updated',
+                description: releasedStalls > 0
+                    ? `Booking is now cancelled. ${releasedStalls} stall${releasedStalls !== 1 ? 's' : ''} released and available to book again.`
+                    : `Booking is now ${newStatus.replace('_', ' ')}.`,
+            });
+            return { barns: updatedBarns, bookings: updatedBookings, releasedStalls };
         } catch (error) {
             toast({ title: 'Status save failed', description: error.message, variant: 'destructive' });
+            return null;
         }
     }, [selectedShow, toast]);
 
