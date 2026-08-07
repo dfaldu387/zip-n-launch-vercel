@@ -244,7 +244,11 @@ export const usePatternBookBuilder = (projectId) => {
     };
 
     fetchInitialData();
-  }, [sanitizedProjectId, toast]);
+    // `user` belongs here: the projects query is skipped when nobody is signed in
+    // yet, and on a fresh page load the session arrives after the first run. Without
+    // it the loader never re-ran and "Link to Existing Show" stayed empty until the
+    // page was reloaded by hand.
+  }, [sanitizedProjectId, toast, user]);
 
   const handleShowTypeChange = useCallback((newShowType) => {
     setFormData(prev => {
@@ -377,36 +381,30 @@ export const usePatternBookBuilder = (projectId) => {
 
       if (toNotify.length === 0) return;
 
-      // Check which notifications already exist for this project
-      const { data: existing } = await supabase
-        .from('judge_notifications')
-        .select('judge_email')
-        .eq('project_id', projectId)
-        .in('judge_email', toNotify.map(n => n.email));
-
-      const existingEmails = new Set((existing || []).map(e => e.judge_email));
-
-      // Only insert for new staff/judges
+      // One notification per person per project, decided on the server.
+      //
+      // This used to read the project's existing notifications and skip anyone
+      // already listed. A notification row belongs to the person it is for, so an
+      // organizer cannot read it back — the check always found nothing and every
+      // save inserted the whole list again. Saving a book five times showed the
+      // judge the same show five times.
+      //
+      // ensure_judge_notification does the "already there?" check with the rights to
+      // see the row, and leaves the original (and its read/unread state) alone.
       for (const person of toNotify) {
-        if (existingEmails.has(person.email)) continue;
-
-        const { error: insertError } = await supabase
-          .from('judge_notifications')
-          .insert({
-            judge_email: person.email,
-            judge_name: person.name,
-            project_id: projectId,
-            project_name: projectName,
-            notification_type: person.type,
-            message: person.type === 'staff_assignment'
-              ? `You have been assigned as staff to ${projectName}.`
-              : `You have been assigned to ${projectName}.`,
-            is_read: false,
-            created_by: user?.id || null,
-          });
+        const { error: insertError } = await supabase.rpc('ensure_judge_notification', {
+          p_project_id: projectId,
+          p_project_name: projectName,
+          p_judge_email: person.email,
+          p_judge_name: person.name,
+          p_type: person.type,
+          p_message: person.type === 'staff_assignment'
+            ? `You have been assigned as staff to ${projectName}.`
+            : `You have been assigned to ${projectName}.`,
+        });
 
         if (insertError) {
-          console.warn('Staff notification insert failed:', person.email, insertError.message);
+          console.warn('Staff notification failed:', person.email, insertError.message);
         }
       }
     } catch (error) {
@@ -434,45 +432,33 @@ export const usePatternBookBuilder = (projectId) => {
 
       if (judgesFound.length === 0) return;
 
-      // Check which notifications already exist for this project
-      const { data: existing } = await supabase
-        .from('judge_notifications')
-        .select('judge_email')
-        .eq('project_id', projectId)
-        .in('judge_email', judgesFound);
-
-      const existingEmails = new Set((existing || []).map(e => e.judge_email));
-
-      // Only insert for new judges
-      for (const [assocId, assocData] of Object.entries(associationJudges)) {
-        const judges = assocData?.judges || [];
-        for (const judge of judges) {
+      // One row per judge per project, enforced by the database — see the note in
+      // createStaffNotifications. Reading the project's existing notifications never
+      // worked (they belong to the judge, not the organizer), so every save inserted
+      // the whole list again and a judge saw the same show once per save.
+      const nameByEmail = new Map();
+      for (const assocData of Object.values(associationJudges)) {
+        for (const judge of assocData?.judges || []) {
           if (!judge?.email || !judge.email.includes('@')) continue;
           const judgeEmail = judge.email.trim().toLowerCase();
-          if (existingEmails.has(judgeEmail)) continue;
-          existingEmails.add(judgeEmail); // prevent duplicates within same batch
-
-          const { error: insertError } = await supabase
-            .from('judge_notifications')
-            .insert({
-              judge_email: judgeEmail,
-              judge_name: judge.name || null,
-              project_id: projectId,
-              project_name: projectName,
-              notification_type: 'assignment',
-              message: `You have been assigned to ${projectName}.`,
-              is_read: false,
-              created_by: user?.id || null,
-            });
-
-          if (insertError) {
-            console.log('Judge notification insert result:', judgeEmail, insertError?.message || 'OK');
-          } else {
-            console.log('Judge notification created for:', judgeEmail);
-          }
+          if (!nameByEmail.has(judgeEmail)) nameByEmail.set(judgeEmail, judge.name || null);
         }
       }
-      console.log('Judge notifications processed. Judges found:', judgesFound);
+
+      for (const judgeEmail of judgesFound) {
+        const { error: insertError } = await supabase.rpc('ensure_judge_notification', {
+          p_project_id: projectId,
+          p_project_name: projectName,
+          p_judge_email: judgeEmail,
+          p_judge_name: nameByEmail.get(judgeEmail) || null,
+          p_type: 'assignment',
+          p_message: `You have been assigned to ${projectName}.`,
+        });
+
+        if (insertError) {
+          console.warn('Judge notification failed:', judgeEmail, insertError.message);
+        }
+      }
     } catch (error) {
       console.error('Error creating judge notifications:', error);
     }
@@ -549,24 +535,16 @@ export const usePatternBookBuilder = (projectId) => {
     // session already created the row, its id is here before state/URL catch up.
     let currentProjectId = sanitizedProjectId || formData.id || boundProjectIdRef.current;
 
-    // If no project ID yet, check if a project with this name already exists for this user
-    // and reuse it instead of creating a duplicate. Pick the most recent match so
-    // any pre-existing duplicates collapse onto a single row going forward.
-    if (!currentProjectId && trimmedName !== 'Untitled Pattern Book') {
-      const { data: existingProject } = await supabase
-        .from('projects')
-        .select('id')
-        .eq('project_type', 'pattern_book')
-        .eq('user_id', user.id)
-        .ilike('project_name', trimmedName)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (existingProject) {
-        currentProjectId = existingProject.id;
-      }
-    }
+    // No name lookup here on purpose.
+    //
+    // This used to search for a pattern book with the SAME NAME and save into it, to
+    // avoid creating duplicates before the row had an id. Pattern books are named
+    // after shows and shows repeat every year, so building "Summer Classic" a second
+    // time silently overwrote last year's book — patterns, groups, judges and layout.
+    //
+    // Duplicates are already prevented properly: saveLockRef runs saves one at a
+    // time, and boundProjectIdRef holds the new id from the moment the row exists,
+    // before state or the URL catch up.
 
     if (currentProjectId) {
       const { error } = await supabase
@@ -620,10 +598,25 @@ export const usePatternBookBuilder = (projectId) => {
       }));
       justCreatedRef.current = true;
       navigate(`/pattern-book-builder/${newProjectId}`, { replace: true });
+
+      // A repeated name is normal — the same show runs every year — so this only
+      // points it out. The new book is its own project and nothing is overwritten.
+      const duplicateName = (existingProjects || []).some(
+        p => p.project_type === 'pattern_book'
+          && p.id !== newProjectId
+          && (p.project_name || '').trim().toLowerCase() === trimmedName.toLowerCase()
+      );
+      if (duplicateName) {
+        toast({
+          title: 'Another pattern book has this name',
+          description: `"${trimmedName}" already exists. This is a separate book — rename it if that was not intended.`,
+        });
+      }
+
       // Silent save — no popup during normal editing
       return newProjectId;
     }
-  }, [formData, step, completedSteps, setCompletedSteps, sanitizedProjectId, toast, navigate, user, getNextShowNumber]);
+  }, [formData, step, completedSteps, setCompletedSteps, sanitizedProjectId, toast, navigate, user, getNextShowNumber, existingProjects]);
 
   // Public save entrypoint. Chains every call onto the previous one so a second
   // save waits for the first to finish (and record its row id) before running —

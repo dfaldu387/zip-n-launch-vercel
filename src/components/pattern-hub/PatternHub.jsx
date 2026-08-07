@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Info, GitMerge, ListPlus, Settings2, LayoutTemplate, Eye, ArrowLeft, ArrowRight, Save, Download, FileText, CheckCircle, CheckSquare, Square, FolderOpen } from 'lucide-react';
@@ -258,6 +258,10 @@ export const PatternHub = ({ projectId }) => {
 
     const navigate = useNavigate();
     const [isSaving, setIsSaving] = useState(false);
+    // Holds the id of a project created by this screen, so pressing Save again
+    // updates it instead of creating a second one. React state is not enough — the
+    // second click can start before a re-render.
+    const savedProjectIdRef = useRef(projectId || null);
     const [isSaved, setIsSaved] = useState(!!projectId); // existing projects are already saved
     const [isGenerating, setIsGenerating] = useState(false);
     const [isGenerated, setIsGenerated] = useState(false);
@@ -361,40 +365,62 @@ export const PatternHub = ({ projectId }) => {
                 status: status,
             };
 
-            if (projectId && projectId !== 'undefined') {
-                projectData.id = projectId;
-            } else if (formDataId) {
-                projectData.id = formDataId;
-            } else {
-                // No existing project ID — check if a project with this name already exists
-                // to prevent creating duplicates
-                const projectName = projectData.project_name;
-                const { data: existingProject } = await supabase
-                    .from('projects')
-                    .select('id')
-                    .eq('project_type', 'pattern_hub')
-                    .eq('user_id', user.id)
-                    .ilike('project_name', projectName)
-                    .limit(1)
-                    .single();
+            // Which project this Save writes to, in order: the one open in the URL,
+            // the one loaded into the form, then one this screen created earlier.
+            //
+            // There is no name lookup here on purpose. It used to search for a
+            // pattern_hub project with the SAME NAME and save into it, to avoid
+            // creating duplicates. Projects are named after shows and clinics, which
+            // repeat every year, so saving "Spring Clinic" again silently overwrote
+            // last year's project. Pressing Save twice is handled by
+            // savedProjectIdRef instead, which is what actually needed guarding.
+            const targetId = (projectId && projectId !== 'undefined')
+                ? projectId
+                : (formDataId || savedProjectIdRef.current);
 
-                if (existingProject) {
-                    projectData.id = existingProject.id;
-                }
-            }
+            const isNewProject = !targetId;
+            if (targetId) projectData.id = targetId;
 
-            const { error } = await supabase
+            const { data: saved, error } = await supabase
                 .from('projects')
                 .upsert(projectData, { onConflict: 'id' })
-                .select();
+                .select('id')
+                .single();
 
             if (error) throw error;
+
+            // Remember it so a second Save updates this project rather than making
+            // another one.
+            if (saved?.id) {
+                savedProjectIdRef.current = saved.id;
+                setFormData(prev => ({ ...prev, id: saved.id }));
+            }
 
             setIsSaved(true);
             toast({
                 title: "Project Saved",
                 description: 'Your project has been saved. You can now generate and download.',
             });
+
+            // A repeated name is normal — the same clinic runs every year — so this
+            // only points it out. Nothing was overwritten.
+            if (isNewProject) {
+                const { data: sameName } = await supabase
+                    .from('projects')
+                    .select('id')
+                    .eq('project_type', 'pattern_hub')
+                    .eq('user_id', user.id)
+                    .eq('project_name', projectData.project_name)
+                    .neq('id', saved?.id || '')
+                    .limit(1);
+
+                if (sameName?.length) {
+                    toast({
+                        title: 'Another project has this name',
+                        description: `"${projectData.project_name}" already exists. This is a separate project — rename it if that was not intended.`,
+                    });
+                }
+            }
         } catch (error) {
             toast({
                 title: "Error Saving",

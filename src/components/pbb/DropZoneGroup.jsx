@@ -1093,12 +1093,20 @@ const DropZoneGroup = ({ group, index, pbbDiscipline, handleGroupFieldChange, ha
         };
 
         // Set pattern selection immediately (scoresheet will be added async)
-        setFormData(prev => {
-            const newSelections = { ...(prev.patternSelections || {}) };
-            if (!newSelections[disciplineId]) newSelections[disciplineId] = {};
-            newSelections[disciplineId][group.id] = { ...baseSelection };
-            return { ...prev, patternSelections: newSelections };
-        });
+        // Each level is rebuilt rather than edited. Writing straight into
+        // newSelections[disciplineId][group.id] changed the object still held by the
+        // previous state, so anything comparing by reference could not tell the
+        // selection had changed, and two quick edits could overwrite each other.
+        setFormData(prev => ({
+            ...prev,
+            patternSelections: {
+                ...(prev.patternSelections || {}),
+                [disciplineId]: {
+                    ...(prev.patternSelections?.[disciplineId] || {}),
+                    [group.id]: { ...baseSelection },
+                },
+            },
+        }));
 
         // Auto-fetch linked scoresheet(s) for the selected pattern
         // Working Cow Horse may have multiple (Reining + Cow Work)
@@ -1151,15 +1159,22 @@ const DropZoneGroup = ({ group, index, pbbDiscipline, handleGroupFieldChange, ha
                 });
 
                 setFormData(prev => {
-                    const newSelections = { ...(prev.patternSelections || {}) };
-                    if (newSelections[disciplineId]?.[group.id]) {
-                        newSelections[disciplineId][group.id] = {
-                            ...newSelections[disciplineId][group.id],
-                            scoresheetId: scoresheets[0].id,
-                            scoresheetData: scoresheetDataArray
-                        };
-                    }
-                    return { ...prev, patternSelections: newSelections };
+                    const current = prev.patternSelections?.[disciplineId]?.[group.id];
+                    if (!current) return prev;
+                    return {
+                        ...prev,
+                        patternSelections: {
+                            ...(prev.patternSelections || {}),
+                            [disciplineId]: {
+                                ...(prev.patternSelections[disciplineId] || {}),
+                                [group.id]: {
+                                    ...current,
+                                    scoresheetId: scoresheets[0].id,
+                                    scoresheetData: scoresheetDataArray,
+                                },
+                            },
+                        },
+                    };
                 });
             }
         } catch (err) {
@@ -1171,14 +1186,17 @@ const DropZoneGroup = ({ group, index, pbbDiscipline, handleGroupFieldChange, ha
         // If there is a pattern selected, just clear the pattern
         if (currentPatternSelection?.patternId || currentPatternSelection?.maneuversRange) {
                 setFormData(prev => {
-                    const newSelections = { ...(prev.patternSelections || {}) };
-                    if (newSelections[disciplineId]) {
-                         if (newSelections[disciplineId][group.id]) {
-                            // Clear the selection for this group
-                            newSelections[disciplineId][group.id] = null;
-                         }
-                    }
-                    return { ...prev, patternSelections: newSelections };
+                    if (!prev.patternSelections?.[disciplineId]?.[group.id]) return prev;
+                    return {
+                        ...prev,
+                        patternSelections: {
+                            ...prev.patternSelections,
+                            [disciplineId]: {
+                                ...prev.patternSelections[disciplineId],
+                                [group.id]: null,
+                            },
+                        },
+                    };
                 });
                 // Also reset local states
                 // setSelectedManeuversRange(''); // Removed
@@ -1234,12 +1252,17 @@ const DropZoneGroup = ({ group, index, pbbDiscipline, handleGroupFieldChange, ha
                                         // Clear existing pattern selection and difficulty when filter changes
                                         if (disciplineId && setFormData) {
                                             setFormData(prev => {
-                                                const newSelections = { ...(prev.patternSelections || {}) };
-                                                if (newSelections[disciplineId] && newSelections[disciplineId][group.id]) {
-                                                    // Clear the pattern selection
-                                                    newSelections[disciplineId][group.id] = null;
-                                                }
-                                                return { ...prev, patternSelections: newSelections };
+                                                if (!prev.patternSelections?.[disciplineId]?.[group.id]) return prev;
+                                                return {
+                                                    ...prev,
+                                                    patternSelections: {
+                                                        ...prev.patternSelections,
+                                                        [disciplineId]: {
+                                                            ...prev.patternSelections[disciplineId],
+                                                            [group.id]: null,
+                                                        },
+                                                    },
+                                                };
                                             });
                                         }
                                         // Reset local states

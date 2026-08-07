@@ -18,13 +18,29 @@ export const AuthProvider = ({ children }) => {
   const [authModalState, setAuthModalState] = useState({ isOpen: false, initialTab: 'signin' });
   const skipAutoCloseRef = useRef(false);
 
-  const fetchProfileAndPermissions = useCallback(async (user) => {
+  // Which account the profile and permissions currently in state belong to.
+  //
+  // Several auth events describe the same signed-in user, and each one used to
+  // trigger its own round of profile + permission queries: the startup getSession
+  // and the initial onAuthStateChange both fired, and TOKEN_REFRESHED and
+  // USER_UPDATED each fetched twice (once through handleSession, once in their own
+  // branch). That is four requests on every page load and two on every hourly token
+  // refresh, all returning the same rows.
+  const loadedProfileForRef = useRef(null);
+
+  const fetchProfileAndPermissions = useCallback(async (user, { force = false } = {}) => {
     if (!user) {
+      loadedProfileForRef.current = null;
       setProfile(null);
       setIsAdmin(false);
       setPermissions([]);
       return null;
     }
+
+    // Already loaded for this account — only re-read when something asks for fresh
+    // data (a token refresh or a profile update).
+    if (!force && loadedProfileForRef.current === user.id) return null;
+    loadedProfileForRef.current = user.id;
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -99,11 +115,12 @@ export const AuthProvider = ({ children }) => {
           }
         } else if (event === "USER_UPDATED") {
           setUser(session?.user ?? null);
-          await fetchProfileAndPermissions(session?.user);
+          // force: the account details just changed, so the cached copy is stale.
+          await fetchProfileAndPermissions(session?.user, { force: true });
         } else if (event === "TOKEN_REFRESHED") {
-          // Re-fetch profile on token refresh to get latest permissions
+          // force: picks up a role or permission change made since sign-in.
           if (session?.user) {
-            await fetchProfileAndPermissions(session.user);
+            await fetchProfileAndPermissions(session.user, { force: true });
           }
         }
       }
@@ -292,13 +309,19 @@ export const AuthProvider = ({ children }) => {
         console.error('Error syncing customers table:', customerError);
       }
 
+      // Read the profile back now that both writes are done. The USER_UPDATED event
+      // fires as soon as the auth record changes, which can be before the profiles
+      // row above has been written — so without this the name in the header could
+      // still show the old value until the next page load.
+      await fetchProfileAndPermissions(data.user, { force: true });
+
       toast({
         title: "Profile Updated!",
         description: "Your information has been successfully updated.",
       });
     }
     return { data, error };
-  }, [toast]);
+  }, [toast, fetchProfileAndPermissions]);
   
   const hasPermission = useCallback((permission) => {
     return permissions.includes(permission);

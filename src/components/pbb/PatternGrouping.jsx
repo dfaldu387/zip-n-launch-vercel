@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { parseDivisionId } from '@/lib/showBillUtils';
+import { resolveDivisionDate as resolveDivisionDateFor } from '@/lib/divisionDates';
 import { PlusCircle, Move, Info, Undo2, Sparkles, Check, Copy, Calendar as CalendarIcon } from 'lucide-react';
 import { format } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -117,23 +118,36 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
     };
 
     const handleRemovePatternGroup = (disciplineId, groupId) => {
-        setFormData(prev => ({
-            ...prev,
-            disciplines: prev.disciplines.map(disc => {
-                if (disc.id === disciplineId) {
-                    const groupToRemove = disc.patternGroups.find(g => g.id === groupId);
+        setFormData(prev => {
+            // The group's pattern choice has to go with it.
+            //
+            // Removing a group used to leave patternSelections[disciplineId][groupId]
+            // behind. Nothing displayed that group any more, but the leftover was
+            // still counted as an assigned pattern on the close-out summary, and the
+            // book generator collects pattern ids straight from patternSelections —
+            // so a pattern from a deleted group could still be pulled into the book.
+            const selectionsForDiscipline = prev.patternSelections?.[disciplineId];
+            let patternSelections = prev.patternSelections;
+
+            if (selectionsForDiscipline && groupId in selectionsForDiscipline) {
+                const { [groupId]: _removed, ...rest } = selectionsForDiscipline;
+                patternSelections = { ...prev.patternSelections, [disciplineId]: rest };
+            }
+
+            return {
+                ...prev,
+                patternSelections,
+                disciplines: prev.disciplines.map(disc => {
+                    if (disc.id !== disciplineId) return disc;
+                    const groupToRemove = (disc.patternGroups || []).find(g => g.id === groupId);
                     if (!groupToRemove) return disc;
-
-                    const newPatternGroups = disc.patternGroups.filter(g => g.id !== groupId);
-
                     return {
                         ...disc,
-                        patternGroups: newPatternGroups
+                        patternGroups: disc.patternGroups.filter(g => g.id !== groupId),
                     };
-                }
-                return disc;
-            })
-        }));
+                }),
+            };
+        });
     };
 
     const handleGroupFieldChange = (disciplineId, groupId, field, value) => {
@@ -192,15 +206,16 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
             return group ? group.id : null;
         };
 
-        // Helper: resolve a division's show date. Ungrouped rows carry `date`
-        // directly; grouped rows only store baseId/goNumber, so look the date up
-        // in divisionGos (go2Date for Go 2, go1Date otherwise).
-        const resolveDivisionDate = (d) => {
-            if (d?.date) return d.date;
-            const baseId = d?.baseId || d?.id;
-            const goInfo = pbbDiscipline.divisionGos?.[baseId] || {};
-            return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
-        };
+        // Resolve a division's show date. Ungrouped rows carry `date` directly;
+        // grouped rows only store baseId/goNumber.
+        //
+        // The shared helper is used rather than a local copy. The copy that lived
+        // here skipped the divisionDates fallback, so a division that has a date but
+        // no Go record resolved to null — the "one date per group" rule then had
+        // nothing to compare and silently let two dates into one group, which prints
+        // both on the same day.
+        const resolveDivisionDate = (d) =>
+            d?.date || resolveDivisionDateFor(pbbDiscipline, d);
 
         const sourceGroupId =
             activeContainerId && activeContainerId !== UNGROUPED_ID
@@ -449,13 +464,10 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                 return;
             }
 
-            // Date Separation: a bulk move cannot mix dates into one group.
-            const resolveDivisionDate = (d) => {
-                if (d?.date) return d.date;
-                const baseId = d?.baseId || d?.id;
-                const goInfo = pbbDiscipline.divisionGos?.[baseId] || {};
-                return (d?.goNumber === 2 ? goInfo.go2Date : goInfo.go1Date) || null;
-            };
+            // Date Separation: a bulk move cannot mix dates into one group. Same
+            // shared helper as the single-division drag above.
+            const resolveDivisionDate = (d) =>
+                d?.date || resolveDivisionDateFor(pbbDiscipline, d);
             const combinedDates = new Set(
                 [...divisionsToMove, ...targetGroup.divisions]
                     .map(resolveDivisionDate)
@@ -629,21 +641,46 @@ export const PatternGrouping = ({ pbbDiscipline, setFormData, isCustomOpenShow, 
                 const newGroupId = `pattern-group-${Date.now()}-${index}`;
                 groupIdMapping.set(sourceGroup.id, newGroupId);
                 
-                // Map divisions from source to current discipline
+                // Map divisions from source to current discipline.
+                //
+                // The Go fields have to come across too. This used to rebuild each
+                // division as { id, assocId, division } only, dropping baseId,
+                // goNumber and hasGo2. Dates are read as divisionGos[baseId] picked by
+                // goNumber, so a copied Go 2 division found no Go record, ended up with
+                // no date, and fell back to the show start date — its patterns printed
+                // on day one instead of the day they actually run. The Go 1 / Go 2
+                // labels and the date filter stopped working on those groups too.
                 const mappedDivisions = (sourceGroup.divisions || []).map(sourceDiv => {
-                    const sourceDivId = typeof sourceDiv === 'string' ? sourceDiv : (sourceDiv?.id || sourceDiv);
-                    const currentDivId = divisionMapping.get(sourceDivId);
-                    
-                    if (currentDivId) {
-                        // Parse current division ID to get assocId and division name
-                        const { assocId, divisionName } = parseDivisionId(currentDivId);
-                        return {
-                            id: currentDivId,
-                            assocId: assocId,
-                            division: divisionName
-                        };
-                    }
-                    return null;
+                    const source = typeof sourceDiv === 'object' ? sourceDiv : {};
+                    const sourceDivId = typeof sourceDiv === 'string' ? sourceDiv : (source.id || sourceDiv);
+
+                    // Match on the BASE id. A division in a two-go class carries an id
+                    // like "AQHA-Novice-go2", while the mapping is built from
+                    // divisionOrder, which holds base ids only — so looking the full id
+                    // up found nothing and the division was dropped from the copied
+                    // group without a word.
+                    const sourceBaseId = source.baseId || sourceDivId;
+                    const currentBaseId = divisionMapping.get(sourceBaseId);
+                    if (!currentBaseId) return null;
+
+                    // Whether this division runs twice is a property of THIS discipline,
+                    // not the one being copied from. If it has no second go here, there
+                    // is no Go 2 entry to create.
+                    const targetGo = pbbDiscipline.divisionGos?.[currentBaseId] || {};
+                    const goNumber = source.goNumber ?? null;
+                    if (goNumber === 2 && !targetGo.hasGo2) return null;
+
+                    const currentDivId = goNumber ? `${currentBaseId}-go${goNumber}` : currentBaseId;
+                    const { assocId, divisionName } = parseDivisionId(currentBaseId);
+
+                    return {
+                        id: currentDivId,
+                        baseId: currentBaseId,
+                        assocId,
+                        division: divisionName,
+                        goNumber,
+                        hasGo2: !!targetGo.hasGo2,
+                    };
                 }).filter(Boolean); // Remove null entries
 
                 return {
