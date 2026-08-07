@@ -3547,6 +3547,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 assignedStalls,
                                                 options: {
                                                     organizerContact: pd?.showDetails?.general?.managerContactEmail,
+                                                    // Without this the PDF always printed "Total" and never showed
+                                                    // what had already been paid — so an exhibitor who had paid in
+                                                    // full received an invoice for the whole amount again.
+                                                    amountPaid: bPaid,
                                                 },
                                             });
                                         }}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -85,8 +85,23 @@ export const useShowBuilder = (showId) => {
   const { toast } = useToast();
   const { user } = useAuth();
 
+  // The very first save of a new show. Several autosaves can fire before the insert
+  // comes back, and without a guard each one would create its own project — so the
+  // first create wins and any save that overlaps it waits for the same id.
+  //
+  // This used to be handled by searching for an existing show with the SAME NAME and
+  // saving into it. Horse shows reuse their name every year, so creating "Summer
+  // Classic" a second time silently wrote over last year's show — divisions,
+  // schedule, officials and fees included, with no warning.
+  const pendingCreateRef = useRef(null);
+  const createdIdRef = useRef(null);
+
   const fetchInitialData = useCallback(async () => {
     setIsLoading(true);
+    // Starting a different show (or a brand-new one) must forget the project the
+    // previous one created, or the next save would write into it.
+    createdIdRef.current = null;
+    pendingCreateRef.current = null;
     try {
       const projectsQuery = user
         ? supabase.from('projects').select('id, project_name, project_type, project_data, status').eq('user_id', user.id).not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")').in('status', ['Draft', 'draft', 'In progress', 'in progress', 'Locked', 'locked', 'Final', 'final', 'published', 'Lock & Approve Mode', 'Publication']).order('created_at', { ascending: false })
@@ -168,7 +183,11 @@ export const useShowBuilder = (showId) => {
     } finally {
       setIsLoading(false);
     }
-  }, [showId, toast]);
+    // `user` belongs here: the projects query is skipped when nobody is signed in
+    // yet, and on a fresh page load the session almost always arrives after the
+    // first run. Without it the loader never re-ran, so "Link to Existing Show" and
+    // the duplicate-name notice stayed empty until the page was reloaded by hand.
+  }, [showId, toast, user]);
 
   useEffect(() => {
     fetchInitialData();
@@ -212,23 +231,16 @@ export const useShowBuilder = (showId) => {
     }
 
     // Never use linkedProjectId as save target — it's a read-only reference to another project
-    let currentShowId = showId || formData.id;
+    let currentShowId = showId || formData.id || createdIdRef.current;
 
-    // If no project ID yet, check if a show with this name already exists for this user
-    // and reuse it instead of creating a duplicate
-    if (!currentShowId && trimmedName) {
-      const { data: existingShow } = await supabase
-        .from('projects')
-        .select('id')
-        .eq('project_type', 'show')
-        .eq('user_id', user.id)
-        .ilike('project_name', trimmedName)
-        .limit(1)
-        .maybeSingle();
-
-      if (existingShow) {
-        currentShowId = existingShow.id;
-        setFormData(prev => ({ ...prev, id: currentShowId }));
+    // A save that starts while the first create is still running joins it instead of
+    // inserting a second project.
+    if (!currentShowId && pendingCreateRef.current) {
+      try {
+        const created = await pendingCreateRef.current;
+        currentShowId = created?.id || null;
+      } catch {
+        // The create that owns this promise reports its own error.
       }
     }
 
@@ -320,11 +332,28 @@ export const useShowBuilder = (showId) => {
         ? formData.showNumber
         : null;
       if (!showNumber) {
-        const { count } = await supabase
+        // One past the organizer's highest number so far.
+        //
+        // This used to be "how many shows exist, plus one", counted across every
+        // organizer. Deleting a show made the next one reuse its number, two people
+        // saving at the same moment both got the same number, and one organizer's
+        // numbering moved whenever somebody else created a show. Contract Management
+        // links projects BY show number, so a repeat links the wrong show.
+        const { data: mine } = await supabase
           .from('projects')
-          .select('id', { count: 'exact', head: true })
-          .eq('project_type', 'show');
-        showNumber = (count || 0) + 1;
+          .select('project_data')
+          .eq('project_type', 'show')
+          .eq('user_id', user.id);
+
+        const highest = (mine || []).reduce((max, row) => {
+          // Numbers are free text ("2024-001"), so only plain numeric ones count
+          // toward the sequence; anything else is left to the organizer.
+          const raw = String(row?.project_data?.showNumber ?? '').trim();
+          if (!/^\d+$/.test(raw)) return max;
+          return Math.max(max, parseInt(raw, 10));
+        }, 0);
+
+        showNumber = highest + 1;
       }
 
       const newId = uuidv4();
@@ -333,22 +362,50 @@ export const useShowBuilder = (showId) => {
         id: newId,
         project_data: { ...showPayload.project_data, showNumber },
       };
-      const { data, error } = await supabase
+
+      const createPromise = supabase
         .from('projects')
         .insert([payloadWithNumber])
         .select('id')
-        .single();
+        .single()
+        .then(({ data, error }) => {
+          if (error) throw error;
+          return data;
+        });
 
-      if (error) {
+      pendingCreateRef.current = createPromise;
+
+      let data;
+      try {
+        data = await createPromise;
+      } catch (error) {
+        pendingCreateRef.current = null;
         toast({ title: 'Error creating show', description: error.message, variant: 'destructive' });
         return null;
       }
+      pendingCreateRef.current = null;
 
       const newShowId = data.id;
+      createdIdRef.current = newShowId;
       setFormData(prev => ({ ...prev, id: newShowId, showNumber }));
+
+      // A repeated name is normal — the same show runs every year — so this only
+      // points it out. The new show is its own project and nothing is overwritten.
+      const duplicateName = (existingProjects || []).some(
+        p => p.project_type === 'show'
+          && p.id !== newShowId
+          && (p.project_name || '').trim().toLowerCase() === trimmedName.toLowerCase()
+      );
+      if (duplicateName) {
+        toast({
+          title: 'Another show has this name',
+          description: `"${trimmedName}" already exists. This is a separate show — rename it if that was not intended.`,
+        });
+      }
+
       return data;
     }
-  }, [formData, step, completedSteps, showId, toast, user]);
+  }, [formData, step, completedSteps, showId, toast, user, existingProjects]);
 
   const nextStep = () => setStep(prev => Math.min(prev + 1, 8));
   const prevStep = () => setStep(prev => Math.max(prev - 1, 1));

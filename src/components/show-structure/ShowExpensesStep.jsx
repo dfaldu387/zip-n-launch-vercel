@@ -739,7 +739,11 @@ export const ShowExpensesStep = ({ formData, setFormData }) => {
         for (const e of expenses) {
             if (e.timing && counts[e.timing] !== undefined) {
                 counts[e.timing]++;
-                totals[e.timing] += parseFloat(e.amount) || 0;
+                // Quantity counts here too. Without it these three figures used the
+                // unit price only, so 50 ribbons at $3 showed as $3 — and the
+                // before/during/after amounts never added up to the total printed
+                // directly above them.
+                totals[e.timing] += (parseFloat(e.amount) || 0) * (parseInt(e.quantity, 10) || 1);
             }
         }
         return { counts, totals };
