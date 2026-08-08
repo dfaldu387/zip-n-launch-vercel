@@ -6,20 +6,42 @@ import { supabase } from '@/lib/supabaseClient';
  * person was asked about — across ALL disciplines, not just one. The token IS
  * the access capability (scoped link, no login).
  */
-export function makeRecipientToken(projectId, email) {
-  const raw = `${projectId}:${String(email).trim().toLowerCase()}`;
+export function makeRecipientToken(projectId, email, secret) {
+  const raw = `${projectId}:${String(email).trim().toLowerCase()}:${secret}`;
   // base64url encode (browser btoa) — strip padding, swap +/ for -_
   return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** Reverse of makeRecipientToken — returns { projectId, email } or null. */
+/**
+ * The unguessable half of a request link.
+ *
+ * The token used to be base64 of just `projectId:email`. Base64 is encoding, not
+ * encryption — anyone holding one link could read the show id out of it and write
+ * a token for a different email, then view and OVERWRITE that person's pattern
+ * choices or upload a file as them. The random value below is stored on the
+ * request itself, and the server refuses any link whose secret does not match.
+ */
+export function makeRequestSecret() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Reverse of makeRecipientToken — returns { projectId, email, secret } or null. */
 export function parseRecipientToken(token) {
   try {
     const b64 = token.replace(/-/g, '+').replace(/_/g, '/');
     const raw = atob(b64);
-    const idx = raw.indexOf(':');
-    if (idx === -1) return null;
-    return { projectId: raw.slice(0, idx), email: raw.slice(idx + 1) };
+    const first = raw.indexOf(':');
+    if (first === -1) return null;
+    const rest = raw.slice(first + 1);
+    const second = rest.lastIndexOf(':');
+    if (second === -1) return null;
+    return {
+      projectId: raw.slice(0, first),
+      email: rest.slice(0, second),
+      secret: rest.slice(second + 1),
+    };
   } catch {
     return null;
   }
@@ -281,7 +303,10 @@ export async function sendCustomPatternRequests(formData, options = {}) {
   const results = await Promise.allSettled(
     recipients.map(async ({ email, name, phone, items, refs, kinds }) => {
       // Scoped, no-login links keyed to this recipient (spans all disciplines).
-      const token = projectId ? makeRecipientToken(projectId, email) : '';
+      // A fresh secret each time a request is sent, so re-sending replaces the
+      // previous link rather than leaving two working ones.
+      const secret = makeRequestSecret();
+      const token = projectId ? makeRecipientToken(projectId, email, secret) : '';
       const judgeLink = token && kinds.has('judge') ? `${origin}/judge-request/${token}` : '';
       const uploadLink = token && kinds.has('custom') ? `${origin}/upload-request/${token}` : '';
 
@@ -307,7 +332,7 @@ export async function sendCustomPatternRequests(formData, options = {}) {
         console.error(`Failed to send pattern request to ${email}:`, error?.message || data?.error);
         return { refs, success: false };
       }
-      return { refs, success: true };
+      return { refs, secret, success: true };
     }),
   );
 
@@ -318,8 +343,13 @@ export async function sendCustomPatternRequests(formData, options = {}) {
       sent += 1;
       for (const { disciplineId, groupId } of result.value.refs) {
         const grp = updatedSelections[disciplineId]?.[groupId];
+        if (!grp) continue;
+        // The secret the link carries. Stored on every group this recipient was
+        // asked about, so one link opens all of them — and so the server can
+        // refuse a link that was not issued by us.
+        grp.requestSecret = result.value.secret;
         // Never downgrade a completed item back to "sent".
-        if (grp && grp.requestStatus !== 'uploaded' && grp.requestStatus !== 'responded') {
+        if (grp.requestStatus !== 'uploaded' && grp.requestStatus !== 'responded') {
           grp.requestStatus = 'email_sent';
           grp.requestSentAt = new Date().toISOString();
         }
