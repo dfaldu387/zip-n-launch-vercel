@@ -95,13 +95,15 @@ export const useShowBuilder = (showId) => {
   // schedule, officials and fees included, with no warning.
   const pendingCreateRef = useRef(null);
   const createdIdRef = useRef(null);
+  // Which show this builder has already set itself up for. The loader re-runs when
+  // the signed-in user arrives, and without this the "brand-new show" branch below
+  // fired a second time mid-session: it forgot the row just created and wiped the
+  // form, so the next save inserted a SECOND show.
+  // undefined = nothing set up yet; null = set up for a new, unsaved show.
+  const initialisedForRef = useRef(undefined);
 
   const fetchInitialData = useCallback(async () => {
     setIsLoading(true);
-    // Starting a different show (or a brand-new one) must forget the project the
-    // previous one created, or the next save would write into it.
-    createdIdRef.current = null;
-    pendingCreateRef.current = null;
     try {
       const projectsQuery = user
         ? supabase.from('projects').select('id, project_name, project_type, project_data, status').eq('user_id', user.id).not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")').in('status', ['Draft', 'draft', 'In progress', 'in progress', 'Locked', 'locked', 'Final', 'final', 'published', 'Lock & Approve Mode', 'Publication']).order('created_at', { ascending: false })
@@ -145,6 +147,11 @@ export const useShowBuilder = (showId) => {
       setDivisionsData(divisionsByAssoc);
 
       if (showId) {
+        if (initialisedForRef.current !== showId) {
+          // A different show — drop any id this session created for the previous one.
+          createdIdRef.current = null;
+          pendingCreateRef.current = null;
+        }
         const { data: showData, error: showError } = await supabase
           .from('projects')
           .select('project_data')
@@ -169,11 +176,18 @@ export const useShowBuilder = (showId) => {
           setStep(savedStep);
           setCompletedSteps(new Set(savedCompleted));
         }
-      } else {
+      } else if (initialisedForRef.current !== null) {
+        // Brand-new builder session. Only reset when this really is a fresh start
+        // (first run, or arriving from a saved show), never on a re-run for the
+        // same empty builder — that would unbind the row already created.
+        createdIdRef.current = null;
+        pendingCreateRef.current = null;
         setFormData(initialFormData);
         setStep(1);
         setCompletedSteps(new Set());
       }
+
+      initialisedForRef.current = showId ?? null;
     } catch (error) {
       toast({
         title: 'Error fetching data',

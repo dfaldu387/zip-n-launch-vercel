@@ -121,6 +121,12 @@ export const usePatternBookBuilder = (projectId) => {
   // Serializes saves so two concurrent createOrUpdateProject calls can't both
   // run the INSERT path and create duplicate pattern books.
   const saveLockRef = useRef(Promise.resolve());
+  // Which project this builder has already set itself up for. The loader re-runs
+  // when the signed-in user arrives, and without this the "brand-new book" branch
+  // below fired a second time mid-session: it cleared the row binding and wiped the
+  // form, so the next autosave inserted a SECOND book for the same show.
+  // undefined = nothing set up yet; null = set up for a new, unsaved book.
+  const initialisedForRef = useRef(undefined);
   const [disciplineLibrary, setDisciplineLibrary] = useState([]);
   const [associationsData, setAssociationsData] = useState([]);
   const [divisionsData, setDivisionsData] = useState({});
@@ -225,13 +231,16 @@ export const usePatternBookBuilder = (projectId) => {
               setCompletedSteps(new Set(savedCompleted));
             }
           }
-        } else {
-          // Brand-new builder session — not bound to any row yet.
+        } else if (initialisedForRef.current !== null) {
+          // Brand-new builder session — not bound to any row yet. Only reset when
+          // this really is a fresh start (first run, or arriving from a saved book),
+          // never on a re-run for the same empty builder.
           boundProjectIdRef.current = null;
           setFormData(initialFormData);
           setStep(1);
           setCompletedSteps(new Set());
         }
+        initialisedForRef.current = sanitizedProjectId ?? null;
       } catch (error) {
         toast({
           title: 'Error fetching data',
