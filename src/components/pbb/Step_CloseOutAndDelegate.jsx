@@ -806,6 +806,25 @@ const PatternRequestsPanel = ({ formData, setFormData, currentStatus, createOrUp
       });
       if (result.patternSelections !== formData.patternSelections) {
         setFormData(prev => ({ ...prev, patternSelections: result.patternSelections }));
+
+        // Save straight away — do not wait for the user to press Save.
+        //
+        // Sending stamps each request with the secret that its link carries, and
+        // the server refuses any link whose secret it cannot find. Leaving that
+        // in React state only meant a closed tab produced emails whose links
+        // never worked, with nothing on screen to explain why.
+        if (createOrUpdateProject) {
+          const persisted = await createOrUpdateProject(undefined, {
+            patternSelections: result.patternSelections,
+          });
+          if (!persisted) {
+            toast({
+              variant: 'destructive',
+              title: 'Sent, but not saved',
+              description: 'The emails went out but the book could not be saved, so those links will not work. Press Save, then resend.',
+            });
+          }
+        }
       }
       if (result.sent > 0) {
         toast({ title: 'Requests sent', description: `${result.sent} email${result.sent > 1 ? 's' : ''} sent.` });
@@ -928,8 +947,11 @@ const PatternRequestsPanel = ({ formData, setFormData, currentStatus, createOrUp
         })}
       </div>
 
+      {/* The book is now saved automatically as part of sending — asking the user
+          to remember it was risky, because an unsaved send produces links that do
+          not work. */}
       <p className="text-xs text-muted-foreground">
-        Tip: save the project after sending so links stay active and statuses are kept.
+        Each link works until you resend that request, which replaces it with a new one.
       </p>
     </div>
   );

@@ -464,14 +464,18 @@ export const usePatternBookBuilder = (projectId) => {
     }
   };
 
-  const performCreateOrUpdateProject = useCallback(async (explicitStatus) => {
+  // `overrides` lets a caller save values it has only just computed, without
+  // waiting a render for setFormData to land. Sending pattern requests needs it:
+  // the link secret is stamped onto patternSelections a moment before the save,
+  // and a link whose secret never reached the database simply does not work.
+  const performCreateOrUpdateProject = useCallback(async (explicitStatus, overrides = null) => {
     if (!user) {
       toast({ title: 'Authentication Error', description: 'You must be logged in to save a project.', variant: 'destructive' });
       return null;
     }
 
     // Auto-generate show number if empty
-    let finalFormData = { ...formData };
+    let finalFormData = { ...formData, ...(overrides || {}) };
     if (!finalFormData.showNumber || String(finalFormData.showNumber).trim() === '') {
       const generatedShowNumber = await getNextShowNumber();
       finalFormData.showNumber = generatedShowNumber;
@@ -622,8 +626,8 @@ export const usePatternBookBuilder = (projectId) => {
   // save waits for the first to finish (and record its row id) before running —
   // this is what stops two near-simultaneous saves from both INSERTing and
   // creating duplicate "In progress" + "Draft" books for the same show.
-  const createOrUpdateProject = useCallback((explicitStatus) => {
-    const result = saveLockRef.current.then(() => performCreateOrUpdateProject(explicitStatus));
+  const createOrUpdateProject = useCallback((explicitStatus, overrides = null) => {
+    const result = saveLockRef.current.then(() => performCreateOrUpdateProject(explicitStatus, overrides));
     // Keep the lock chain alive even if a save rejects, so it never deadlocks.
     saveLockRef.current = result.catch(() => {});
     return result;
