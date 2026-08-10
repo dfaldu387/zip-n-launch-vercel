@@ -19,66 +19,13 @@ import { supabase } from '@/lib/supabaseClient';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(0)}`;
 
-// Compute summary info from a show's stallingService data
-const summarizeInventory = (stalling = {}) => {
-    const barns = stalling.barns || [];
-    const rvAreas = stalling.rvAreas || [];
-    const supportSpaces = stalling.supportSpaces || [];
-    const supplies = stalling.supplies || [];
-
-    let totalStalls = 0;
-    let bookedStalls = 0;
-    let minStallPrice = Infinity;
-    for (const barn of barns) {
-        // Count only boxes that are actual stalls — aisles/rooms/empty/blocked
-        // aren't bookable (matches the manager's stall count).
-        const total = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length || barn.stallCount || 0;
-        const booked = (barn.stalls || []).filter(s => s.bookingId).length;
-        totalStalls += total;
-        bookedStalls += booked;
-        if (barn.pricePerNight && barn.pricePerNight < minStallPrice) {
-            minStallPrice = barn.pricePerNight;
-        }
-    }
-    const stallsAvailable = Math.max(totalStalls - bookedStalls, 0);
-
-    let totalRvSpots = 0;
-    let minRvPrice = Infinity;
-    for (const rv of rvAreas) {
-        totalRvSpots += rv.spotCount || 0;
-        if (rv.pricePerNight && rv.pricePerNight < minRvPrice) {
-            minRvPrice = rv.pricePerNight;
-        }
-    }
-
-    let totalSupportUnits = 0;
-    for (const s of supportSpaces) totalSupportUnits += s.unitCount || 0;
-
-    const startingPrice = Math.min(
-        minStallPrice === Infinity ? Infinity : minStallPrice,
-        minRvPrice === Infinity ? Infinity : minRvPrice,
-    );
-
-    return {
-        totalStalls,
-        stallsAvailable,
-        totalRvSpots,
-        totalSupportUnits,
-        suppliesCount: supplies.length,
-        startingPrice: startingPrice === Infinity ? 0 : startingPrice,
-        hasInventory: totalStalls + totalRvSpots + totalSupportUnits + supplies.length > 0,
-    };
-};
-
 const ShowCard = ({ show }) => {
     const navigate = useNavigate();
-    const pd = show.project_data || {};
-    const general = pd.showDetails?.general || {};
-    const venue = pd.showDetails?.venue || {};
-    const inv = useMemo(() => summarizeInventory(pd.stallingService), [pd]);
-
-    const startDate = general.startDate || pd.startDate;
-    const endDate = general.endDate || pd.endDate;
+    // Counts and prices arrive already worked out by list_public_shows(), which
+    // also keeps every exhibitor's booking off this page — see the loader below.
+    const inv = show;
+    const startDate = show.startDate;
+    const endDate = show.endDate;
 
     let dateLabel = 'Dates TBA';
     let dateBadge = null;
@@ -105,11 +52,11 @@ const ShowCard = ({ show }) => {
             <Card className="h-full flex flex-col hover:shadow-lg transition-shadow">
                 <CardHeader className="pb-3">
                     <div className="flex items-start justify-between gap-2 mb-2">
-                        <CardTitle className="text-lg line-clamp-2">{show.project_name}</CardTitle>
+                        <CardTitle className="text-lg line-clamp-2">{show.name}</CardTitle>
                         {dateBadge}
                     </div>
-                    {general.eventHost && (
-                        <CardDescription className="text-xs">Hosted by {general.eventHost}</CardDescription>
+                    {show.eventHost && (
+                        <CardDescription className="text-xs">Hosted by {show.eventHost}</CardDescription>
                     )}
                 </CardHeader>
                 <CardContent className="flex-1 space-y-2 text-sm">
@@ -117,10 +64,10 @@ const ShowCard = ({ show }) => {
                         <Calendar className="h-4 w-4 flex-shrink-0" />
                         <span>{dateLabel}</span>
                     </div>
-                    {venue.facilityName && (
+                    {show.facilityName && (
                         <div className="flex items-center gap-2 text-muted-foreground">
                             <MapPin className="h-4 w-4 flex-shrink-0" />
-                            <span className="truncate">{venue.facilityName}</span>
+                            <span className="truncate">{show.facilityName}</span>
                         </div>
                     )}
 
@@ -190,33 +137,18 @@ const PublicShowsListPage = () => {
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState('upcoming'); // upcoming | all | now
 
+    // Reading the projects table straight from the browser handed an anonymous
+    // visitor every show's full record — including each exhibitor's booking with
+    // their name, email, phone and notes — just to draw these cards. The RPC
+    // returns card-sized summaries and applies the same filter server-side:
+    // real shows, housing published, and something actually available to book.
     useEffect(() => {
         const loadShows = async () => {
             setIsLoading(true);
             try {
-                const { data, error } = await supabase
-                    .from('projects')
-                    .select('id, project_name, project_type, project_data, created_at')
-                    .eq('project_type', 'show')
-                    .order('created_at', { ascending: false });
-
+                const { data, error } = await supabase.rpc('list_public_shows');
                 if (error) throw error;
-
-                // Keep shows that have inventory AND are actually open for booking.
-                //
-                // The list used to check inventory only, so a show still in Draft — or
-                // one closed again after the show — was listed with a "Book Now"
-                // button that led straight to "Booking is not open yet". Same rule as
-                // the booking page: published means open, draft and locked do not.
-                const bookable = (data || []).filter(s => {
-                    const pd = s.project_data || {};
-                    const stalling = pd.stallingService || {};
-                    if (!summarizeInventory(stalling).hasInventory) return false;
-                    const housingStatus = pd.moduleStatuses?.housing || stalling.publishStatus || 'draft';
-                    return housingStatus === 'published';
-                });
-
-                setShows(bookable);
+                setShows(Array.isArray(data) ? data : []);
             } catch (err) {
                 toast({
                     title: 'Could not load shows',
@@ -234,11 +166,8 @@ const PublicShowsListPage = () => {
         const today = startOfDay(new Date());
         const term = search.trim().toLowerCase();
         return shows.filter(s => {
-            const pd = s.project_data || {};
-            const general = pd.showDetails?.general || {};
-            const venue = pd.showDetails?.venue || {};
-            const startDate = general.startDate || pd.startDate;
-            const endDate = general.endDate || pd.endDate;
+            const startDate = s.startDate;
+            const endDate = s.endDate;
 
             // Date filter
             if (filter === 'upcoming' && startDate) {
@@ -259,10 +188,10 @@ const PublicShowsListPage = () => {
             // Search
             if (term) {
                 const haystack = [
-                    s.project_name,
-                    general.eventHost,
-                    venue.facilityName,
-                    venue.address,
+                    s.name,
+                    s.eventHost,
+                    s.facilityName,
+                    s.address,
                 ].filter(Boolean).join(' ').toLowerCase();
                 if (!haystack.includes(term)) return false;
             }

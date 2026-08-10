@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
     import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
     import { Button } from '@/components/ui/button';
     import { useToast } from '@/components/ui/use-toast';
-    import { format } from 'date-fns';
+    import { format, parseISO } from 'date-fns';
     import Navigation from '@/components/Navigation';
 
     const DetailItem = ({ icon: Icon, label, value }) => (
@@ -28,21 +28,28 @@ import React, { useState, useEffect } from 'react';
         const [assets, setAssets] = useState([]);
         const [isLoading, setIsLoading] = useState(true);
 
+        // `select('*')` on projects handed this public page the entire show
+        // record — every exhibitor booking with their contact details, the fee
+        // structure, staff, sponsors and the schedule — when all it draws is the
+        // show's own public information. get_public_show() returns just that.
         useEffect(() => {
             const fetchShowData = async () => {
                 setIsLoading(true);
                 try {
                     const { data: projectData, error: projectError } = await supabase
-                        .from('projects')
-                        .select('*, project_assets(*)')
-                        .eq('id', showId)
-                        .single();
+                        .rpc('get_public_show', { p_show_id: showId });
 
                     if (projectError) throw projectError;
                     if (!projectData) throw new Error('Show not found.');
 
                     setShowData(projectData);
-                    setAssets(projectData.project_assets || []);
+
+                    // Assets live in their own table with their own policy.
+                    const { data: assetRows } = await supabase
+                        .from('project_assets')
+                        .select('*')
+                        .eq('project_id', showId);
+                    setAssets(assetRows || []);
                 } catch (error) {
                     toast({
                         title: 'Error fetching show data',
@@ -89,10 +96,10 @@ import React, { useState, useEffect } from 'react';
             );
         }
 
-        const { project_name, project_data } = showData;
-        const { showDetails = {} } = project_data || {};
-        const { general = {}, venue = {}, officials = {}, fees = [], entry = {}, scheduling = {}, awards = {} } = showDetails;
-        const stalling = project_data?.stallingService || {};
+        const project_name = showData.name;
+        const details = showData.details || {};
+        const { general = {}, venue = {}, officials = {}, fees = [], entry = {}, scheduling = {}, awards = {} } = details;
+        const stalling = showData.inventory || {};
         const hasInventory = (stalling.barns?.length || 0) + (stalling.rvAreas?.length || 0) + (stalling.supportSpaces?.length || 0) + (stalling.supplies?.length || 0) > 0;
         // Fee Highlights: prefer entry fees (showDetails.fees); if none, fall back to
         // the Housing module prices so shows priced only in the Housing manager still
@@ -110,7 +117,12 @@ import React, { useState, useEffect } from 'react';
                 .map(s => ({ id: `supply-${s.id}`, name: `${s.name || 'Supply'} (per ${s.unit || 'unit'})`, amount: s.price })),
         ];
         const feeHighlights = fees.length > 0 ? fees : housingFees;
-        const marketing = project_data?.marketing || {};
+        const marketing = showData.marketing || {};
+        // A show with no dates set used to render "Invalid Date to Invalid Date".
+        const { start: showStart, end: showEnd } = showData.showWindow || {};
+        const showDates = showStart
+            ? `${format(parseISO(showStart), 'PPP')}${showEnd ? ` to ${format(parseISO(showEnd), 'PPP')}` : ''}`
+            : 'Dates to be announced';
         const socialLinks = [
             { url: marketing.facebook, icon: Facebook, label: 'Facebook' },
             { url: marketing.instagram, icon: Instagram, label: 'Instagram' },
@@ -177,10 +189,10 @@ import React, { useState, useEffect } from 'react';
                                     <Card>
                                         <CardHeader><CardTitle className="flex items-center"><Info className="mr-2" /> General Information</CardTitle></CardHeader>
                                         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            <DetailItem icon={Calendar} label="Show Dates" value={`${format(new Date(project_data.startDate), 'PPP')} to ${format(new Date(project_data.endDate), 'PPP')}`} />
-                                            {/* Fall back to the flat wizard fields (project_data.venueName/Address)
+                                            <DetailItem icon={Calendar} label="Show Dates" value={showDates} />
+                                            {/* Fall back to the flat wizard fields (venueName/venueAddress)
                                                 when the nested showDetails.venue isn't present. */}
-                                            <DetailItem icon={Info} label="Venue" value={[venue.facilityName || project_data.venueName, venue.address || project_data.venueAddress].filter(Boolean).join(' — ')} />
+                                            <DetailItem icon={Info} label="Venue" value={[venue.facilityName || details.venueName, venue.address || details.venueAddress].filter(Boolean).join(' — ')} />
                                             {/* Only show Manager / Secretary when they were actually filled in. */}
                                             {general.managerName && (
                                                 <DetailItem icon={Users} label="Show Manager" value={`${general.managerName}${general.managerContactEmail ? ` (${general.managerContactEmail})` : ''}`} />

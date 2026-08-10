@@ -129,6 +129,7 @@ const BookingStatusPage = () => {
     }
 
     const { booking, assignedStalls = [], assignedRvSpots = [], show } = data;
+    const liveTotal = Number(booking.liveTotal ?? booking.totalAmount ?? booking.amount ?? 0);
     const meta = STATUS_META[booking.status] || STATUS_META.pending;
     const StatusIcon = meta.icon;
     const shortRef = String(booking.id || '').slice(0, 8).toUpperCase();
@@ -328,21 +329,25 @@ const BookingStatusPage = () => {
                                     </div>
                                 )}
 
-                                {/* Total */}
-                                {(booking.totalAmount || booking.amount) > 0 && (
+                                {/* Total — the LIVE figure (assigned stalls × nights × today's
+                                    price), which is what checkout actually charges. The stored
+                                    totalAmount freezes at booking time: bookings whose stall fee
+                                    was set afterwards carry 0, so this panel showed no total and
+                                    no way to pay while Stripe would have charged in full. */}
+                                {liveTotal > 0 && (
                                     <div className="flex justify-between items-center border-t pt-3">
                                         <span className="text-sm text-muted-foreground flex items-center gap-1.5">
                                             <DollarSign className="h-4 w-4" /> Total
                                         </span>
-                                        <span className="text-2xl font-bold">{money(booking.totalAmount || booking.amount)}</span>
+                                        <span className="text-2xl font-bold">{money(liveTotal)}</span>
                                     </div>
                                 )}
 
                                 {/* Payment status + pay balance */}
                                 {(() => {
-                                    const total = Number(booking.totalAmount ?? booking.amount ?? 0);
-                                    const paid = Number(booking.paidAmount ?? (booking.paymentStatus === 'paid' ? total : 0));
-                                    const balanceDue = Math.max(0, total - paid);
+                                    const total = liveTotal;
+                                    const paid = Number(booking.paidAmount) || 0;
+                                    const balanceDue = Number(booking.balanceDue ?? Math.max(0, total - paid));
                                     if (total <= 0) return null;
                                     return (
                                         <div className="space-y-2">

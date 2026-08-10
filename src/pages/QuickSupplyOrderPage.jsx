@@ -77,17 +77,20 @@ const QuickSupplyOrderPage = () => {
         email: '',
     });
 
-    // Load show
+    // Load show.
+    //
+    // This used to read the whole projects row, which meant an anonymous browser
+    // received every exhibitor's booking on the show — names, emails, phones,
+    // notes and amounts — along with the fee structure and staff list. The RPC
+    // returns only what this page draws: the supply list, its prices and how
+    // much of each is left.
     useEffect(() => {
         const loadShow = async () => {
             setIsLoading(true);
             try {
-                const { data, error } = await supabase
-                    .from('projects')
-                    .select('id, project_name, project_data')
-                    .eq('id', showId)
-                    .single();
+                const { data, error } = await supabase.rpc('get_public_show', { p_show_id: showId });
                 if (error) throw error;
+                if (!data) throw new Error('This show could not be found.');
                 setShow(data);
             } catch (err) {
                 toast({ title: 'Show not found', description: err.message, variant: 'destructive' });
@@ -98,31 +101,18 @@ const QuickSupplyOrderPage = () => {
         if (showId) loadShow();
     }, [showId, toast]);
 
-    const supplies = useMemo(
-        () => show?.project_data?.stallingService?.supplies || [],
-        [show],
-    );
+    const supplies = useMemo(() => show?.inventory?.supplies || [], [show]);
 
-    // How many of each supply are already sold on existing (non-cancelled)
-    // bookings — caps the stepper so we never oversell past remaining stock.
+    // Already sold, counted server-side now. Caps the stepper so we never
+    // oversell past remaining stock.
     const suppliesSold = useMemo(() => {
-        const existing = show?.project_data?.stallingService?.bookings || [];
         const sold = {};
-        for (const b of existing) {
-            if (b.status === 'cancelled') continue;
-            for (const it of b.items || []) {
-                if (it.type !== 'supply' || it.refId == null) continue;
-                sold[it.refId] = (sold[it.refId] || 0) + (it.qty || 0);
-            }
-        }
+        for (const s of supplies) sold[s.id] = Number(s.sold) || 0;
         return sold;
-    }, [show]);
+    }, [supplies]);
 
     // Live ordering is gated by the same housing status as pre-show booking.
-    const housingStatus = useMemo(() => {
-        const pd = show?.project_data || {};
-        return pd.moduleStatuses?.housing || pd.stallingService?.publishStatus || 'draft';
-    }, [show]);
+    const housingStatus = show?.housingStatus || 'draft';
     const isOpen = housingStatus === 'published';
 
     const orderSummary = useMemo(() => {
@@ -200,7 +190,7 @@ const QuickSupplyOrderPage = () => {
                         kind: 'receipt',
                         to: bookingPayload.email,
                         customerName: bookingPayload.exhibitorName,
-                        showName: show?.project_name || 'the show',
+                        showName: show?.name || 'the show',
                         orderRef: bookingShortId,
                         items: bookingPayload.items.map(it => ({ name: it.name, amount: it.amount })),
                         total: bookingPayload.totalAmount,
@@ -246,7 +236,7 @@ const QuickSupplyOrderPage = () => {
     if (confirmation) {
         return (
             <>
-                <Helmet><title>Order Placed - {show?.project_name}</title></Helmet>
+                <Helmet><title>Order Placed - {show?.name}</title></Helmet>
                 <div className="min-h-screen bg-background">
                     <Navigation />
                     <main className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -258,7 +248,7 @@ const QuickSupplyOrderPage = () => {
                                     </div>
                                     <CardTitle className="text-2xl">Order Received!</CardTitle>
                                     <CardDescription>
-                                        Thanks, {confirmation.payload.exhibitorName}. Your hay &amp; shavings order for <strong>{show?.project_name}</strong> is in.
+                                        Thanks, {confirmation.payload.exhibitorName}. Your hay &amp; shavings order for <strong>{show?.name}</strong> is in.
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-5">
@@ -354,11 +344,11 @@ const QuickSupplyOrderPage = () => {
         const body = supplies.length === 0
             ? <>This show isn't offering hay &amp; shavings for order right now. Please contact the show organizer.</>
             : isLockedClosed
-                ? <>Live ordering for <strong>{show.project_name}</strong> is currently closed. Please contact the facility.</>
-                : <>Live ordering for <strong>{show.project_name}</strong> hasn't opened yet. Please check back.</>;
+                ? <>Live ordering for <strong>{show.name}</strong> is currently closed. Please contact the facility.</>
+                : <>Live ordering for <strong>{show.name}</strong> hasn't opened yet. Please check back.</>;
         return (
             <>
-                <Helmet><title>Ordering Not Available - {show.project_name}</title></Helmet>
+                <Helmet><title>Ordering Not Available - {show.name}</title></Helmet>
                 <div className="min-h-screen bg-background">
                     <Navigation />
                     <main className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
@@ -380,7 +370,7 @@ const QuickSupplyOrderPage = () => {
     // ── Order form ──
     return (
         <>
-            <Helmet><title>Order Hay & Shavings - {show.project_name}</title></Helmet>
+            <Helmet><title>Order Hay & Shavings - {show.name}</title></Helmet>
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -392,7 +382,7 @@ const QuickSupplyOrderPage = () => {
                             <h1 className="text-3xl font-bold mt-2 flex items-center gap-2">
                                 <ShoppingCart className="h-7 w-7 text-amber-600" /> Order Hay &amp; Shavings
                             </h1>
-                            <p className="text-muted-foreground">{show.project_name} · delivered to your stalls during the show</p>
+                            <p className="text-muted-foreground">{show.name} · delivered to your stalls during the show</p>
                         </div>
 
                         {/* Supplies */}

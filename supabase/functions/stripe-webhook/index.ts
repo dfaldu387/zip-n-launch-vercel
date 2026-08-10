@@ -56,49 +56,16 @@ async function stripeGet(endpoint: string): Promise<any> {
   return response.json();
 }
 
-// ───── Live booking pricing (same rule as stalls-create-checkout) ─────
-
-// Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
-function assignedStallsForBooking(projectData: any, bookingId: string) {
-  const barns = projectData?.stallingService?.barns || [];
-  const result: Array<{ barnId: string; pricePerNight: number }> = [];
-  for (const barn of barns) {
-    for (const stall of barn.stalls || []) {
-      if (stall.bookingId === bookingId) {
-        result.push({ barnId: barn.id, pricePerNight: Number(barn.pricePerNight) || 0 });
-      }
-    }
-  }
-  return result;
-}
-
-// Live total = assigned stalls × nights × current price/night, plus non-stall items.
-function computeBookingTotal(projectData: any, booking: any): number {
-  const nights = Number(booking?.nights) || 1;
-  const assigned = assignedStallsForBooking(projectData, booking?.id);
-  const items = Array.isArray(booking?.items) ? booking.items : [];
-  let total = 0;
-
-  if (items.length > 0) {
-    for (const it of items) {
-      if (it.type === "stall") {
-        const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
-        const count = stallsInThisBarn.length || Number(it.qty) || 0;
-        const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
-        total += count * nights * price;
-      } else {
-        total += Number(it.amount) || 0;
-      }
-    }
-  } else {
-    total += Number(booking?.amount) || 0;
-  }
-  return total;
-}
-
-// Add a payment to a housing booking inside project_data and flip its
-// paymentStatus. Additive, so a later top-up (pay-the-difference) adds on. Shared
-// by both the checkout (pay now) and invoice (pay later) flows.
+// Add a payment to a housing booking and flip its paymentStatus. Additive, so a
+// later top-up (pay-the-difference) adds on. Shared by both the checkout (pay
+// now) and invoice (pay later) flows.
+//
+// The read-modify-write used to happen here, on the whole project_data blob, with
+// nothing holding the row in between. A save from the Housing page landing in the
+// same moment overwrote it and the payment vanished — exhibitor charged, office
+// still showing "unpaid". record_stall_booking_payment() does the same work
+// behind SELECT ... FOR UPDATE, so the two writers queue instead of racing. The
+// live-total rule (assigned stalls × nights × current price) lives there now.
 async function markStallBookingPaid(
   adminClient: any,
   showId: string,
@@ -106,51 +73,21 @@ async function markStallBookingPaid(
   paidDollars: number
 ): Promise<void> {
   if (!showId || !bookingId) return;
-  const { data: project } = await adminClient
-    .from("projects")
-    .select("project_data")
-    .eq("id", showId)
-    .single();
 
-  const pd = project?.project_data || {};
-  const svc = pd.stallingService || {};
-  let found = false;
-  const bookings = (svc.bookings || []).map((b: any) => {
-    if (b.id !== bookingId) return b;
-    found = true;
-
-    // Checkout charges the LIVE total (stalls × nights × current price), so the
-    // paid/partial decision has to use the same figure. It used to compare against
-    // the stored totalAmount, which freezes at booking time — a booking whose stall
-    // fee was set afterwards was charged in full and still marked "partial", and
-    // the show office chased money that had already been paid.
-    const liveTotal = computeBookingTotal(pd, b);
-    const storedTotal = Number(b.totalAmount ?? b.amount ?? 0);
-    const total = liveTotal > 0 ? liveTotal : storedTotal;
-
-    const prevPaid = Number(
-      b.paidAmount ?? (b.paymentStatus === "paid" ? total : 0)
-    );
-    const newPaid = prevPaid + paidDollars;
-    return {
-      ...b,
-      paidAmount: newPaid,
-      paymentStatus: newPaid >= total - 0.01 ? "paid" : "partial",
-      paidAt: new Date().toISOString(),
-    };
+  const { data, error } = await adminClient.rpc("record_stall_booking_payment", {
+    p_show_id: showId,
+    p_booking_id: bookingId,
+    p_paid: paidDollars,
   });
 
-  if (!found) {
-    console.error("Booking not found for payment:", bookingId);
-    return;
+  // Thrown, not swallowed: the caller turns it into a 500 so Stripe re-sends the
+  // event. Logging and returning 200 would lose the payment for good.
+  if (error) {
+    throw new Error(
+      `record_stall_booking_payment failed for booking ${bookingId}: ${error.message}`
+    );
   }
-  const updated = { ...pd, stallingService: { ...svc, bookings } };
-  const { error } = await adminClient
-    .from("projects")
-    .update({ project_data: updated })
-    .eq("id", showId);
-  if (error) console.error("Error updating booking payment:", error);
-  else console.log(`Booking ${bookingId} payment recorded (+$${paidDollars})`);
+  console.log(`Booking ${bookingId} payment recorded (+$${paidDollars})`, data);
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -465,6 +402,20 @@ serve(async (req: Request): Promise<Response> => {
     });
   } catch (error: any) {
     console.error("Webhook processing error:", error.message, error.stack);
+
+    // The event id was recorded before processing, so leaving it there would make
+    // Stripe's retry look like a duplicate and the payment would never be
+    // recorded. Take it back out so the re-send is allowed to do the work.
+    if (event.id) {
+      const { error: undoError } = await adminClient
+        .from("stripe_webhook_events")
+        .delete()
+        .eq("event_id", event.id);
+      if (undoError) {
+        console.error("Could not release webhook event id for retry:", undoError);
+      }
+    }
+
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
