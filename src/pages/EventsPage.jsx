@@ -52,18 +52,7 @@ import { CSS } from '@dnd-kit/utilities';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { EventCard, getComputedStatus } from '@/components/events/EventCard';
 
-// Pick a cover photo for an event card from whatever the organizer already uploaded —
-// a dedicated cover, else a Show Logo image from the Pattern Book Builder (Step 6).
-const IMG_RE = /\.(jpe?g|png|webp|gif|jfif|avif)(\?|$)/i;
-const deriveCoverUrl = (pd = {}) => {
-  if (pd.coverImageUrl) return pd.coverImageUrl;
-  const fromLogos = (pd.showLogos || []).find(l => l?.url && IMG_RE.test(l.url));
-  if (fromLogos) return fromLogos.url;
-  const fromMarketing = (pd.generalMarketing || []).find(f => (f?.fileUrl && IMG_RE.test(f.fileUrl)) || (f?.fileName && IMG_RE.test(f.fileName)));
-  if (fromMarketing) return fromMarketing.fileUrl;
-  if (pd.showLogoUrl && IMG_RE.test(pd.showLogoUrl)) return pd.showLogoUrl;
-  return null;
-};
+// The cover photo is picked server-side now, in list_public_events().
 
 const LiveEventCard = ({ event, onSelect }) => {
   return (
@@ -122,49 +111,38 @@ const EventsPage = () => {
         // Also surface organizer projects that have been published — either their
         // Housing & Grounds (a 'show') or their Pattern Book — so the public can find
         // and use them straight from the Events page (Option B — no separate events row).
-        const { data: showsData } = await supabase
-            .from('projects')
-            .select('id, project_name, project_type, project_data, status, created_at')
-            .in('project_type', ['show', 'pattern_book']);
+        // Fetched through an RPC rather than the table: reading projects directly
+        // sent a signed-out visitor every show's whole record — exhibitor bookings
+        // with names, emails and phones, the staff list, the billing — to build a
+        // list of cards. The RPC returns just the card fields and does the
+        // published + has-dates filtering itself. The grouping below is unchanged.
+        const { data: showsData } = await supabase.rpc('list_public_events');
 
         // Housing lives in moduleStatuses.housing; a standalone pattern book is published
         // through the project's top-level status (Final/Publication), matching the PBB flow.
-        const isHousingPublished = (p) => p.project_data?.moduleStatuses?.housing === 'published';
-        const isPatternPublished = (p) =>
-            ['Final', 'Publication', 'published'].includes(p.status) ||
-            p.project_data?.moduleStatuses?.patternBook === 'published';
+        const isHousingPublished = (p) => p.housingPublished === true;
+        const isPatternPublished = (p) => p.patternPublished === true;
 
         // A single real-world show is often stored as TWO project rows — one built in
         // Horse Show Manager (project_type 'show', housing/stalls) and one in the Pattern
         // Book Builder (project_type 'pattern_book'). Left alone they draw two cards
         // ("duplicated" show). Collapse them into ONE card here so View Details can offer
         // every action (Book Stalls + View Pattern Book) for the same event.
-        const descriptors = (showsData || [])
-            .filter(p => {
-                if (!isHousingPublished(p) && !isPatternPublished(p)) return false; // must be live somehow
-                const pd = p.project_data || {};
-                const general = pd.showDetails?.general || {};
-                const sd = general.startDate || pd.startDate;
-                const ed = general.endDate || pd.endDate;
-                return !!sd && !!ed; // need dates so the card renders cleanly
-            })
-            .map(p => {
-                const pd = p.project_data || {};
-                const general = pd.showDetails?.general || {};
-                const venue = pd.showDetails?.venue || {};
-                return {
-                    p,
-                    pd,
-                    name: p.project_name || general.showName || 'Untitled Show',
-                    sd: general.startDate || pd.startDate,
-                    ed: general.endDate || pd.endDate,
-                    location: venue.facilityName || venue.address || pd.venueName || pd.venueAddress || '',
-                    linkedId: pd.linkedProjectId || pd.linkedShowProjectId || null,
-                    isHousing: isHousingPublished(p),
-                    isPattern: isPatternPublished(p),
-                    isShowType: p.project_type === 'show',
-                };
-            });
+        // The RPC has already applied "published" and "has dates", so nothing is
+        // filtered out again here.
+        const descriptors = (showsData || []).map(p => ({
+            p: { id: p.id, status: p.status, project_type: p.projectType },
+            coverUrl: p.coverUrl || null,
+            coverColor: p.coverColor || null,
+            name: p.projectName || p.showName || 'Untitled Show',
+            sd: p.startDate,
+            ed: p.endDate,
+            location: p.location || '',
+            linkedId: p.linkedProjectId || null,
+            isHousing: isHousingPublished(p),
+            isPattern: isPatternPublished(p),
+            isShowType: p.projectType === 'show',
+        }));
 
         // Union-find to group the records that are the same show.
         const norm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
@@ -205,8 +183,8 @@ const EventsPage = () => {
                 start_date: primary.sd,
                 end_date: primary.ed,
                 location: primary.location,
-                thumbnail_url: members.map(m => deriveCoverUrl(m.pd)).find(Boolean) || null,
-                coverColor: members.map(m => m.pd.coverColor).find(Boolean) || null,
+                thumbnail_url: members.map(m => m.coverUrl).find(Boolean) || null,
+                coverColor: members.map(m => m.coverColor).find(Boolean) || null,
                 status: primary.p.status,
                 // Show the green clickable "Published" when the book is live, whatever the
                 // housing record's own status is.
@@ -255,14 +233,14 @@ const EventsPage = () => {
 
   const handlePatternBookClick = async (projectId) => {
     try {
-      // Fetch project data
-      const { data: project, error: projectError } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .single();
+      // Fetch project data. get_public_project returns the record with the
+      // private branches removed (exhibitor bookings, staff, billing, sponsors) —
+      // `select('*')` here meant opening a pattern book handed the visitor all of
+      // it. The dialog reads project_data, so the shape is mapped back.
+      const { data: pub, error: projectError } = await supabase
+        .rpc('get_public_project', { p_id: projectId });
 
-      if (projectError) {
+      if (projectError || !pub) {
         toast({
           title: 'Error',
           description: 'Failed to load pattern book',
@@ -270,6 +248,15 @@ const EventsPage = () => {
         });
         return;
       }
+
+      const project = {
+        id: pub.id,
+        project_name: pub.name,
+        project_type: pub.projectType,
+        status: pub.status,
+        created_at: pub.createdAt,
+        project_data: pub.projectData || {},
+      };
 
       // Fetch associations data
       const { data: associations, error: associationsError } = await supabase

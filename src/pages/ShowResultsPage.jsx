@@ -34,11 +34,14 @@ const ShowResultsPage = () => {
         let cancelled = false;
 
         const load = async () => {
-            const { data: proj, error: projError } = await supabase
-                .from('projects')
-                .select('id, project_name, status, project_data')
-                .eq('id', id)
-                .maybeSingle();
+            // Read through the RPC: this page needs nothing but the results, and
+            // reading the table gave any visitor the exhibitor bookings too.
+            const { data: pub, error: projError } = await supabase
+                .rpc('get_public_project', { p_id: id });
+
+            const proj = pub
+                ? { id: pub.id, project_name: pub.name, status: pub.status, project_data: pub.projectData || {} }
+                : null;
 
             if (cancelled) return;
             if (projError || !proj) {

@@ -91,11 +91,11 @@ const ScoreSheetQRDownloadPage = () => {
 
             // Exhibitors only see a posted sheet once the show is published.
             if (data.project_id) {
-                const { data: proj } = await supabase
-                    .from('projects')
-                    .select('status, project_data')
-                    .eq('id', data.project_id)
-                    .maybeSingle();
+                // Only the published flag is needed here; the table read was
+                // pulling the whole show record to work it out.
+                const { data: pub } = await supabase
+                    .rpc('get_public_project', { p_id: data.project_id });
+                const proj = pub ? { status: pub.status, project_data: pub.projectData || {} } : null;
                 if (!cancelled) setPublished(isShowPublished(proj));
             }
         };

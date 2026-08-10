@@ -73,12 +73,22 @@ const EventDetailPage = () => {
           return;
         }
 
-        // If not found in events, try projects table
-        const { data: project, error: projectError } = await supabase
-          .from('projects')
-          .select('*')
-          .eq('id', id)
-          .maybeSingle();
+        // If not found in events, try projects. Read through the RPC, which
+        // strips the private branches — `select('*')` on a page anyone can open
+        // returned every exhibitor booking, the staff list and the billing.
+        const { data: pub, error: projectError } = await supabase
+          .rpc('get_public_project', { p_id: id });
+
+        const project = pub
+          ? {
+              id: pub.id,
+              project_name: pub.name,
+              project_type: pub.projectType,
+              status: pub.status,
+              created_at: pub.createdAt,
+              project_data: pub.projectData || {},
+            }
+          : null;
 
         if (projectError) {
           console.error('Error fetching project:', projectError);
@@ -113,22 +123,45 @@ const EventDetailPage = () => {
 
           let siblings = [];
           try {
-            const { data: candidates } = await supabase
-              .from('projects')
-              .select('id, project_name, project_type, project_data, status, created_at')
-              .in('project_type', ['show', 'pattern_book']);
+            // Match against the public listing — it carries the name, venue,
+            // dates and link that the matching needs, without pulling every
+            // show's full record into an anonymous browser. Only the records
+            // that actually match are then loaded in full.
+            const { data: candidates } = await supabase.rpc('list_public_events');
+            const norm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
             const primLinked = projectDataObj.linkedProjectId || projectDataObj.linkedShowProjectId;
-            siblings = (candidates || []).filter((c) => {
+
+            const matches = (candidates || []).filter((c) => {
               if (c.id === project.id) return false;
-              const ci = identityOf(c);
+              const cKey = [
+                norm(c.projectName || c.showName),
+                norm(c.location),
+                c.startDate || '',
+                c.endDate || '',
+              ].join('|');
               // (1) same name + venue + dates (dates required so blank rows never match)
-              if (ci.key === primaryIdentity.key && primaryIdentity.sd && primaryIdentity.ed) return true;
+              if (cKey === primaryIdentity.key && primaryIdentity.sd && primaryIdentity.ed) return true;
               // (2) explicit link either direction, only when the dates line up
-              const cLinked = c.project_data?.linkedProjectId || c.project_data?.linkedShowProjectId;
-              const datesMatch = ci.sd === primaryIdentity.sd && ci.ed === primaryIdentity.ed;
-              if (datesMatch && (cLinked === project.id || primLinked === c.id)) return true;
+              const datesMatch = (c.startDate || '') === primaryIdentity.sd
+                              && (c.endDate || '') === primaryIdentity.ed;
+              if (datesMatch && (c.linkedProjectId === project.id || primLinked === c.id)) return true;
               return false;
             });
+
+            const loaded = await Promise.all(
+              matches.map((m) => supabase.rpc('get_public_project', { p_id: m.id }))
+            );
+            siblings = loaded
+              .map((r) => r.data)
+              .filter(Boolean)
+              .map((pub) => ({
+                id: pub.id,
+                project_name: pub.name,
+                project_type: pub.projectType,
+                status: pub.status,
+                created_at: pub.createdAt,
+                project_data: pub.projectData || {},
+              }));
           } catch (e) {
             console.warn('Sibling show lookup failed:', e);
           }

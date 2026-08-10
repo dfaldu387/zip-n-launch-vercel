@@ -46,17 +46,6 @@ const getAssociationLabel = (associations) => {
   return '';
 };
 
-// Pick a cover photo from whatever the organizer already uploaded (matches EventsPage).
-const IMG_RE = /\.(jpe?g|png|webp|gif|jfif|avif)(\?|$)/i;
-const deriveCoverUrl = (pd = {}) => {
-  if (pd.coverImageUrl) return pd.coverImageUrl;
-  const fromLogos = (pd.showLogos || []).find(l => l?.url && IMG_RE.test(l.url));
-  if (fromLogos) return fromLogos.url;
-  const fromMarketing = (pd.generalMarketing || []).find(f => (f?.fileUrl && IMG_RE.test(f.fileUrl)) || (f?.fileName && IMG_RE.test(f.fileName)));
-  if (fromMarketing) return fromMarketing.fileUrl;
-  if (pd.showLogoUrl && IMG_RE.test(pd.showLogoUrl)) return pd.showLogoUrl;
-  return null;
-};
 
 const HomePage = () => {
   const [liveShows, setLiveShows] = useState([]);
@@ -77,36 +66,24 @@ const HomePage = () => {
       }
 
       // Also include published shows & pattern books (same source as /events).
-      const { data: projData } = await supabase
-        .from('projects')
-        .select('id, project_name, project_type, project_data, status')
-        .in('project_type', ['show', 'pattern_book']);
-      const projEvents = (projData || [])
-        .filter((p) => {
-          const pd = p.project_data || {};
-          const housing = pd.moduleStatuses?.housing === 'published';
-          const pattern = ['Final', 'Publication', 'published'].includes(p.status) || pd.moduleStatuses?.patternBook === 'published';
-          if (!housing && !pattern) return false;
-          const general = pd.showDetails?.general || {};
-          return !!(general.startDate || pd.startDate) && !!(general.endDate || pd.endDate);
-        })
-        .map((p) => {
-          const pd = p.project_data || {};
-          const general = pd.showDetails?.general || {};
-          const venue = pd.showDetails?.venue || {};
-          return {
-            id: p.id,
-            name: p.project_name || general.showName || 'Untitled',
-            start_date: general.startDate || pd.startDate,
-            end_date: general.endDate || pd.endDate,
-            location: venue.facilityName || venue.address || pd.venueName || pd.venueAddress || '',
-            associations: pd.associations ? Object.keys(pd.associations).filter((k) => pd.associations[k]) : null,
-            thumbnail_url: deriveCoverUrl(pd),
-            coverColor: pd.coverColor || null,
-            project: { status: p.status },
-            pattern_book_id: p.id,
-          };
-        });
+      //
+      // This used to read the projects table directly, which handed a signed-out
+      // visitor every show's full record — including each exhibitor's booking with
+      // their name, email and phone — just to draw three cards. The RPC returns
+      // only the card fields, and applies the published + has-dates filter itself.
+      const { data: projData } = await supabase.rpc('list_public_events');
+      const projEvents = (projData || []).map((p) => ({
+        id: p.id,
+        name: p.projectName || p.showName || 'Untitled',
+        start_date: p.startDate,
+        end_date: p.endDate,
+        location: p.location || '',
+        associations: p.associations || null,
+        thumbnail_url: p.coverUrl || null,
+        coverColor: p.coverColor || null,
+        project: { status: p.status },
+        pattern_book_id: p.id,
+      }));
 
       // Merge with events-table rows, skipping any project already represented there.
       const eventIds = new Set((data || []).map((e) => e.id));

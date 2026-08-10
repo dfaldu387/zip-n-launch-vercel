@@ -1273,13 +1273,10 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     if (linkedShowId) {
                         try {
                             const { data: linked } = await supabase
-                                .from('projects')
-                                .select('id, project_data')
-                                .eq('id', linkedShowId)
-                                .maybeSingle();
+                                .rpc('get_public_project', { p_id: linkedShowId });
                             if (linked) {
                                 resultsProjectId = linked.id;
-                                resultsProjectData = linked.project_data;
+                                resultsProjectData = linked.projectData;
                             } else {
                                 console.warn('linkedShowProjectId set but project not found:', linkedShowId);
                             }
@@ -1563,13 +1560,10 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             if (linkedShowId) {
                 try {
                     const { data: linked } = await supabase
-                        .from('projects')
-                        .select('id, project_data')
-                        .eq('id', linkedShowId)
-                        .maybeSingle();
+                        .rpc('get_public_project', { p_id: linkedShowId });
                     if (linked) {
                         resultsProjectId = linked.id;
-                        resultsProjectData = linked.project_data;
+                        resultsProjectData = linked.projectData;
                     } else {
                         console.warn('linkedShowProjectId set but project not found:', linkedShowId);
                     }

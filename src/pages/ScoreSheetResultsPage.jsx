@@ -47,11 +47,11 @@ const ScoreSheetResultsPage = () => {
                 return;
             }
 
-            const { data: project, error: projectError } = await supabase
-                .from('projects')
-                .select('project_data')
-                .eq('id', qr.project_id)
-                .maybeSingle();
+            // Via the RPC — the page reads one class out of project_data, but the
+            // table read handed over the exhibitor bookings and staff list too.
+            const { data: pub, error: projectError } = await supabase
+                .rpc('get_public_project', { p_id: qr.project_id });
+            const project = pub ? { project_data: pub.projectData || {} } : null;
             if (cancelled) return;
             if (projectError) {
                 setError(projectError.message);
