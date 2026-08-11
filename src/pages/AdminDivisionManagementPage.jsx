@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import AdminBackButton from '@/components/admin/AdminBackButton';
+import { DeleteReferenceDialog } from '@/components/admin/DeleteReferenceDialog';
 
 const DivisionForm = ({ division, onSave, onCancel, isSaving, associations }) => {
     const [formData, setFormData] = useState({ name: '', sort_order: 0, association_id: '' });
@@ -43,6 +44,7 @@ const AdminDivisionManagementPage = () => {
     const [editingDivision, setEditingDivision] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
     const [isDivisionFormOpen, setIsDivisionFormOpen] = useState(false);
+    const [deletingDivision, setDeletingDivision] = useState(null);
     const [page, setPage] = useState(0);
     const [count, setCount] = useState(0);
     const RPP = 10;
@@ -77,7 +79,12 @@ const AdminDivisionManagementPage = () => {
         setIsSaving(false);
     };
 
-    const handleDeleteDivision = async (division) => {
+    // Lists what the division is used by first: shows hold the id inside
+    // project_data, so deleting one can never fail loudly on its own.
+    const handleDeleteDivision = async () => {
+        const division = deletingDivision;
+        if (!division) return;
+        setDeletingDivision(null);
         const { error } = await supabase.from('divisions').delete().match({ id: division.id });
         if (error) {
             toast({ title: 'Error deleting division', description: error.message, variant: 'destructive' });
@@ -139,7 +146,7 @@ const AdminDivisionManagementPage = () => {
                                                         <TableCell>{div.sort_order}</TableCell>
                                                         <TableCell className="text-right">
                                                             <Button variant="ghost" size="icon" onClick={() => openDivisionForm(div)}><Edit className="h-4 w-4" /></Button>
-                                                            <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="text-destructive"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This will delete "{div.name}" and all its levels. This is irreversible.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDeleteDivision(div)} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+                                                            <Button variant="ghost" size="icon" className="text-destructive" onClick={() => setDeletingDivision(div)}><Trash2 className="h-4 w-4" /></Button>
                                                         </TableCell>
                                                     </TableRow>
                                                 ))}
@@ -162,6 +169,17 @@ const AdminDivisionManagementPage = () => {
             <Dialog open={isDivisionFormOpen} onOpenChange={setIsDivisionFormOpen}>
                 <DialogContent><DialogHeader><DialogTitle>{editingDivision ? 'Edit' : 'Create'} Division</DialogTitle></DialogHeader><DivisionForm division={editingDivision} onSave={handleSaveDivision} onCancel={() => setIsDivisionFormOpen(false)} isSaving={isSaving} associations={associations} /></DialogContent>
             </Dialog>
+
+            <DeleteReferenceDialog
+                isOpen={!!deletingDivision}
+                onClose={() => setDeletingDivision(null)}
+                onConfirm={handleDeleteDivision}
+                kind="division"
+                typeLabel="division"
+                id={deletingDivision?.id}
+                name={deletingDivision?.name}
+                extraWarning="Its levels will be deleted with it."
+            />
         </>
     );
 };

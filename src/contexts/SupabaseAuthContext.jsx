@@ -27,20 +27,37 @@ export const AuthProvider = ({ children }) => {
   // branch). That is four requests on every page load and two on every hourly token
   // refresh, all returning the same rows.
   const loadedProfileForRef = useRef(null);
+  // The load that is currently running, so a second caller can wait for it
+  // rather than carrying on as if the answer were already known.
+  const inFlightProfileRef = useRef(null);
 
   const fetchProfileAndPermissions = useCallback(async (user, { force = false } = {}) => {
     if (!user) {
       loadedProfileForRef.current = null;
+      inFlightProfileRef.current = null;
       setProfile(null);
       setIsAdmin(false);
       setPermissions([]);
       return null;
     }
 
-    // Already loaded for this account — only re-read when something asks for fresh
-    // data (a token refresh or a profile update).
-    if (!force && loadedProfileForRef.current === user.id) return null;
+    // Already loaded — or still loading — for this account. Only re-read when
+    // something asks for fresh data (a token refresh or a profile update).
+    //
+    // This used to return straight away. On a page load both getSession() and
+    // onAuthStateChange fire handleSession, so the second call hit this line
+    // while the first was still fetching, returned, and let handleSession set
+    // loading to false with isAdmin and permissions still empty — and every
+    // guarded route bounced the user to /not-authorized. Intermittent by nature:
+    // clicking through the app was fine, refreshing or typing the URL was not.
+    // Waiting on the in-flight load instead keeps loading true until the answer
+    // is actually known.
+    if (!force && loadedProfileForRef.current === user.id) {
+      return inFlightProfileRef.current ? await inFlightProfileRef.current : null;
+    }
     loadedProfileForRef.current = user.id;
+
+    const load = async () => {
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -84,6 +101,15 @@ export const AuthProvider = ({ children }) => {
       setIsAdmin(false);
       setPermissions([]);
       return null;
+    }
+    };
+
+    const promise = load();
+    inFlightProfileRef.current = promise;
+    try {
+      return await promise;
+    } finally {
+      if (inFlightProfileRef.current === promise) inFlightProfileRef.current = null;
     }
   }, []);
 

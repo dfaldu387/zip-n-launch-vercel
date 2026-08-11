@@ -21,6 +21,7 @@ import { useDropzone } from 'react-dropzone';
 import { Progress } from '@/components/ui/progress';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import AdminBackButton from '@/components/admin/AdminBackButton';
+import { DeleteReferenceDialog } from '@/components/admin/DeleteReferenceDialog';
 
 const DivisionLevelForm = ({ level, onSave, onCancel, isSaving, divisions, associations = [], availableMedia }) => {
     const [formData, setFormData] = useState({ name: '', sort_order: 0, division_id: '', pattern_media: null });
@@ -200,6 +201,7 @@ const AdminDivisionLevelManagementPage = () => {
     const [editingLevel, setEditingLevel] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
     const [isLevelFormOpen, setIsLevelFormOpen] = useState(false);
+    const [deletingLevel, setDeletingLevel] = useState(null);
     const [page, setPage] = useState(0);
     const [count, setCount] = useState(0);
     const RPP = 10;
@@ -241,7 +243,12 @@ const AdminDivisionLevelManagementPage = () => {
         setIsSaving(false);
     };
 
-    const handleDeleteLevel = async (level) => {
+    // Confirmed through DeleteReferenceDialog, which lists what uses the level
+    // first — shows keep the id inside project_data, so nothing fails loudly.
+    const handleDeleteLevel = async () => {
+        const level = deletingLevel;
+        if (!level) return;
+        setDeletingLevel(null);
         const { error } = await supabase.from('division_levels').delete().match({ id: level.id });
         if (error) {
             toast({ title: 'Error deleting level', description: error.message, variant: 'destructive' });
@@ -313,7 +320,7 @@ const AdminDivisionLevelManagementPage = () => {
                                                         <TableCell className="text-right">
                                                             {level.pattern_media && <Button asChild variant="ghost" size="icon"><a href={level.pattern_media} download><Download className="h-4 w-4" /></a></Button>}
                                                             <Button variant="ghost" size="icon" onClick={() => openLevelForm(level)}><Edit className="h-4 w-4" /></Button>
-                                                            <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="text-destructive"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This will delete the level "{level.name}".</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDeleteLevel(level)} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+                                                            <Button variant="ghost" size="icon" className="text-destructive" onClick={() => setDeletingLevel(level)}><Trash2 className="h-4 w-4" /></Button>
                                                         </TableCell>
                                                     </TableRow>
                                                 ))}
@@ -336,6 +343,16 @@ const AdminDivisionLevelManagementPage = () => {
             <Dialog open={isLevelFormOpen} onOpenChange={setIsLevelFormOpen}>
                 <DialogContent><DialogHeader><DialogTitle>{editingLevel?.id ? 'Edit' : 'Create'} Level</DialogTitle></DialogHeader><DivisionLevelForm level={editingLevel} onSave={handleSaveLevel} onCancel={() => setIsLevelFormOpen(false)} isSaving={isSaving} divisions={divisions} associations={associations} availableMedia={availableMedia} /></DialogContent>
             </Dialog>
+
+            <DeleteReferenceDialog
+                isOpen={!!deletingLevel}
+                onClose={() => setDeletingLevel(null)}
+                onConfirm={handleDeleteLevel}
+                kind="division_level"
+                typeLabel="level"
+                id={deletingLevel?.id}
+                name={deletingLevel?.name}
+            />
         </>
     );
 };

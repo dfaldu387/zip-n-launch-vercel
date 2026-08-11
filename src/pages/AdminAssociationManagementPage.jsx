@@ -18,6 +18,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import AdminBackButton from '@/components/admin/AdminBackButton';
+import { DeleteReferenceDialog } from '@/components/admin/DeleteReferenceDialog';
+import { logDelete } from '@/lib/auditLog';
 
 const AssociationForm = ({ association, onSave, onCancel, isSaving }) => {
     const [formData, setFormData] = useState(association || { id: '', name: '', is_group: false, is_open_show: false, logo: '', abbreviation: '', color: '#000000', position: 'right' });
@@ -131,6 +133,7 @@ const AdminAssociationManagementPage = () => {
     const [editingAssociation, setEditingAssociation] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
     const [isFormOpen, setIsFormOpen] = useState(false);
+    const [deletingAssociation, setDeletingAssociation] = useState(null);
     const [page, setPage] = useState(0);
     const [count, setCount] = useState(0);
     const RPP = 10;
@@ -197,10 +200,19 @@ const AdminAssociationManagementPage = () => {
         setIsSaving(false);
     };
 
-    const handleDeleteAssociation = async (id) => {
-        const { error } = await supabase.from('associations').delete().match({ id });
+    // The confirmation lists what the association is used by first. This delete
+    // takes its divisions and levels with it, so it is the widest of the four.
+    const handleDeleteAssociation = async () => {
+        const assoc = deletingAssociation;
+        if (!assoc) return;
+        setDeletingAssociation(null);
+        const { error } = await supabase.from('associations').delete().match({ id: assoc.id });
         if (error) { toast({ title: 'Error deleting association', description: error.message, variant: 'destructive' }); }
-        else { toast({ title: 'Association deleted!' }); fetchData(); }
+        else {
+            logDelete('association', assoc.id, { name: assoc.name });
+            toast({ title: 'Association deleted!' });
+            fetchData();
+        }
     };
 
     const handleDivisionUpdate = async (assocId, updatedDivisions) => {
@@ -286,7 +298,7 @@ const AdminAssociationManagementPage = () => {
                                                         </div>
                                                     </AccordionTrigger>
                                                     <Button variant="ghost" size="icon" onClick={() => openForm(assoc)}><Edit className="h-4 w-4" /></Button>
-                                                    <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="text-destructive"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This will delete "{assoc.name}" and all its divisions/levels. This is irreversible.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDeleteAssociation(assoc.id)} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+                                                    <Button variant="ghost" size="icon" className="text-destructive" onClick={() => setDeletingAssociation(assoc)}><Trash2 className="h-4 w-4" /></Button>
                                                 </div>
                                                 <AccordionContent className="p-4"><h4 className="font-semibold mb-2">Divisions & Levels</h4><DivisionManager divisions={assoc.divisions} onUpdate={(updatedDivs) => handleDivisionUpdate(assoc.id, updatedDivs)} associationId={assoc.id} /></AccordionContent>
                                             </AccordionItem>
@@ -308,6 +320,17 @@ const AdminAssociationManagementPage = () => {
             <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
                 <DialogContent><DialogHeader><DialogTitle>{editingAssociation ? 'Edit' : 'Create'} Association</DialogTitle><DialogDescription>Fill in the association details.</DialogDescription></DialogHeader><AssociationForm association={editingAssociation} onSave={handleSaveAssociation} onCancel={() => setIsFormOpen(false)} isSaving={isSaving} /></DialogContent>
             </Dialog>
+
+            <DeleteReferenceDialog
+                isOpen={!!deletingAssociation}
+                onClose={() => setDeletingAssociation(null)}
+                onConfirm={handleDeleteAssociation}
+                kind="association"
+                typeLabel="association"
+                id={deletingAssociation?.id}
+                name={deletingAssociation?.name}
+                extraWarning="Its divisions and levels will be deleted with it."
+            />
         </>
     );
 };

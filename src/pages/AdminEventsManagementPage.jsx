@@ -4,6 +4,7 @@ import { Helmet } from 'react-helmet-async';
 import Navigation from '@/components/Navigation';
 import AdminBackButton from '@/components/admin/AdminBackButton';
 import { supabase } from '@/lib/supabaseClient';
+import { logDelete } from '@/lib/auditLog';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -93,6 +94,7 @@ const AdminEventsManagementPage = () => {
   const [formData, setFormData] = useState(EMPTY_EVENT);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [eventToDelete, setEventToDelete] = useState(null); // holds the event while the confirmation is open
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -322,9 +324,16 @@ const AdminEventsManagementPage = () => {
     setDialogOpen(false);
   };
 
-  const handleDelete = async (id) => {
-    setDeletingId(id);
-    const { error } = await supabase.from('events').delete().eq('id', id);
+  // The bin used to delete straight away, on one click — no question asked, and
+  // an event is what the public sees on /events. Every other admin screen
+  // confirms first; this one now does too.
+  const handleDelete = async () => {
+    const event = eventToDelete;
+    if (!event) return;
+
+    setEventToDelete(null);
+    setDeletingId(event.id);
+    const { error } = await supabase.from('events').delete().eq('id', event.id);
     if (error) {
       toast({
         title: 'Error deleting event',
@@ -334,7 +343,8 @@ const AdminEventsManagementPage = () => {
       setDeletingId(null);
       return;
     }
-    setEvents((prev) => prev.filter((e) => e.id !== id));
+    logDelete('event', event.id, { name: event.name });
+    setEvents((prev) => prev.filter((e) => e.id !== event.id));
     setDeletingId(null);
     toast({ title: 'Event deleted' });
   };
@@ -478,7 +488,7 @@ const AdminEventsManagementPage = () => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => handleDelete(event.id)}
+                            onClick={() => setEventToDelete(event)}
                             disabled={deletingId === event.id}
                             className="text-destructive"
                           >
@@ -868,6 +878,15 @@ const AdminEventsManagementPage = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+
+          <ConfirmationDialog
+            isOpen={!!eventToDelete}
+            onClose={() => setEventToDelete(null)}
+            onConfirm={handleDelete}
+            title="Delete this event?"
+            description={`"${eventToDelete?.name || 'This event'}" will be removed from the public Events page. This cannot be undone.`}
+            confirmText="Delete Event"
+          />
         </main>
       </div>
     </>

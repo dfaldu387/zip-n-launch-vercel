@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
+import { logDelete } from '@/lib/auditLog';
 import { useToast } from '@/components/ui/use-toast';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -86,6 +87,7 @@ const AdminShowManagementPage = () => {
         variant: 'destructive',
       });
     } else {
+      logDelete('show', showToDelete.id, { name: showToDelete.name, creator: showToDelete.creatorEmail || null });
       toast({
         title: 'Show Deleted',
         description: `"${showToDelete.name}" has been successfully deleted.`,

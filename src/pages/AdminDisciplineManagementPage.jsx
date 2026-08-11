@@ -17,6 +17,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import AdminBackButton from '@/components/admin/AdminBackButton';
+import { DeleteReferenceDialog } from '@/components/admin/DeleteReferenceDialog';
+import { logDelete } from '@/lib/auditLog';
 
 const DisciplineForm = ({ discipline, onSave, onCancel, isSaving, associations }) => {
     const [formData, setFormData] = useState({ name: '', category: '', pattern_type: '', open_divisions: false, sort_order: 0, association_id: null, sub_association_type: null });
@@ -67,6 +69,7 @@ const AdminDisciplineManagementPage = () => {
     const [editingDiscipline, setEditingDiscipline] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [deletingDiscipline, setDeletingDiscipline] = useState(null);
     const [page, setPage] = useState(0);
     const [count, setCount] = useState(0);
     const RPP = 10;
@@ -104,10 +107,19 @@ const AdminDisciplineManagementPage = () => {
         setIsSaving(false);
     };
 
-    const handleDelete = async (disciplineId) => {
-        const { error } = await supabase.from('disciplines').delete().match({ id: disciplineId });
+    // The confirmation now lists what the discipline is used by first — shows keep
+    // their copy of the id inside project_data, so nothing here can fail loudly.
+    const handleDelete = async () => {
+        const discipline = deletingDiscipline;
+        if (!discipline) return;
+        setDeletingDiscipline(null);
+        const { error } = await supabase.from('disciplines').delete().match({ id: discipline.id });
         if (error) { toast({ title: 'Error deleting discipline', description: error.message, variant: 'destructive' }); }
-        else { toast({ title: 'Discipline deleted!' }); fetchData(); }
+        else {
+            logDelete('discipline', discipline.id, { name: discipline.name, association_id: discipline.association_id });
+            toast({ title: 'Discipline deleted!' });
+            fetchData();
+        }
     };
 
     const openForm = (discipline = null) => { 
@@ -160,7 +172,7 @@ const AdminDisciplineManagementPage = () => {
                                                         <TableCell>{d.sort_order}</TableCell>
                                                         <TableCell className="text-right">
                                                             <Button variant="ghost" size="icon" onClick={() => openForm(d)}><Edit className="h-4 w-4" /></Button>
-                                                            <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="text-destructive"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This will permanently delete "{d.name}".</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDelete(d.id)} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+                                                            <Button variant="ghost" size="icon" className="text-destructive" onClick={() => setDeletingDiscipline(d)}><Trash2 className="h-4 w-4" /></Button>
                                                         </TableCell>
                                                     </TableRow>
                                                 ))}
@@ -191,6 +203,16 @@ const AdminDisciplineManagementPage = () => {
                     />
                 </DialogContent>
             </Dialog>
+
+            <DeleteReferenceDialog
+                isOpen={!!deletingDiscipline}
+                onClose={() => setDeletingDiscipline(null)}
+                onConfirm={handleDelete}
+                kind="discipline"
+                typeLabel="discipline"
+                id={deletingDiscipline?.id}
+                name={deletingDiscipline?.name}
+            />
         </>
     );
 };

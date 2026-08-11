@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { supabase } from '@/lib/supabaseClient';
+import { logDelete } from '@/lib/auditLog';
 import { preferBestScoresheet } from '@/lib/scoresheetLookup';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -472,6 +473,7 @@ const AdminPatternReviewPage = () => {
       const { error } = await supabase.from('patterns').delete().eq('id', deleteState.pattern.id);
       if (error) throw error;
 
+      logDelete('pattern', deleteState.pattern.id, { name: deleteState.pattern.name || deleteState.pattern.display_name });
       toast({ title: 'Pattern Deleted', description: 'The pattern has been permanently removed.' });
       fetchPatterns();
     } catch (error) {
