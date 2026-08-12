@@ -70,11 +70,13 @@ const ScoreSheetQRDownloadPage = () => {
     useEffect(() => {
         let cancelled = false;
         const fetchRecord = async () => {
+            // Through the RPC: reading the table directly let anyone list every QR
+            // record for every show — judge names and a link to each completed
+            // sheet — instead of just the one behind the code they scanned. The
+            // function also withholds the completed-sheet link until the show is
+            // published, so hiding the button is no longer the only protection.
             const { data, error: fetchError } = await supabase
-                .from('score_sheet_qr_codes')
-                .select('*')
-                .eq('id', id)
-                .maybeSingle();
+                .rpc('get_score_sheet_qr', { p_id: id });
             if (cancelled) return;
             if (fetchError) {
                 setError(fetchError.message);

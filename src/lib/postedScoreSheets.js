@@ -5,6 +5,41 @@ import { supabase } from '@/lib/supabaseClient';
 
 const POSTED_BUCKET = 'project_files';
 
+// Sheets are posted from a phone at the arena, on show wifi. A recent handset
+// takes 15-30 MB photos, and nothing checked the size before uploading — so a
+// full-resolution shot became a long silent wait, and a failure part-way through
+// looked exactly the same as success taking a while.
+export const MAX_POSTED_BYTES = 15 * 1024 * 1024;
+
+const MB = (bytes) => Math.round((bytes / (1024 * 1024)) * 10) / 10;
+
+/**
+ * Why this file can't be posted, or null when it's fine.
+ *
+ * Separate from the upload so the message can be specific: someone standing in a
+ * barn needs to know what to do next, not that "the upload failed".
+ */
+export const validatePostedFile = (file) => {
+    if (!file) return 'No file selected.';
+
+    const type = file.type || '';
+    const isImage = type.startsWith('image/');
+    const isPdf = type === 'application/pdf';
+    // A blank type comes from some Android file pickers — fall back to the name.
+    const looksRight = isImage || isPdf
+        || /\.(jpe?g|png|heic|heif|webp|pdf)$/i.test(file.name || '');
+    if (!looksRight) {
+        return 'Please choose a photo or a PDF of the score sheet.';
+    }
+
+    if (file.size > MAX_POSTED_BYTES) {
+        return `That file is ${MB(file.size)} MB and the limit is ${MB(MAX_POSTED_BYTES)} MB. `
+             + 'Retake the photo at a smaller size, or choose Medium / Actual Size when your phone offers it.';
+    }
+
+    return null;
+};
+
 const extensionOf = (file) => {
     const fromName = (file?.name || '').split('.').pop();
     if (fromName && fromName.length <= 5 && !fromName.includes('/')) return fromName.toLowerCase();
@@ -42,7 +77,8 @@ export const resolvePosterIdentity = async (user) => {
  * @returns {Promise<{url: string, path: string, postedAt: string, name: string|null}>}
  */
 export const postScoredSheet = async (file, record, userId, timestamp, poster = {}) => {
-    if (!file) throw new Error('No file selected.');
+    const problem = validatePostedFile(file);
+    if (problem) throw new Error(problem);
     if (!userId) throw new Error('You must be signed in to post results.');
 
     const path = `${userId}/${record.project_id || 'unlinked'}/posted-scoresheets/${record.id}-${timestamp}.${extensionOf(file)}`;

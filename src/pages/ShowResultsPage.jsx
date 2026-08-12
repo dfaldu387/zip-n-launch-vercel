@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/lib/supabaseClient';
-import { isShowPublished } from '@/lib/showPublishing';
 
 /**
  * The door Robert asked for: "exhibitors can see the score sheets online through
@@ -51,33 +50,33 @@ const ShowResultsPage = () => {
             }
             setProject(proj);
 
-            if (!isShowPublished(proj)) {
+            // The publish rule lives in list_posted_score_sheets now, not here.
+            // Keeping a second copy on the page meant this view locked out signed-in
+            // staff while /s/:id and /s/:id/results let them look — the office could
+            // see a class but not the show it belonged to. One rule, one place.
+            //
+            // Through the RPC rather than the table. Reading score_sheet_qr_codes
+            // from the browser meant an anonymous request with no filter returned
+            // every row for every show — judge names and a link to each completed
+            // sheet, published or not. The function does the same two-step match
+            // (project id first, then show name, because a pattern-book record can
+            // carry its own id) and applies the publish rule server-side.
+            const { data: posted, error: postedError } = await supabase
+                .rpc('list_posted_score_sheets', { p_project_id: id });
+            if (cancelled) return;
+            if (postedError) throw postedError;
+
+            const sheets = posted?.sheets || [];
+
+            // The function withholds the sheets from the public until the show is
+            // published, so "not published and nothing to show" is the lock screen.
+            // Signed-in staff get their sheets back and fall through to the list.
+            if (!posted?.published && sheets.length === 0) {
                 setStatus('unpublished');
                 return;
             }
 
-            // The QR record stores the show project id, but a pattern-book project
-            // that never set linkedShowProjectId stores its own id — so fall back to
-            // the show name, which every record carries.
-            let rows = [];
-            const byProject = await supabase
-                .from('score_sheet_qr_codes')
-                .select('id, class_name, division, judge_name, show_date, posted_sheet_url, posted_at, posted_by_name')
-                .eq('project_id', proj.id)
-                .not('posted_sheet_url', 'is', null);
-            rows = byProject.data || [];
-
-            if (rows.length === 0 && proj.project_name) {
-                const byName = await supabase
-                    .from('score_sheet_qr_codes')
-                    .select('id, class_name, division, judge_name, show_date, posted_sheet_url, posted_at, posted_by_name')
-                    .eq('show_name', proj.project_name)
-                    .not('posted_sheet_url', 'is', null);
-                rows = byName.data || [];
-            }
-
-            if (cancelled) return;
-            setSheets(rows);
+            setSheets(sheets);
             setStatus('ready');
         };
 

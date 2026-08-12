@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/lib/supabaseClient';
+import { isShowPublished } from '@/lib/showPublishing';
 
 const STATUS_BADGES = {
     pending: { label: 'Not yet started', variant: 'secondary' },
@@ -24,11 +25,10 @@ const ScoreSheetResultsPage = () => {
     useEffect(() => {
         let cancelled = false;
         const load = async () => {
+            // Through the RPC: reading the table directly let anyone list every
+            // QR record for every show, not just the one they scanned.
             const { data: qr, error: qrError } = await supabase
-                .from('score_sheet_qr_codes')
-                .select('*')
-                .eq('id', id)
-                .maybeSingle();
+                .rpc('get_score_sheet_qr', { p_id: id });
             if (cancelled) return;
             if (qrError) {
                 setError(qrError.message);
@@ -60,6 +60,21 @@ const ScoreSheetResultsPage = () => {
             }
             if (!project) {
                 setStatus('not-linked');
+                return;
+            }
+
+            // Placings are only for the public once the office has published the
+            // show. This page had no such check while the two other results
+            // views did, so an exhibitor scanning the QR at the arena saw
+            // placings before they were released — the one thing the publish
+            // flag exists to prevent.
+            //
+            // Signed-in staff still see them, matching /s/:id, so the office can
+            // check its own work before publishing.
+            const { data: session } = await supabase.auth.getSession();
+            const signedIn = !!session?.session?.user;
+            if (!signedIn && !isShowPublished({ status: pub.status, project_data: pub.projectData })) {
+                if (!cancelled) setStatus('unpublished');
                 return;
             }
 
@@ -98,6 +113,20 @@ const ScoreSheetResultsPage = () => {
                         <AlertTriangle className="h-5 w-5 text-destructive" />
                     </div>
                     <p className="text-sm text-destructive">{error}</p>
+                </div>
+            );
+        }
+
+        if (status === 'unpublished') {
+            return (
+                <div className="text-center space-y-3 py-8">
+                    <Lock className="h-10 w-10 mx-auto text-muted-foreground opacity-40" />
+                    <div>
+                        <p className="font-medium">Results are not published yet</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                            The show office will release placings once the show is published.
+                        </p>
+                    </div>
                 </div>
             );
         }
