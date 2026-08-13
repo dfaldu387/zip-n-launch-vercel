@@ -202,123 +202,86 @@ export const useEquipmentCheckInOut = () => {
     setIsLoading(false);
   }, [user, toast, computeState]);
 
+  // Every stock movement goes through one database function.
+  //
+  // The checks used to run here, against numbers already loaded in the page, and
+  // the insert followed separately. Two people acting at the same moment both
+  // passed and both wrote, so an arena could hand out more than it held — and
+  // nothing told either of them. record_equipment_transaction() locks the item,
+  // counts what is really there, and only then writes, so the second request is
+  // measured against the first one's result.
+  const runTransaction = useCallback(async (args, successMessage) => {
+    const { data, error } = await supabase.rpc('record_equipment_transaction', args);
+
+    if (error) {
+      toast({ title: 'Could not save', description: error.message, variant: 'destructive' });
+      return false;
+    }
+    if (!data?.ok) {
+      // The function answers with the real figure, not the stale one.
+      toast({ title: 'Validation error', description: data?.message || 'The stock check failed.', variant: 'destructive' });
+      return false;
+    }
+    toast({ title: successMessage });
+    return true;
+  }, [toast]);
+
   // ---- CHECK IN ----
 
   const checkIn = useCallback(async ({ equipmentId, quantity, notes }) => {
     if (!user || !selectedShow || !selectedArena) return;
 
-    // Validate
-    const available = globalState[equipmentId]?.available ?? 0;
-    if (quantity > available) {
-      toast({ title: 'Validation error', description: `Only ${available} available in warehouse.`, variant: 'destructive' });
-      return;
-    }
-    if (quantity <= 0) {
-      toast({ title: 'Validation error', description: 'Quantity must be greater than zero.', variant: 'destructive' });
-      return;
-    }
-
     setIsSaving(true);
-    const { error } = await supabase.from('equipment_transactions').insert({
-      user_id: user.id,
-      show_id: selectedShow,
-      equipment_id: equipmentId,
-      transaction_type: 'check_in',
-      quantity,
-      arena_id: selectedArena,
-      notes: notes || null,
-    });
-
-    if (error) {
-      toast({ title: 'Check-in failed', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Equipment checked in.' });
-      await fetchTransactions(selectedShow, selectedArena);
-    }
+    const ok = await runTransaction({
+      p_show_id: selectedShow,
+      p_equipment_id: equipmentId,
+      p_type: 'check_in',
+      p_quantity: quantity,
+      p_arena_id: selectedArena,
+      p_notes: notes || null,
+    }, 'Equipment checked in.');
+    if (ok) await fetchTransactions(selectedShow, selectedArena);
     setIsSaving(false);
-  }, [user, toast, selectedShow, selectedArena, globalState, fetchTransactions]);
+  }, [user, selectedShow, selectedArena, runTransaction, fetchTransactions]);
 
   // ---- CHECK OUT ----
 
   const checkOut = useCallback(async ({ equipmentId, quantity, assignedTo, crewName, notes }) => {
     if (!user || !selectedShow || !selectedArena) return;
 
-    const onHand = arenaState[equipmentId]?.onHand ?? 0;
-    if (quantity > onHand) {
-      toast({ title: 'Validation error', description: `Only ${onHand} on hand at this arena.`, variant: 'destructive' });
-      return;
-    }
-    if (quantity <= 0) {
-      toast({ title: 'Validation error', description: 'Quantity must be greater than zero.', variant: 'destructive' });
-      return;
-    }
-    if (!assignedTo && !crewName) {
-      toast({ title: 'Validation error', description: 'Please specify who this is assigned to.', variant: 'destructive' });
-      return;
-    }
-
     setIsSaving(true);
-    const { error } = await supabase.from('equipment_transactions').insert({
-      user_id: user.id,
-      show_id: selectedShow,
-      equipment_id: equipmentId,
-      transaction_type: 'check_out',
-      quantity,
-      arena_id: selectedArena,
-      assigned_to: assignedTo || null,
-      crew_name: crewName || null,
-      notes: notes || null,
-    });
-
-    if (error) {
-      toast({ title: 'Check-out failed', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Equipment checked out.' });
-      await fetchTransactions(selectedShow, selectedArena);
-    }
+    const ok = await runTransaction({
+      p_show_id: selectedShow,
+      p_equipment_id: equipmentId,
+      p_type: 'check_out',
+      p_quantity: quantity,
+      p_arena_id: selectedArena,
+      p_assigned_to: assignedTo || null,
+      p_crew_name: crewName || null,
+      p_notes: notes || null,
+    }, 'Equipment checked out.');
+    if (ok) await fetchTransactions(selectedShow, selectedArena);
     setIsSaving(false);
-  }, [user, toast, selectedShow, selectedArena, arenaState, fetchTransactions]);
+  }, [user, selectedShow, selectedArena, runTransaction, fetchTransactions]);
 
   // ---- TRANSFER ----
 
   const transfer = useCallback(async ({ equipmentId, quantity, toArenaId, notes }) => {
     if (!user || !selectedShow || !selectedArena) return;
 
-    if (toArenaId === selectedArena) {
-      toast({ title: 'Validation error', description: 'Cannot transfer to the same arena.', variant: 'destructive' });
-      return;
-    }
-    const onHand = arenaState[equipmentId]?.onHand ?? 0;
-    if (quantity > onHand) {
-      toast({ title: 'Validation error', description: `Only ${onHand} on hand at this arena.`, variant: 'destructive' });
-      return;
-    }
-    if (quantity <= 0) {
-      toast({ title: 'Validation error', description: 'Quantity must be greater than zero.', variant: 'destructive' });
-      return;
-    }
-
     setIsSaving(true);
-    const { error } = await supabase.from('equipment_transactions').insert({
-      user_id: user.id,
-      show_id: selectedShow,
-      equipment_id: equipmentId,
-      transaction_type: 'transfer',
-      quantity,
-      arena_id: null,
-      from_arena_id: selectedArena,
-      to_arena_id: toArenaId,
-      notes: notes || null,
-    });
-
-    if (error) {
-      toast({ title: 'Transfer failed', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Equipment transferred.' });
-      await fetchTransactions(selectedShow, selectedArena);
-    }
+    const ok = await runTransaction({
+      p_show_id: selectedShow,
+      p_equipment_id: equipmentId,
+      p_type: 'transfer',
+      p_quantity: quantity,
+      p_from_arena_id: selectedArena,
+      p_to_arena_id: toArenaId,
+      p_notes: notes || null,
+    }, 'Equipment transferred.');
+    if (ok) await fetchTransactions(selectedShow, selectedArena);
     setIsSaving(false);
-  }, [user, toast, selectedShow, selectedArena, arenaState, fetchTransactions]);
+  }, [user, selectedShow, selectedArena, runTransaction, fetchTransactions]);
 
   // ---- VOID TRANSACTION ----
 

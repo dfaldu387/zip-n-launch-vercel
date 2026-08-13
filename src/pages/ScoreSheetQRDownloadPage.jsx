@@ -9,7 +9,7 @@ import { generateScoreSheetPdf } from '@/lib/pdfUtils';
 import { applyTextOverlay } from '@/lib/scoresheetTextOverlay';
 import { stampPdfWithTag } from '@/lib/scoresheetPdfStamp';
 import { isPdfSource, findAccessoryDocUrl, mergePdfBlobs } from '@/lib/scoresheetLookup';
-import { postScoredSheet, resolvePosterIdentity } from '@/lib/postedScoreSheets';
+import { postScoredSheet, resolvePosterIdentity, resolvePostedSheetLink } from '@/lib/postedScoreSheets';
 import { isShowPublished } from '@/lib/showPublishing';
 
 const sanitizeFilenameSegment = (s) =>
@@ -135,6 +135,18 @@ const ScoreSheetQRDownloadPage = () => {
         }
     };
 
+    // New sheets live in a private bucket, so the link is fetched at the moment of
+    // opening and expires afterwards. Sheets posted before that change still carry
+    // their original address and are opened straight from it.
+    const openPostedSheet = async () => {
+        const link = await resolvePostedSheetLink(record);
+        if (!link) {
+            setError('That completed sheet could not be opened. Try again in a moment.');
+            return;
+        }
+        window.open(link, '_blank', 'noopener');
+    };
+
     const handlePrint = async () => {
         if (!record) return;
         setIsPrinting(true);
@@ -255,9 +267,9 @@ const ScoreSheetQRDownloadPage = () => {
 
                                 {/* Exhibitors see the completed sheet once the show is published.
                                     Staff always see it, so they can check their own upload. */}
-                                {record.posted_sheet_url && (published || user) && (
+                                {(record.posted_sheet_url || record.posted_sheet_path) && (published || user) && (
                                     <Button
-                                        onClick={() => window.open(record.posted_sheet_url, '_blank', 'noopener')}
+                                        onClick={openPostedSheet}
                                         className="w-full justify-start h-14"
                                     >
                                         <Eye className="mr-3 h-5 w-5" />
@@ -301,7 +313,7 @@ const ScoreSheetQRDownloadPage = () => {
                                             )}
                                             <div className="text-left">
                                                 <div className="font-medium">
-                                                    {record.posted_sheet_url ? 'Replace Posted Sheet' : 'Post Results'}
+                                                    {(record.posted_sheet_url || record.posted_sheet_path) ? 'Replace Posted Sheet' : 'Post Results'}
                                                 </div>
                                                 <div className="text-xs text-muted-foreground">
                                                     {isPosting ? 'Uploading…' : 'Photograph or upload the completed sheet'}

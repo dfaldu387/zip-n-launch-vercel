@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/lib/supabaseClient';
+import { useToast } from '@/components/ui/use-toast';
+import { resolvePostedSheetLink } from '@/lib/postedScoreSheets';
 
 /**
  * The door Robert asked for: "exhibitors can see the score sheets online through
@@ -21,6 +23,7 @@ const uniqueSorted = (rows, key) =>
 
 const ShowResultsPage = () => {
     const { id } = useParams();
+    const { toast } = useToast();
     const [project, setProject] = useState(null);
     const [sheets, setSheets] = useState([]);
     const [status, setStatus] = useState('loading');
@@ -107,6 +110,18 @@ const ShowResultsPage = () => {
     }, [sheets, discipline, judge, search]);
 
     const showName = project?.project_name || 'Show';
+
+    // Sheets posted since the private bucket went in have no permanent address, so
+    // the link is fetched on click and expires afterwards. Older ones still carry
+    // their original public address and open straight from it.
+    const openSheet = async (sheet) => {
+        const link = await resolvePostedSheetLink(sheet);
+        if (!link) {
+            toast({ title: 'Could not open that sheet', description: 'Please try again in a moment.', variant: 'destructive' });
+            return;
+        }
+        window.open(link, '_blank', 'noopener');
+    };
 
     return (
         <>
@@ -216,7 +231,7 @@ const ShowResultsPage = () => {
                                             </div>
                                             <Button
                                                 className="w-full mt-auto"
-                                                onClick={() => window.open(sheet.posted_sheet_url, '_blank', 'noopener')}
+                                                onClick={() => openSheet(sheet)}
                                             >
                                                 <Eye className="h-4 w-4 mr-2" /> View Score Sheet
                                             </Button>

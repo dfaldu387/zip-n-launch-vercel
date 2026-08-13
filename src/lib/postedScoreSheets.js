@@ -3,7 +3,18 @@ import { supabase } from '@/lib/supabaseClient';
 // Priority 4: a completed score sheet is attached to the QR record that was printed
 // on the sheet itself, so scanning the same code shows the scored copy.
 
-const POSTED_BUCKET = 'project_files';
+// Where completed sheets used to go. project_files is a PUBLIC bucket, so every
+// posted sheet became a permanent web address that opened for anyone — no login,
+// no publish check. The page hid the button; the file did not care.
+//
+// Nothing here is moved or changed. Sheets already posted keep their address
+// (stored in full on the row) and keep working; only new ones go somewhere
+// private.
+//
+// A separate, private bucket. Deliberately not project_files: that one also
+// holds pattern PDFs and other uploads, and making it private would break every
+// one of them plus every link already shared.
+export const POSTED_BUCKET = 'posted-scoresheets';
 
 // Sheets are posted from a phone at the arena, on show wifi. A recent handset
 // takes 15-30 MB photos, and nothing checked the size before uploading — so a
@@ -83,20 +94,24 @@ export const postScoredSheet = async (file, record, userId, timestamp, poster = 
 
     const path = `${userId}/${record.project_id || 'unlinked'}/posted-scoresheets/${record.id}-${timestamp}.${extensionOf(file)}`;
 
+    // A plain insert, not an upsert. The path already carries the QR id and a
+    // timestamp so it is unique every time, and upsert would need read and update
+    // rights on the bucket as well — rights nothing else should have, since the
+    // whole point is that no client can read this bucket directly.
     const { error: uploadError } = await supabase.storage
         .from(POSTED_BUCKET)
-        .upload(path, file, { upsert: true, contentType: file.type || undefined });
+        .upload(path, file, { contentType: file.type || undefined });
     if (uploadError) throw uploadError;
 
-    const { data: publicData } = supabase.storage.from(POSTED_BUCKET).getPublicUrl(path);
-    const url = publicData?.publicUrl;
-    if (!url) throw new Error('Upload succeeded but the file has no public link.');
-
+    // posted_sheet_url stays NULL for private sheets, and that null is the flag:
+    // a row with a url is an old public sheet and is served by that url, a row
+    // with only a path is private and gets a short-lived signed link instead.
+    // No schema change, and no existing row is touched.
     const postedAt = new Date(timestamp).toISOString();
     const { error: updateError } = await supabase
         .from('score_sheet_qr_codes')
         .update({
-            posted_sheet_url: url,
+            posted_sheet_url: null,
             posted_sheet_path: path,
             posted_at: postedAt,
             posted_by: userId,
@@ -106,5 +121,32 @@ export const postScoredSheet = async (file, record, userId, timestamp, poster = 
         .eq('id', record.id);
     if (updateError) throw updateError;
 
-    return { url, path, postedAt, name: poster.name || null };
+    return { url: null, path, postedAt, name: poster.name || null };
+};
+
+/**
+ * A link the browser can open for a posted sheet, or null when there isn't one.
+ *
+ * Old sheets carry a permanent public address and keep using it. New ones are in
+ * a private bucket, so this asks for a signed link that stops working after an
+ * hour — long enough to read, short enough that a forwarded address is useless.
+ */
+export const resolvePostedSheetLink = async (record) => {
+    if (!record) return null;
+    if (record.posted_sheet_url) return record.posted_sheet_url;   // pre-existing sheet
+    if (!record.posted_sheet_path) return null;                    // nothing posted
+
+    // Signing happens in the edge function, not here. A rider scanning a QR code
+    // has no account, so the browser has no permission to sign anything in a
+    // private bucket; the function does it with the service key after checking
+    // the show is published (or that the caller is staff).
+    const { data, error } = await supabase.functions.invoke('sign-posted-sheet', {
+        body: { qrId: record.id },
+    });
+
+    if (error) {
+        console.warn('Could not get a link for the posted sheet:', error.message);
+        return null;
+    }
+    return data?.url || null;
 };
