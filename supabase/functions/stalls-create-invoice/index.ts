@@ -100,6 +100,52 @@ serve(async (req: Request): Promise<Response> => {
       throw new Error("Missing showId or bookingId");
     }
 
+    // ── Who is asking ───────────────────────────────────────────────────────
+    // This function makes Stripe EMAIL a real exhibitor. It had no check at all:
+    // a request with nothing but the public key got as far as looking the
+    // booking up, so anyone holding a show id and a booking id could have Stripe
+    // invoice that exhibitor, from your account, as many times as they liked.
+    //
+    // Sending an invoice is the show office's job, so the caller must be signed
+    // in and able to manage this show — its owner, an admin, or an assigned
+    // judge or staff member. can_manage_show() decides that, the same rule the
+    // score-sheet posting policy uses.
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+    if (!token || token === anonKey) {
+      return new Response(
+        JSON.stringify({ error: "You must be signed in to send an invoice." }),
+        { status: 401, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
+    // Runs as the caller, so auth.uid() inside can_manage_show is really them.
+    const asCaller = createClient(Deno.env.get("SUPABASE_URL")!, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: userData } = await asCaller.auth.getUser();
+    if (!userData?.user) {
+      return new Response(
+        JSON.stringify({ error: "You must be signed in to send an invoice." }),
+        { status: 401, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
+    const { data: allowed, error: allowedError } = await asCaller.rpc(
+      "can_manage_show",
+      { p_project_id: showId }
+    );
+
+    if (allowedError || allowed !== true) {
+      return new Response(
+        JSON.stringify({ error: "You do not have access to this show." }),
+        { status: 403, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!

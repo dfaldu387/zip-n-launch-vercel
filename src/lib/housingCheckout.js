@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 
 // Kick off Stripe checkout for a housing/stall booking and redirect the browser to
 // the hosted payment page. Works for a guest (no login) — the edge function prices
@@ -41,9 +42,11 @@ export async function startStallCheckout({ showId, bookingId, customerEmail, suc
 export async function sendStallInvoice({ showId, bookingId }) {
     if (!showId || !bookingId) throw new Error('Missing showId or bookingId');
 
-    const { data, error } = await supabase.functions.invoke('stalls-create-invoice', {
-        body: { showId, bookingId },
-    });
+    // invokeAsUser, not functions.invoke: the function now checks that the caller
+    // may manage this show, and supabase-js sends the anonymous key rather than
+    // the session unless the token is attached by hand. Without this the office's
+    // own "send invoice" button would come through as a stranger and be refused.
+    const { data, error } = await invokeAsUser('stalls-create-invoice', { showId, bookingId });
 
     if (error) throw new Error(error.message || 'Could not create invoice');
     if (data?.error) throw new Error(data.error);
