@@ -112,14 +112,15 @@ const FEE_TIMING_OPTIONS = [
 
 // Shared fee-detail block (Unit Type, Payment Timing, Due Date, Late Fee) so every
 // inventory card asks the same questions as the Fee Structure page.
-const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeader = true, leading = null, unitOptions = null }) => (
+const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeader = true, leading = null, leadingCols = 1, unitOptions = null }) => (
     <div className={showHeader ? 'border-t pt-3' : ''}>
         {showHeader && (
             <Label className="text-xs font-semibold flex items-center gap-1.5 text-emerald-600">
                 <DollarSign className="h-3.5 w-3.5" /> Fee Details (matches Fee Structure)
             </Label>
         )}
-        <div className={cn('grid grid-cols-2 gap-3', showHeader && 'mt-2', leading ? 'md:grid-cols-5' : 'md:grid-cols-4')}>
+        <div className={cn('grid grid-cols-2 gap-3', showHeader && 'mt-2',
+            !leading ? 'md:grid-cols-4' : leadingCols === 2 ? 'md:grid-cols-6' : 'md:grid-cols-5')}>
             {leading}
             <div className="space-y-1">
                 <Label className="text-xs">Unit Type</Label>
@@ -181,6 +182,18 @@ const SectionLockToggle = ({ locked, onToggle }) => (
         <Lock className="h-3.5 w-3.5" />
         {locked ? 'Locked' : 'Lock'}
     </Button>
+);
+
+// Thin occupancy bar used by the per-area analytics tables. Green until it gets
+// tight, amber past 80%, red when full — readable at a glance across a long list.
+const OccupancyBar = ({ pct }) => (
+    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden" title={`${pct}% occupied`}>
+        <div
+            className={cn('h-full rounded-full transition-all',
+                pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-emerald-500')}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+    </div>
 );
 
 const BOOKING_STATUSES = ['confirmed', 'pending', 'cancelled', 'checked_in', 'checked_out'];
@@ -1101,7 +1114,10 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
     const [expanded, setExpanded] = useState(true);
     const pricingModel = rvArea.pricingModel || 'nightly';
-    const sectionLocked = rvArea.locked || false;
+    // Inventory and fees lock independently: locking the area in the Inventory tab
+    // must not freeze its price in the Fees tab, and vice-versa.
+    const lockField = variant === 'inventory' ? 'locked' : 'feeLocked';
+    const sectionLocked = rvArea[lockField] || false;
 
     return (
         <Card className={cn('border-l-4 border-l-cyan-500', rvArea.isOverflow && 'border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/10')}>
@@ -1127,7 +1143,18 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
                                 placeholder="RV area name..."
                             />
                         ) : (
-                            <span className="text-base font-semibold">{rvArea.name || 'RV Area'}</span>
+                            // Fees view — name the fee itself; the area name stays on the badge.
+                            <>
+                                <Input
+                                    value={rvArea.feeLabel || ''}
+                                    onChange={(e) => onUpdate('feeLabel', e.target.value)}
+                                    disabled={sectionLocked}
+                                    placeholder={rvArea.name || 'RV Area'}
+                                    title="Name this fee — leave blank to use the area name"
+                                    className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs bg-transparent"
+                                />
+                                <Badge variant="outline" className="text-[10px] font-normal">{rvArea.name || 'RV Area'}</Badge>
+                            </>
                         )}
                         <Badge variant="outline" className="text-xs">
                             {rvArea.spotCount || 0} spots
@@ -1140,7 +1167,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
                         )}
                     </div>
                     <div className="flex items-center gap-1">
-                        <SectionLockToggle locked={sectionLocked} onToggle={() => onUpdate('locked', !sectionLocked)} />
+                        <SectionLockToggle locked={sectionLocked} onToggle={() => onUpdate(lockField, !sectionLocked)} />
                         <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" disabled={sectionLocked} onClick={onRemove}>
                             <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -1321,7 +1348,9 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
 //   variant="inventory" → stock on hand, sold, remaining (the count)
 //   variant="fees"       → price, unit, fee details, pre-bedding (the money)
 const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }) => {
-    const locked = item.locked || false;
+    // Stock (Inventory tab) and price (Fees tab) each carry their own lock.
+    const lockField = variant === 'inventory' ? 'locked' : 'feeLocked';
+    const locked = item[lockField] || false;
 
     if (variant === 'inventory') {
         const stock = item.stockQty || 0;
@@ -1373,7 +1402,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                             {stock === 0 ? 'No limit' : `${remaining} left`}
                         </Badge>
                     </div>
-                    <SectionLockToggle locked={locked} onToggle={() => onUpdate('locked', !locked)} />
+                    <SectionLockToggle locked={locked} onToggle={() => onUpdate(lockField, !locked)} />
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0" disabled={locked} onClick={onRemove}>
                         <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -1417,7 +1446,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                         </div>
                     </div>
                 </fieldset>
-                <SectionLockToggle locked={locked} onToggle={() => onUpdate('locked', !locked)} />
+                <SectionLockToggle locked={locked} onToggle={() => onUpdate(lockField, !locked)} />
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 flex-shrink-0" disabled={locked} onClick={onRemove}>
                     <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -2202,6 +2231,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const showNights = getShowNights(pd);
 
     const [barns, setBarns] = useState(() => pd.stallingService?.barns || []);
+    // Stall fees that are NOT one-per-barn: a circuit fee across the whole facility,
+    // or a second fee on a barn that already has a nightly price. appliesTo is either
+    // 'all' (every barn) or a single barn id.
+    const [extraStallFees, setExtraStallFees] = useState(() => pd.stallingService?.extraStallFees || []);
     const [rvAreas, setRvAreas] = useState(() => pd.stallingService?.rvAreas || []);
     // Support Spaces are no longer offered (removed from UI). We still carry any
     // previously-saved data through so it isn't lost, but it's never edited here.
@@ -2232,6 +2265,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // fees (entry, office, admin…) pass through untouched; only stall/RV/supply-type
     // ones are surfaced in the Fees tab. Stored snake_case (the Fee Structure shape).
     const [manualFees, setManualFees] = useState(() => (pd.fees || []).filter(f => f.source !== 'housing'));
+    // Stall-fee row queued for deletion — holds the barn while the confirm dialog is open.
+    const [feeDeleteBarn, setFeeDeleteBarn] = useState(null);
     const updateManualFee = (id, field, value) => setManualFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
     const removeManualFee = (id) => setManualFees(prev => prev.filter(f => f.id !== id));
     // Bridge a snake_case fee to the camelCase shape FeeDetailsFields expects, and
@@ -2241,17 +2276,24 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const onUpdateManualFee = (id) => (field, value) => updateManualFee(id, FEE_FIELD_MAP[field] || field, value);
     const manualFeesByCategory = (cat) => manualFees.filter(f => feeCategory(f) === cat);
     // A fee that came from the Fee Structure page (no inventory item behind it).
-    const renderManualFee = (f, unitOptions) => (
-        <div key={f.id} className="rounded-lg border border-dashed bg-muted/10 p-3 space-y-2">
+    const renderManualFee = (f, unitOptions) => {
+        const feeLocked = !!f.fee_locked;
+        return (
+        <div key={f.id} className={cn('rounded-lg border border-dashed bg-muted/10 p-3 space-y-2', feeLocked && 'opacity-70')}>
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{f.name}</span>
                     <Badge variant="outline" className="text-[10px]">from Fee Structure</Badge>
+                    {feeLocked && <Lock className="h-3 w-3 text-amber-600" />}
                 </div>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10" onClick={() => removeManualFee(f.id)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                <div className="flex items-center gap-2">
+                    <SectionLockToggle locked={feeLocked} onToggle={() => updateManualFee(f.id, 'fee_locked', !feeLocked)} />
+                    <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10" disabled={feeLocked} onClick={() => removeManualFee(f.id)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                </div>
             </div>
+            <fieldset disabled={feeLocked} className="block">
             <FeeDetailsFields
                 item={asInventoryShape(f)}
                 onUpdate={onUpdateManualFee(f.id)}
@@ -2272,8 +2314,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     </div>
                 )}
             />
+            </fieldset>
         </div>
-    );
+        );
+    };
 
     // Draft → Locked → Published lifecycle + floating auto-save state.
     // Backed by the shared module-status system (moduleStatuses.housing) so the
@@ -2375,6 +2419,43 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     const removeBarn = (barnId) => {
         setBarns(prev => prev.filter(b => b.id !== barnId));
+    };
+
+    // ── Extra stall fees (facility-wide or barn-specific) ──
+    const addExtraStallFee = () => setExtraStallFees(prev => [...prev, {
+        id: uuidv4(),
+        name: '',
+        appliesTo: 'all',
+        amount: 0,
+        unitType: 'per_stall',
+        paymentTiming: 'pre_entry',
+        dueDate: '',
+        lateFee: 0,
+        feeLocked: false,
+    }]);
+    const updateExtraStallFee = (id, field, value) =>
+        setExtraStallFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
+    const removeExtraStallFee = (id) =>
+        setExtraStallFees(prev => prev.filter(f => f.id !== id));
+    // Plain-language label for the scope dropdown, used in summaries too.
+    const scopeLabel = (fee) => fee.appliesTo === 'all'
+        ? 'All barns'
+        : (barns.find(b => b.id === fee.appliesTo)?.name || 'Barn removed');
+
+    // A Stall Fee row in the Fees tab IS a barn, so deleting the row deletes the
+    // barn and its stalls. Booked stalls block it outright; everything else asks
+    // first and says exactly what goes away.
+    const requestDeleteStallFee = (barn) => {
+        const booked = (barn.stalls || []).filter(s => s.bookingId).length;
+        if (booked > 0) {
+            toast({
+                title: "Can't delete this fee",
+                description: `${barn.name} has ${booked} booked stall${booked === 1 ? '' : 's'}. Move or cancel those bookings first.`,
+                variant: 'destructive',
+            });
+            return;
+        }
+        setFeeDeleteBarn(barn);
     };
 
     // Duplicate a barn (layout, box types, image, fee details) right below it,
@@ -2676,9 +2757,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // OCCUPANCY = occupied spaces ÷ total spaces, both counted in the SAME unit
     // (physical stalls + RV spots) — not bookings ÷ units. Counts anyone actively
     // holding space (confirmed OR checked_in): assigned stalls + booked RV spots.
-    const activeBookingIds = new Set(
+    const activeBookingIds = useMemo(() => new Set(
         bookings.filter(b => b.status === 'confirmed' || b.status === 'checked_in').map(b => b.id)
-    );
+    ), [bookings]);
     const occupiedStalls = barns.reduce(
         (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId && activeBookingIds.has(s.bookingId)).length,
         0
@@ -2776,6 +2857,37 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         let cancelledCount = 0;
         let totalBookingsCount = bookings.length;
 
+        // Per-area breakdowns — Robert reads occupancy and revenue barn by barn and
+        // by RV hookup type, not as one show-wide number.
+        const barnStats = new Map(barns.map(b => [b.id, {
+            id: b.id,
+            name: b.name,
+            total: (b.stalls || []).filter(s => (s.type || 'stall') === 'stall').length || (b.stallCount || 0),
+            occupied: (b.stalls || []).filter(s => s.bookingId && activeBookingIds.has(s.bookingId)).length,
+            revenue: 0,
+            bookings: 0,
+        }]));
+        // RV rows are grouped by hookup type ("Full Hookup", "30 Amp"…) so several
+        // areas of the same kind read as one line.
+        const rvTypeStats = new Map(); // key → { key, label, total, occupied, revenue }
+        const rvTypeKey = (area) => `${area.hookupType || 'full'}|${area.powerType || 'none'}`;
+        const rvTypeLabel = (area) => {
+            const hookup = RV_HOOKUP_TYPES.find(t => t.id === (area.hookupType || 'full'))?.name || 'RV';
+            const power = RV_POWER_TYPES.find(t => t.id === (area.powerType || 'none'))?.name;
+            return power && power !== 'No Power' ? `${hookup} · ${power}` : hookup;
+        };
+        for (const area of rvAreas) {
+            const key = rvTypeKey(area);
+            if (!rvTypeStats.has(key)) {
+                rvTypeStats.set(key, { key, label: rvTypeLabel(area), total: 0, occupied: 0, revenue: 0 });
+            }
+            rvTypeStats.get(key).total += area.spotCount || 0;
+        }
+        // Hay, shavings, mats — quantity sold and money taken, per item.
+        const supplyStats = new Map(supplies.map(s => [s.id, {
+            id: s.id, name: s.name, unit: s.unit || 'each', qty: 0, revenue: 0,
+        }]));
+
         // Track demand: how many bookings request each barn/RV area
         const demandByRefId = new Map(); // refId → { name, type, count }
         const recordDemand = (refId, name, type) => {
@@ -2814,18 +2926,29 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     if (isActive) {
                         stallRevenue += liveStallAmt;
                         realizedRevenue += liveStallAmt;
+                        const bs = barnStats.get(it.refId);
+                        if (bs) { bs.revenue += liveStallAmt; bs.bookings += 1; }
                     }
                     if (barn) recordDemand(barn.id, barn.name, 'stall');
                 } else if (it.type === 'rv' || it.type === 'rv_fee') {
                     if (isActive) { rvRevenue += itAmt; realizedRevenue += itAmt; }
                     if (it.type === 'rv') {
                         const area = rvAreas.find(x => x.id === it.refId);
-                        if (area) recordDemand(area.id, area.name, 'rv');
+                        if (area) {
+                            recordDemand(area.id, area.name, 'rv');
+                            const rs = rvTypeStats.get(rvTypeKey(area));
+                            if (rs && isActive) { rs.occupied += Number(it.qty) || 0; rs.revenue += itAmt; }
+                        }
                     }
                 } else if (it.type === 'support') {
                     if (isActive) { supportRevenue += itAmt; realizedRevenue += itAmt; }
                 } else if (it.type === 'supply') {
-                    if (isActive) { supplyRevenue += itAmt; realizedRevenue += itAmt; }
+                    if (isActive) {
+                        supplyRevenue += itAmt;
+                        realizedRevenue += itAmt;
+                        const ss = supplyStats.get(it.refId);
+                        if (ss) { ss.qty += Number(it.qty) || 0; ss.revenue += itAmt; }
+                    }
                 } else if (isActive) {
                     // Anything else still belongs in the total, even if it has no slice.
                     realizedRevenue += itAmt;
@@ -2882,14 +3005,22 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             peakDemand,
             demandList: demandList.slice(0, 5),
             powerLoad: { ampsUsed, ampsCapacity, pct: powerLoadPct },
+            // Per-area rows. rate is computed here so the UI just prints it.
+            byBarn: [...barnStats.values()].map(b => ({
+                ...b, rate: b.total > 0 ? Math.round((b.occupied / b.total) * 100) : 0,
+            })),
+            byRvType: [...rvTypeStats.values()].map(r => ({
+                ...r, rate: r.total > 0 ? Math.round((r.occupied / r.total) * 100) : 0,
+            })),
+            bySupplyItem: [...supplyStats.values()],
         };
-    }, [bookings, barns, rvAreas, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
+    }, [bookings, barns, rvAreas, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
+        await onSave({ barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
+    }, [onSave, barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
     const handleSave = () => persist();
 
@@ -2903,7 +3034,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
+    }, [barns, extraStallFees, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
     return (
         <div className="space-y-6">
@@ -3025,6 +3156,27 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             </tfoot>
                         </table>
                     </div>
+
+                    {/* Extra stall fees are listed but deliberately kept out of the total
+                        above — they are not charged on bookings yet. */}
+                    {extraStallFees.length > 0 && (
+                        <div className="mt-3 border-t border-indigo-200 dark:border-indigo-800 pt-2 space-y-1">
+                            <p className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200">
+                                Extra stall fees <span className="font-normal text-muted-foreground">— not included in the total above</span>
+                            </p>
+                            {extraStallFees.map(fee => (
+                                <div key={fee.id} className="flex flex-wrap items-center gap-x-2 text-xs">
+                                    <span className="font-medium">{fee.name || 'Stall Fee'}</span>
+                                    <Badge variant="outline" className="text-[10px] font-normal">{scopeLabel(fee)}</Badge>
+                                    <span className="text-muted-foreground">
+                                        ${(fee.amount || 0).toLocaleString()} · {(FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '')}
+                                        {fee.dueDate ? ` · due ${fee.dueDate}` : ''}
+                                        {fee.lateFee ? ` · late +$${fee.lateFee}` : ''}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -3339,24 +3491,63 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <h4 className="text-sm font-semibold">Stall Fees</h4>
                                         <Badge variant="outline" className="text-xs">{barns.length + manualFeesByCategory('stall').length}</Badge>
                                     </div>
-                                    <Button onClick={addBarn} variant="outline" size="sm" className="h-7 text-xs">
-                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Stall Fee
+                                    {/* Named for what it really does: each row here IS a barn.
+                                        A fee that isn't a barn belongs in "Extra stall fees" below. */}
+                                    <Button
+                                        onClick={addBarn}
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 text-xs"
+                                        title="Creates a new barn in the Inventory tab with its own price. For a fee that is not a barn, use Extra stall fees below."
+                                    >
+                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Barn + Price
                                     </Button>
                                 </div>
+                                <p className="text-xs text-muted-foreground -mt-1">
+                                    One row per barn — this is the barn&apos;s own price. A fee that is not tied to one barn goes in <strong>Extra stall fees</strong> below.
+                                </p>
                                 {barns.length === 0 && manualFeesByCategory('stall').length === 0 ? (
-                                    <p className="text-xs text-muted-foreground italic">No stall fees yet — add a barn in the Livestock Housing tab, or click "Add Stall Fee".</p>
+                                    <p className="text-xs text-muted-foreground italic">No barns yet — add one in the Livestock Housing tab, or click "Add Barn + Price".</p>
                                 ) : (
                                     <div className="space-y-2">
                                         {barns.map(barn => (
-                                            <div key={barn.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', barn.locked && 'opacity-70')}>
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-sm font-medium flex items-center gap-1.5">
-                                                        {barn.name}
-                                                        {barn.locked && <Lock className="h-3 w-3 text-amber-600" />}
-                                                    </span>
-                                                    <span className="text-xs text-muted-foreground">{(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls</span>
+                                            // feeLocked (this row) is deliberately separate from barn.locked
+                                            // (the Inventory card) — locking the barn must not freeze its price.
+                                            <div key={barn.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', barn.feeLocked && 'opacity-70')}>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    {/* The fee carries its own label ("Circuit Fee"), independent of the
+                                                        barn name — a barn can hold more than one fee. */}
+                                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                                        <Input
+                                                            value={barn.feeLabel || ''}
+                                                            onChange={(e) => updateBarn(barn.id, 'feeLabel', e.target.value)}
+                                                            disabled={barn.feeLocked}
+                                                            placeholder={barn.name}
+                                                            title="Name this fee — leave blank to use the barn name"
+                                                            className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
+                                                        />
+                                                        <Badge variant="outline" className="text-[10px] font-normal shrink-0">{barn.name}</Badge>
+                                                        {barn.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        <span className="text-xs text-muted-foreground">{(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls</span>
+                                                        <SectionLockToggle
+                                                            locked={!!barn.feeLocked}
+                                                            onToggle={() => updateBarn(barn.id, 'feeLocked', !barn.feeLocked)}
+                                                        />
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-6 w-6 text-destructive hover:bg-destructive/10"
+                                                            disabled={barn.feeLocked}
+                                                            title="Delete this stall fee (also removes the barn)"
+                                                            onClick={() => requestDeleteStallFee(barn)}
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                        </Button>
+                                                    </div>
                                                 </div>
-                                                <fieldset disabled={barn.locked} className="block">
+                                                <fieldset disabled={barn.feeLocked} className="block">
                                                 <FeeDetailsFields
                                                     item={barn}
                                                     onUpdate={(field, value) => updateBarn(barn.id, field, value)}
@@ -3383,6 +3574,105 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'custom']))}
                                     </div>
                                 )}
+
+                                {/* Extra stall fees — a fee that isn't tied to one barn:
+                                    a circuit fee across the facility, or a second fee on a
+                                    barn that already has a nightly price. */}
+                                <div className="rounded-lg border border-dashed p-3 space-y-3 mt-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <h5 className="text-sm font-semibold">Extra stall fees</h5>
+                                            <p className="text-[11px] text-muted-foreground">
+                                                Circuit fee, flat fee, late-entry rate — pick whether it applies to every barn or just one. Not added to booking totals yet.
+                                            </p>
+                                        </div>
+                                        <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
+                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
+                                        </Button>
+                                    </div>
+
+                                    {barns.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground italic">Add a barn first — an extra fee needs something to apply to.</p>
+                                    ) : extraStallFees.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground italic">None yet — click "Add Fee" for a circuit fee or a second fee on one barn.</p>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {extraStallFees.map(fee => (
+                                                <div key={fee.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', fee.feeLocked && 'opacity-70')}>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                                            <Input
+                                                                value={fee.name || ''}
+                                                                onChange={(e) => updateExtraStallFee(fee.id, 'name', e.target.value)}
+                                                                disabled={fee.feeLocked}
+                                                                placeholder="Fee name (e.g. Circuit Fee)"
+                                                                className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
+                                                            />
+                                                            <Badge variant="outline" className="text-[10px] font-normal shrink-0">{scopeLabel(fee)}</Badge>
+                                                            {fee.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            <SectionLockToggle
+                                                                locked={!!fee.feeLocked}
+                                                                onToggle={() => updateExtraStallFee(fee.id, 'feeLocked', !fee.feeLocked)}
+                                                            />
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-6 w-6 text-destructive hover:bg-destructive/10"
+                                                                disabled={fee.feeLocked}
+                                                                title="Delete this fee"
+                                                                onClick={() => removeExtraStallFee(fee.id)}
+                                                            >
+                                                                <Trash2 className="h-3.5 w-3.5" />
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                    <fieldset disabled={fee.feeLocked} className="block">
+                                                    <FeeDetailsFields
+                                                        item={fee}
+                                                        onUpdate={(field, value) => updateExtraStallFee(fee.id, field, value)}
+                                                        unitDefault="per_stall"
+                                                        showHeader={false}
+                                                        unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
+                                                        leadingCols={2}
+                                                        leading={(
+                                                            <>
+                                                                <div className="space-y-1">
+                                                                    <Label className="text-xs">Applies to</Label>
+                                                                    <Select
+                                                                        value={fee.appliesTo || 'all'}
+                                                                        onValueChange={(val) => updateExtraStallFee(fee.id, 'appliesTo', val)}
+                                                                    >
+                                                                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                                                        <SelectContent>
+                                                                            <SelectItem value="all" className="text-xs">All barns (facility)</SelectItem>
+                                                                            {barns.map(b => (
+                                                                                <SelectItem key={b.id} value={b.id} className="text-xs">{b.name}</SelectItem>
+                                                                            ))}
+                                                                        </SelectContent>
+                                                                    </Select>
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <Label className="text-xs">Amount ($)</Label>
+                                                                    <Input
+                                                                        type="number"
+                                                                        min={0}
+                                                                        value={fee.amount || ''}
+                                                                        onChange={(e) => updateExtraStallFee(fee.id, 'amount', parseFloat(e.target.value) || 0)}
+                                                                        className="h-8 text-xs"
+                                                                        placeholder="$0"
+                                                                    />
+                                                                </div>
+                                                            </>
+                                                        )}
+                                                    />
+                                                    </fieldset>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             {/* RV & Camping Fees */}
@@ -3759,6 +4049,45 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         </div>
                                     )}
 
+                                    {/* Extra stall fees — listed, but kept out of Max Revenue
+                                        because they aren't charged on bookings yet. */}
+                                    {extraStallFees.length > 0 && (
+                                        <div>
+                                            <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                                                <DollarSign className="h-4 w-4 text-emerald-600" /> Extra Stall Fees
+                                                <span className="text-xs font-normal text-muted-foreground">not included in the totals above</span>
+                                            </h4>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead>
+                                                        <tr className="border-b bg-muted/30">
+                                                            <th className="text-left px-3 py-2 font-medium">Fee</th>
+                                                            <th className="text-left px-3 py-2 font-medium">Applies to</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Amount</th>
+                                                            <th className="text-center px-3 py-2 font-medium">Unit</th>
+                                                            <th className="text-center px-3 py-2 font-medium">Due</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Late Fee</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {extraStallFees.map(fee => (
+                                                            <tr key={fee.id} className="border-b last:border-0">
+                                                                <td className="px-3 py-2 font-medium">{fee.name || 'Stall Fee'}</td>
+                                                                <td className="px-3 py-2">{scopeLabel(fee)}</td>
+                                                                <td className="px-3 py-2 text-right">${(fee.amount || 0).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-center text-muted-foreground">
+                                                                    {FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '—'}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-center text-muted-foreground">{fee.dueDate || '—'}</td>
+                                                                <td className="px-3 py-2 text-right">{fee.lateFee ? `$${fee.lateFee}` : '—'}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* Supplies pricing */}
                                     {supplies.length > 0 && (
                                         <div>
@@ -3918,10 +4247,117 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 </div>
                             </div>
 
+                            {/* ── Breakdown by area ──
+                                The cards above are show-wide. Robert reads occupancy and
+                                money barn by barn, and RV by hookup type, so each of those
+                                gets its own row here. */}
+                            <div className="mt-6 space-y-5">
+                                {/* Stalls, barn by barn */}
+                                {analytics.byBarn.length > 0 && (
+                                    <div>
+                                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                                            <Building2 className="h-4 w-4 text-primary" /> Stalls by Barn
+                                        </h4>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead>
+                                                    <tr className="border-b bg-muted/30 text-xs uppercase text-muted-foreground">
+                                                        <th className="text-left px-3 py-2 font-medium">Barn</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Occupied</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Stalls</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Occupancy</th>
+                                                        <th className="text-left px-3 py-2 font-medium w-32">&nbsp;</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Revenue</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {analytics.byBarn.map(b => (
+                                                        <tr key={b.id} className="border-b last:border-0">
+                                                            <td className="px-3 py-2 font-medium">{b.name}</td>
+                                                            <td className="px-3 py-2 text-center">{b.occupied}</td>
+                                                            <td className="px-3 py-2 text-center text-muted-foreground">{b.total}</td>
+                                                            <td className="px-3 py-2 text-right font-semibold">{b.rate}%</td>
+                                                            <td className="px-3 py-2"><OccupancyBar pct={b.rate} /></td>
+                                                            <td className="px-3 py-2 text-right font-semibold text-emerald-700 dark:text-emerald-300">${b.revenue.toLocaleString()}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* RV / camping, grouped by hookup + power type */}
+                                {analytics.byRvType.length > 0 && (
+                                    <div>
+                                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                                            <Car className="h-4 w-4 text-cyan-600" /> RV &amp; Camping by Type
+                                        </h4>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead>
+                                                    <tr className="border-b bg-muted/30 text-xs uppercase text-muted-foreground">
+                                                        <th className="text-left px-3 py-2 font-medium">Hookup type</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Booked</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Spots</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Occupancy</th>
+                                                        <th className="text-left px-3 py-2 font-medium w-32">&nbsp;</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Revenue</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {analytics.byRvType.map(r => (
+                                                        <tr key={r.key} className="border-b last:border-0">
+                                                            <td className="px-3 py-2 font-medium">{r.label}</td>
+                                                            <td className="px-3 py-2 text-center">{r.occupied}</td>
+                                                            <td className="px-3 py-2 text-center text-muted-foreground">{r.total}</td>
+                                                            <td className="px-3 py-2 text-right font-semibold">{r.rate}%</td>
+                                                            <td className="px-3 py-2"><OccupancyBar pct={r.rate} /></td>
+                                                            <td className="px-3 py-2 text-right font-semibold text-emerald-700 dark:text-emerald-300">${r.revenue.toLocaleString()}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Hay, shavings & mats — what actually sold */}
+                                {analytics.bySupplyItem.length > 0 && (
+                                    <div>
+                                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                                            <ShoppingCart className="h-4 w-4 text-amber-600" /> Hay, Shavings &amp; Supplies
+                                        </h4>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead>
+                                                    <tr className="border-b bg-muted/30 text-xs uppercase text-muted-foreground">
+                                                        <th className="text-left px-3 py-2 font-medium">Item</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Sold</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Unit</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Revenue</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {analytics.bySupplyItem.map(s => (
+                                                        <tr key={s.id} className="border-b last:border-0">
+                                                            <td className="px-3 py-2 font-medium">{s.name}</td>
+                                                            <td className="px-3 py-2 text-center">{s.qty}</td>
+                                                            <td className="px-3 py-2 text-center text-muted-foreground">{s.unit}</td>
+                                                            <td className="px-3 py-2 text-right font-semibold text-emerald-700 dark:text-emerald-300">${s.revenue.toLocaleString()}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             {/* Empty state */}
                             {analytics.noShow.total === 0 && (
                                 <div className="mt-6 text-center py-8 text-sm text-muted-foreground border border-dashed rounded-lg">
-                                    📭 No bookings yet — analytics will populate as exhibitors reserve.
+                                    📭 No bookings yet — the tables above show your barns, RV types and supplies; the numbers fill in as exhibitors reserve.
                                 </div>
                             )}
                         </CardContent>
@@ -3935,6 +4371,20 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     )}
                 </TabsContent>
             </Tabs>
+
+            {/* Deleting a Stall Fee row takes its barn with it — name what goes away. */}
+            <ConfirmationDialog
+                isOpen={!!feeDeleteBarn}
+                onClose={() => setFeeDeleteBarn(null)}
+                onConfirm={() => { removeBarn(feeDeleteBarn.id); setFeeDeleteBarn(null); }}
+                title="Delete this stall fee?"
+                description={feeDeleteBarn
+                    ? `"${feeDeleteBarn.name}" is both a fee and a barn, so this also removes its `
+                      + `${(feeDeleteBarn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stall(s) from the Inventory tab. This can't be undone.`
+                    : ''}
+                confirmText="Yes, delete"
+                cancelText="Cancel"
+            />
 
             {/* Second step before going live on the public Events page. */}
             <ConfirmationDialog
@@ -3967,7 +4417,12 @@ function feeCategory(f) {
     return null;
 }
 
-function buildHousingFees({ barns = [], rvAreas = [], supplies = [] }) {
+function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], supplies = [] }) {
+    // Scope note carried onto the Fee Structure page so "Circuit Fee" reads as
+    // facility-wide there too, without needing the Housing tab open.
+    const scopeNote = (fee) => fee.appliesTo === 'all'
+        ? 'Applies to all barns'
+        : `Applies to ${barns.find(b => b.id === fee.appliesTo)?.name || 'a removed barn'}`;
     const make = (sourceType, item, { name, amount, unitDefault }) => ({
         id: `housing-${item.id}`,
         source: 'housing',
@@ -3985,9 +4440,14 @@ function buildHousingFees({ barns = [], rvAreas = [], supplies = [] }) {
     });
 
     return [
-        ...barns.map(b => make('barn', b, { name: b.name, amount: b.pricePerNight, unitDefault: 'per_night' })),
+        // feeLabel is what the organizer typed on the Fees tab; fall back to the area name.
+        ...barns.map(b => make('barn', b, { name: b.feeLabel || b.name, amount: b.pricePerNight, unitDefault: 'per_night' })),
+        ...extraStallFees.map(f => ({
+            ...make('stall_extra', f, { name: f.name || 'Stall Fee', amount: f.amount, unitDefault: 'per_stall' }),
+            notes: [f.notes, scopeNote(f)].filter(Boolean).join(' — '),
+        })),
         ...rvAreas.map(r => make('rv', r, {
-            name: r.name,
+            name: r.feeLabel || r.name,
             amount: r.pricingModel === 'flat' ? r.flatRate : r.pricePerNight,
             unitDefault: r.pricingModel === 'flat' ? 'flat' : 'per_night',
         })),
@@ -4215,7 +4675,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
@@ -4223,13 +4683,14 @@ const HousingGroundsManagerPage = () => {
             // edited copy from the dashboard when provided (two-way sync), else fall
             // back to whatever is on the record. Housing-sourced fees are regenerated.
             const manualFees = editedManualFees || (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
-            const housingFees = buildHousingFees({ barns, rvAreas, supplies });
+            const housingFees = buildHousingFees({ barns, extraStallFees, rvAreas, supplies });
             const effectiveStatus = publishStatus || selectedShow.project_data?.stallingService?.publishStatus || 'draft';
             const stamped = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
                 stallingService: {
                     ...selectedShow.project_data?.stallingService,
                     barns, rvAreas, supportSpaces, supplies, bookings,
+                    extraStallFees: extraStallFees ?? selectedShow.project_data?.stallingService?.extraStallFees ?? [],
                     publishStatus: effectiveStatus,
                     // Keep prior values when an auto-save payload omits them.
                     moveInDate: moveInDate ?? selectedShow.project_data?.stallingService?.moveInDate ?? '',
