@@ -2854,6 +2854,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         let rvRevenue = 0;
         let supplyRevenue = 0;
         let supportRevenue = 0;
+        let facilityFeeRevenue = 0; // extra stall fees that apply to every barn
         let cancelledCount = 0;
         let totalBookingsCount = bookings.length;
 
@@ -2930,6 +2931,19 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         if (bs) { bs.revenue += liveStallAmt; bs.bookings += 1; }
                     }
                     if (barn) recordDemand(barn.id, barn.name, 'stall');
+                } else if (it.type === 'stall_fee') {
+                    // Circuit / flat fees stamped onto the booking. Counted as stall
+                    // money, and against a barn when the fee was barn-specific. A
+                    // facility-wide fee belongs to no single barn, so it is tracked
+                    // separately and shown as its own line under the barn table —
+                    // otherwise the barn rows would not add up to Stalls revenue.
+                    if (isActive) {
+                        stallRevenue += itAmt;
+                        realizedRevenue += itAmt;
+                        const bs = barnStats.get(it.appliesTo);
+                        if (bs) bs.revenue += itAmt;
+                        else facilityFeeRevenue += itAmt;
+                    }
                 } else if (it.type === 'rv' || it.type === 'rv_fee') {
                     if (isActive) { rvRevenue += itAmt; realizedRevenue += itAmt; }
                     if (it.type === 'rv') {
@@ -3013,6 +3027,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 ...r, rate: r.total > 0 ? Math.round((r.occupied / r.total) * 100) : 0,
             })),
             bySupplyItem: [...supplyStats.values()],
+            facilityFeeRevenue,
         };
     }, [bookings, barns, rvAreas, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
@@ -3162,7 +3177,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     {extraStallFees.length > 0 && (
                         <div className="mt-3 border-t border-indigo-200 dark:border-indigo-800 pt-2 space-y-1">
                             <p className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200">
-                                Extra stall fees <span className="font-normal text-muted-foreground">— not included in the total above</span>
+                                Extra stall fees <span className="font-normal text-muted-foreground">— charged per booking, not part of the capacity total above</span>
                             </p>
                             {extraStallFees.map(fee => (
                                 <div key={fee.id} className="flex flex-wrap items-center gap-x-2 text-xs">
@@ -3583,7 +3598,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <div className="min-w-0">
                                             <h5 className="text-sm font-semibold">Extra stall fees</h5>
                                             <p className="text-[11px] text-muted-foreground">
-                                                Circuit fee, flat fee, late-entry rate — pick whether it applies to every barn or just one. Not added to booking totals yet.
+                                                Circuit fee, flat fee, late-entry rate — pick whether it applies to every barn or just one. Charged on <strong>new</strong> bookings; bookings already taken keep their original price.
                                             </p>
                                         </div>
                                         <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
@@ -3749,7 +3764,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 <TabsContent value="bookings" className="space-y-4 mt-4">
                     <div className="flex items-center gap-3 flex-wrap">
                         <AddBookingDialog
-                            inventory={{ barns, rvAreas, supplies }}
+                            inventory={{ barns, rvAreas, supplies, extraStallFees }}
                             suppliesSold={suppliesSold}
                             defaultNights={showNights}
                             onAdd={addBooking}
@@ -4055,7 +4070,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <div>
                                             <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
                                                 <DollarSign className="h-4 w-4 text-emerald-600" /> Extra Stall Fees
-                                                <span className="text-xs font-normal text-muted-foreground">not included in the totals above</span>
+                                                <span className="text-xs font-normal text-muted-foreground">charged per booking — not part of the capacity totals above</span>
                                             </h4>
                                             <div className="overflow-x-auto">
                                                 <table className="w-full text-sm">
@@ -4282,6 +4297,26 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         </tr>
                                                     ))}
                                                 </tbody>
+                                                {/* A facility-wide fee belongs to no single barn — show it here so
+                                                    the rows add up to the Stalls figure on the revenue card. */}
+                                                {analytics.facilityFeeRevenue > 0 && (
+                                                    <tfoot>
+                                                        <tr className="border-t">
+                                                            <td className="px-3 py-2 text-muted-foreground" colSpan={5}>
+                                                                Facility-wide stall fees (all barns)
+                                                            </td>
+                                                            <td className="px-3 py-2 text-right font-semibold text-emerald-700 dark:text-emerald-300">
+                                                                ${analytics.facilityFeeRevenue.toLocaleString()}
+                                                            </td>
+                                                        </tr>
+                                                        <tr className="border-t font-semibold">
+                                                            <td className="px-3 py-2" colSpan={5}>Total stall revenue</td>
+                                                            <td className="px-3 py-2 text-right text-emerald-700 dark:text-emerald-300">
+                                                                ${analytics.revenue.byStalls.toLocaleString()}
+                                                            </td>
+                                                        </tr>
+                                                    </tfoot>
+                                                )}
                                             </table>
                                         </div>
                                     </div>

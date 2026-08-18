@@ -11,9 +11,11 @@
 // (they depend on the exhibitor's arrival/departure vs the show window). A quick
 // internal booking prices the base stall / RV / supply lines only.
 
+import { buildExtraStallFeeItems, stallsByBarnFromSelection } from './extraStallFees';
+
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
-export function buildBookingItems(inventory, selection, nights) {
+export function buildBookingItems(inventory, selection, nights, { horseCount = 0 } = {}) {
     const items = [];
     let subtotal = 0;
     const n = Math.max(1, Number(nights) || 1);
@@ -36,6 +38,17 @@ export function buildBookingItems(inventory, selection, nights) {
             });
         }
     }
+
+    // Circuit / flat / late-entry fees that aren't tied to one barn. Added right
+    // after the stall lines so they read together on the invoice.
+    const extras = buildExtraStallFeeItems({
+        extraStallFees: inventory?.extraStallFees || [],
+        stallsByBarn: stallsByBarnFromSelection(selection),
+        nights: n,
+        horseCount,
+    });
+    items.push(...extras.items);
+    subtotal += extras.subtotal;
 
     for (const rv of inventory?.rvAreas || []) {
         const qty = selection?.rvs?.[rv.id] || 0;

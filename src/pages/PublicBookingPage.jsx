@@ -21,6 +21,7 @@ import { useToast } from '@/components/ui/use-toast';
 const Divider = () => <div className="h-px bg-border my-2" />;
 import { supabase } from '@/lib/supabaseClient';
 import { startStallCheckout } from '@/lib/housingCheckout';
+import { buildExtraStallFeeItems, stallsByBarnFromSelection } from '@/lib/extraStallFees';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -724,6 +725,8 @@ const PublicBookingPage = () => {
             rvAreas: inv.rvAreas || [],
             supportSpaces: inv.supportSpaces || [],
             supplies: inv.supplies || [],
+            // Circuit / flat fees that aren't tied to one barn (see public_show_inventory).
+            extraStallFees: inv.extraStallFees || [],
         };
     }, [show]);
 
@@ -779,6 +782,17 @@ const PublicBookingPage = () => {
                 });
             }
         }
+
+        // Circuit / flat / late-entry fees that aren't tied to one barn. Priced at
+        // booking time from the fee's own Unit Type, right after the stall lines.
+        const extras = buildExtraStallFeeItems({
+            extraStallFees: inventory.extraStallFees,
+            stallsByBarn: stallsByBarnFromSelection(selection),
+            nights,
+            horseCount: Number(details.horseCount) || 0,
+        });
+        items.push(...extras.items);
+        subtotal += extras.subtotal;
 
         // Days outside the show window count toward early-arrival / late-departure fees
         let earlyDays = 0;
@@ -886,7 +900,7 @@ const PublicBookingPage = () => {
         }
 
         return { lineItems: items, subtotal, nights };
-    }, [inventory, selection, details.arrivalDate, details.departureDate]);
+    }, [inventory, selection, details.arrivalDate, details.departureDate, details.horseCount]);
 
     const hasSelection = orderSummary.lineItems.length > 0;
 

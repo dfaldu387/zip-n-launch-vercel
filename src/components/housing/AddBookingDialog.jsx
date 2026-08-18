@@ -33,7 +33,7 @@ const QtyStepper = ({ value, onChange, max, min = 0 }) => (
 // booking (items[] + totalAmount) so Manage Stalls, Smart Auto-Assign, Booked
 // counts, occupancy and revenue all work with it automatically.
 const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onAdd }) => {
-    const { barns = [], rvAreas = [], supplies = [] } = inventory || {};
+    const { barns = [], rvAreas = [], supplies = [], extraStallFees = [] } = inventory || {};
     const { toast } = useToast();
     const [open, setOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -56,9 +56,13 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
         setSelection({ stalls: {}, rvs: {}, supplies: {} });
     };
 
+    // Horses are typed as a comma-separated list — count them so a Per Horse
+    // extra fee prices correctly.
+    const horseCount = details.horses.split(',').map(h => h.trim()).filter(Boolean).length;
+
     const { items, subtotal } = useMemo(
-        () => buildBookingItems({ barns, rvAreas, supplies }, selection, nights),
-        [barns, rvAreas, supplies, selection, nights]
+        () => buildBookingItems({ barns, rvAreas, supplies, extraStallFees }, selection, nights, { horseCount }),
+        [barns, rvAreas, supplies, extraStallFees, selection, nights, horseCount]
     );
 
     const setQty = (group, id, v) => setSelection(prev => ({ ...prev, [group]: { ...prev[group], [id]: v } }));
