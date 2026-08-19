@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { calculateMemberFinancials, currency, formatDate } from '@/lib/contractUtils';
 
 /**
@@ -41,9 +42,10 @@ export async function sendContractEmail({ member, formData, deliverySettings, co
   }
 
   try {
-    const { data, error } = await supabase.functions.invoke('send-contract-email', {
-      body: payload,
-    });
+    // invokeAsUser, not functions.invoke: the function now checks that the caller
+    // may manage this show, and supabase-js sends the anonymous key rather than
+    // the session unless the token is attached by hand.
+    const { data, error } = await invokeAsUser('send-contract-email', payload);
 
     if (error) {
       console.error('Edge function error:', error);

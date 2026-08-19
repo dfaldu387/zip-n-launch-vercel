@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { Loader2, Send, Paperclip, CheckCircle, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
@@ -95,13 +96,13 @@ export const ReviewEmailModal = ({ isOpen, onClose, patternSet, reviewType, onCo
 
       if (recipients.length > 0) {
         try {
-          const { data, error } = await supabase.functions.invoke('send-email-with-attachments', {
-            body: {
-              to: recipients,
-              subject,
-              body,
-              patternIds: patternSet.patterns.map(p => p.id),
-            },
+          // invokeAsUser: the function is admin-only now, and functions.invoke
+          // would send the anonymous key instead of the signed-in session.
+          const { data, error } = await invokeAsUser('send-email-with-attachments', {
+            to: recipients,
+            subject,
+            body,
+            patternIds: patternSet.patterns.map(p => p.id),
           });
 
           if (error) throw new Error(`Function invocation failed: ${error.message}`);

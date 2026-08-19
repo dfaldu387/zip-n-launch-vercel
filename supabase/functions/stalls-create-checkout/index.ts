@@ -63,6 +63,33 @@ function computeBookingTotal(projectData: any, booking: any): number {
 
 // ─────────────────────────────────────────────────────────────────────
 
+// Where Stripe may send an exhibitor after they pay.
+//
+// success_url and cancel_url came from the browser and went to Stripe unchecked,
+// so anyone could build a REAL checkout session on this account — genuine Stripe
+// page, genuine show name and amount — that dropped the payer on a site of their
+// choosing afterwards. "Payment failed, try your card again" is very convincing
+// straight after a real Stripe checkout.
+//
+// This one has no login by design (exhibitors have no account), which makes the
+// destination check the only thing standing in the way.
+const ALLOWED_ORIGINS = [
+  "https://equipatterns.com",
+  "https://www.equipatterns.com",
+  "https://zip-n-launch-vercel.vercel.app",   // the Vercel domain, also live
+  "http://localhost:3000",   // local development
+  "http://localhost:3001",   // npm run preview
+];
+
+const isAllowedRedirect = (url: unknown): boolean => {
+  if (typeof url !== "string" || url === "") return false;
+  try {
+    return ALLOWED_ORIGINS.includes(new URL(url).origin);
+  } catch {
+    return false;   // not a URL at all
+  }
+};
+
 async function stripePost(
   endpoint: string,
   params: Record<string, string>
@@ -105,6 +132,9 @@ serve(async (req: Request): Promise<Response> => {
     }
     if (!successUrl || !cancelUrl) {
       throw new Error("Missing successUrl or cancelUrl");
+    }
+    if (!isAllowedRedirect(successUrl) || !isAllowedRedirect(cancelUrl)) {
+      throw new Error("Invalid return address.");
     }
 
     // Service-role client — read the booking to price it server-side.

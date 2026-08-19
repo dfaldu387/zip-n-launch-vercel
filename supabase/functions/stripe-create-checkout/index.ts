@@ -17,6 +17,32 @@ interface CheckoutRequest {
   metadata?: Record<string, string>;
 }
 
+// Where Stripe may send someone after they pay.
+//
+// success_url and cancel_url arrived from the browser and went to Stripe
+// unchecked, so anyone could build a REAL checkout session on this account —
+// genuine Stripe page, genuine EquiPatterns branding — that dropped the payer on
+// a site of their choosing afterwards. A page saying "payment failed, try your
+// card again" is very convincing when you have just come from a real Stripe
+// checkout. Restricting the destination to our own site removes that.
+const ALLOWED_ORIGINS = [
+  "https://equipatterns.com",
+  "https://www.equipatterns.com",
+  "https://zip-n-launch-vercel.vercel.app",   // the Vercel domain, also live
+  "http://localhost:3000",   // local development
+  "http://localhost:3001",   // npm run preview
+];
+
+const isAllowedRedirect = (url: unknown): boolean => {
+  if (typeof url !== "string" || url === "") return false;
+  try {
+    const origin = new URL(url).origin;
+    return ALLOWED_ORIGINS.includes(origin);
+  } catch {
+    return false;   // not a URL at all
+  }
+};
+
 async function stripePost(
   endpoint: string,
   params: Record<string, string>
@@ -64,6 +90,13 @@ serve(async (req: Request): Promise<Response> => {
       cancelUrl,
       metadata,
     }: CheckoutRequest = await req.json();
+
+    if (!isAllowedRedirect(successUrl) || !isAllowedRedirect(cancelUrl)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid return address." }),
+        { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
 
     // Admin client for writing to profiles
     const adminClient = createClient(

@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
     import { Textarea } from '@/components/ui/textarea';
     import { useToast } from '@/components/ui/use-toast';
     import { supabase } from '@/lib/supabaseClient';
+    import { invokeAsUser } from '@/lib/edgeFunctions';
     import { Loader2, Send, Paperclip } from 'lucide-react';
 
     const defaultSubject = (setName) => `Regarding Your Pattern Set: ${setName}`;
@@ -51,13 +52,15 @@ The EquiPatterns Team`;
             }
 
             try {
-                const { data, error } = await supabase.functions.invoke('send-email-with-attachments', {
-                    body: {
-                        to: recipients,
-                        subject,
-                        body,
-                        patternIds: patternSet.patterns.map(p => p.id),
-                    },
+                // invokeAsUser, not functions.invoke: the function now refuses
+                // anyone who is not a signed-in admin, and supabase-js sends the
+                // anonymous key rather than the session unless the token is
+                // attached by hand.
+                const { data, error } = await invokeAsUser('send-email-with-attachments', {
+                    to: recipients,
+                    subject,
+                    body,
+                    patternIds: patternSet.patterns.map(p => p.id),
                 });
 
                 if (error) throw new Error(`Function invocation failed: ${error.message}`);

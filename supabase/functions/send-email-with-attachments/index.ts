@@ -29,11 +29,53 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
+    // ── Who is asking ───────────────────────────────────────────────────────
+    // This function takes the recipients, the subject AND the message body from
+    // whoever calls it, then sends from Info@equipatterns.com — a verified domain
+    // that passes SPF and DKIM. With no check at all it was an open mail relay:
+    // anyone who guessed the URL could email anybody, in bulk, with attachments,
+    // and it would arrive looking exactly like genuine EquiPatterns mail.
+    //
+    // Only two admin screens use it (EmailSenderModal, ReviewEmailModal), so the
+    // bar is a signed-in admin. The UI was already locked down; the function was
+    // the unlocked back door.
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+    const refuse = (message: string, status: number) =>
+      new Response(JSON.stringify({ error: message }), {
+        status,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+
+    if (!token || token === anonKey) {
+      return refuse("You must be signed in to send email.", 401);
+    }
+
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
+
+    const { data: userData } = await supabaseAdmin.auth.getUser(token);
+    const caller = userData?.user;
+    if (!caller) {
+      return refuse("You must be signed in to send email.", 401);
+    }
+
+    // Admins only. Read with the service key so this does not depend on the
+    // profiles read policy.
+    const { data: callerProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("role")
+      .eq("id", caller.id)
+      .maybeSingle();
+
+    if (String(callerProfile?.role ?? "").toLowerCase() !== "admin") {
+      return refuse("Only administrators can send email from this address.", 403);
+    }
 
     const { to, subject, body, patternIds }: EmailWithAttachmentsRequest = await req.json();
 

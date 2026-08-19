@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const POSTMARK_API_TOKEN = Deno.env.get("POSTMARK_API_TOKEN") as string;
 
@@ -41,6 +42,54 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     const body: ContractEmailRequest = await req.json();
+
+    // ── Who is asking ───────────────────────────────────────────────────────
+    // Everything in this email comes from the caller: the recipient, the
+    // subject, the free-text customMessage, and an arbitrary PDF attachment —
+    // all sent from Info@equipatterns.com, which passes SPF and DKIM. With no
+    // check at all, anyone who guessed the URL could send a convincing "staff
+    // contract" from EquiPatterns to anybody, with their own wording and their
+    // own document attached.
+    //
+    // Sending a contract belongs to whoever runs the show, so the caller must be
+    // signed in and able to manage the project the contract belongs to — the
+    // same rule the invoice sender uses.
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+    const refuse = (message: string, status: number) =>
+      new Response(JSON.stringify({ error: message }), {
+        status,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+
+    if (!token || token === anonKey) {
+      return refuse("You must be signed in to send a contract.", 401);
+    }
+
+    // Runs as the caller, so auth.uid() inside can_manage_show is really them.
+    const asCaller = createClient(Deno.env.get("SUPABASE_URL")!, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: userData } = await asCaller.auth.getUser();
+    if (!userData?.user) {
+      return refuse("You must be signed in to send a contract.", 401);
+    }
+
+    if (!body.projectId) {
+      return refuse("This contract is not linked to a show.", 400);
+    }
+
+    const { data: allowed, error: allowedError } = await asCaller.rpc(
+      "can_manage_show",
+      { p_project_id: body.projectId }
+    );
+
+    if (allowedError || allowed !== true) {
+      return refuse("You do not have access to this show.", 403);
+    }
 
     const {
       recipientEmail,
