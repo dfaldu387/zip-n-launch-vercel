@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const POSTMARK_API_TOKEN = Deno.env.get("POSTMARK_API_TOKEN") as string;
 
@@ -32,6 +33,52 @@ const handler = async (req: Request): Promise<Response> => {
       return new Response(
         JSON.stringify({ error: "Missing required field: userEmail" }),
         { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
+    // ── Is this really a new signup ──────────────────────────────────────────
+    // The caller chose the recipient and nothing checked it, so anyone who
+    // guessed the URL could send this to any address they liked, over and over,
+    // from Info@equipatterns.com. A login check is no good here: it is called
+    // moments after signUp, before the session has reliably settled.
+    //
+    // Instead the address has to belong to an account that has just been
+    // created. That leaves the legitimate path untouched and removes both
+    // arbitrary-address spam and re-welcoming existing customers.
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+    // listUsers is paginated — an early version of another function only checked
+    // the first page and missed accounts further down the list.
+    const target = String(userEmail).trim().toLowerCase();
+    let account: { created_at?: string } | null = null;
+    for (let page = 1; page <= 20 && !account; page++) {
+      const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+      if (error) break;
+      account = data.users.find((u) => (u.email ?? "").toLowerCase() === target) ?? null;
+      if (data.users.length < 200) break;
+    }
+
+    if (!account) {
+      console.warn("Welcome email refused — no account for", target);
+      return new Response(
+        JSON.stringify({ error: "No account for that email address." }),
+        { status: 403, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
+    const ageMinutes = account.created_at
+      ? (Date.now() - new Date(account.created_at).getTime()) / 60000
+      : Infinity;
+
+    if (ageMinutes > 60) {
+      console.warn("Welcome email refused — account is not new:", target);
+      return new Response(
+        JSON.stringify({ error: "That account is not a new signup." }),
+        { status: 403, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
 

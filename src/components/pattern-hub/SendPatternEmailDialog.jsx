@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { Loader2, Send } from 'lucide-react';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 
@@ -35,15 +36,16 @@ export const SendPatternEmailDialog = ({ open, onOpenChange, projectData, patter
             const pdfDataUri = await generatePatternBookPdf(projectData, { skipCoverAndToc: true });
             const bookName = patternName || projectData?.showName || 'My Pattern';
 
-            const { data, error } = await supabase.functions.invoke('send-pattern-book', {
-                body: JSON.stringify({
+            // invokeAsUser: the function is signed-in only now, and
+            // functions.invoke would send the anonymous key instead.
+            const { data, error } = await invokeAsUser('send-pattern-book',
+                JSON.stringify({
                     email: recipientEmail.trim(),
                     pdfDataUri,
                     bookName,
                     senderName: senderName.trim() || undefined,
                     personalMessage: personalMessage.trim() || undefined,
-                }),
-            });
+                }));
 
             if (error || data?.error) {
                 throw new Error(error?.message || data?.error);

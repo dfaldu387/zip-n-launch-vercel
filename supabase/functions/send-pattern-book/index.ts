@@ -1,10 +1,23 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// bookName is written by the caller and dropped straight into the subject and
+// the HTML body. Unescaped, a name containing markup becomes markup in an email
+// sent from our own verified domain — a link of someone else's choosing inside
+// what looks like a genuine EquiPatterns message.
+const escapeHtml = (value: unknown): string =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 interface SendPatternBookRequest {
   email: string;
@@ -25,7 +38,41 @@ serve(async (req: Request): Promise<Response> => {
       throw new Error("Postmark API token not configured");
     }
     
+    // ── Who is asking ───────────────────────────────────────────────────────
+    // The caller supplies the recipient AND the PDF, and it goes out from
+    // Info@equipatterns.com. With no check, anyone who guessed the URL could
+    // email any document they liked to anybody, and it would arrive looking like
+    // genuine EquiPatterns mail. Only signed-in members build pattern books, so
+    // that is the bar; the book itself is generated in the browser, so there is
+    // no project id here to check ownership against.
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+    if (!token || token === anonKey) {
+      return new Response(
+        JSON.stringify({ error: "You must be signed in to email a pattern book." }),
+        { status: 401, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+    const { data: userData } = await admin.auth.getUser(token);
+    if (!userData?.user) {
+      return new Response(
+        JSON.stringify({ error: "You must be signed in to email a pattern book." }),
+        { status: 401, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
     const { email, pdfDataUri, bookName }: SendPatternBookRequest = await req.json();
+
+    const safeBookName = escapeHtml(bookName);
 
     console.log(`Sending pattern book "${bookName}" to ${email} via Postmark`);
 
@@ -51,11 +98,11 @@ serve(async (req: Request): Promise<Response> => {
       body: JSON.stringify({
         From: fromEmail,
         To: email,
-        Subject: `Your Pattern Book: ${bookName}`,
+        Subject: `Your Pattern Book: ${safeBookName}`,
         HtmlBody: `
           <h1>Your Pattern Book is Ready!</h1>
           <p>Hello,</p>
-          <p>Please find attached your pattern book: <strong>${bookName}</strong></p>
+          <p>Please find attached your pattern book: <strong>${safeBookName}</strong></p>
           <p>Thank you for using Pattern Book Builder!</p>
           <br>
           <p>Best regards,<br>The EquiPattern Team</p>

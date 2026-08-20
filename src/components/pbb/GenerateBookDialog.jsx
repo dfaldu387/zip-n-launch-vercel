@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Loader2, CreditCard, Mail, Check, ArrowLeft, Building2, Lock } from 'lucide-react';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { useAnalytics } from '@/components/AnalyticsProvider';
 import { Card, CardContent } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -87,9 +88,10 @@ const GenerateBookDialog = ({ open, onOpenChange, pbbData }) => {
       link.click();
       document.body.removeChild(link);
 
-      const { data, error } = await supabase.functions.invoke('send-pattern-book', {
-        body: JSON.stringify({ email, pdfDataUri, bookName: pbbData.showName || 'My Pattern Book' }),
-      });
+      // invokeAsUser: the function is signed-in only now, and functions.invoke
+      // would send the anonymous key instead of the session.
+      const { data, error } = await invokeAsUser('send-pattern-book',
+        JSON.stringify({ email, pdfDataUri, bookName: pbbData.showName || 'My Pattern Book' }));
 
       if (error || data?.error) throw new Error(error?.message || data?.error);
 

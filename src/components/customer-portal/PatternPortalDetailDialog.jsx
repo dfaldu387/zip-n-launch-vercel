@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { preferBestScoresheet, dedupeByDiscipline } from '@/lib/scoresheetLookup';
 import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import { Loader2, Download, Printer, Mail, Link2, Image as LucideImage, FileText, CheckSquare, Square, Send, ArrowLeft } from 'lucide-react';
@@ -798,15 +799,17 @@ const PatternPortalDetailDialog = ({ open, onOpenChange, project }) => {
 
             const bookName = project.project_name || project.project_data?.showName || 'My Pattern';
 
-            const { data, error } = await supabase.functions.invoke('send-pattern-book', {
-                body: JSON.stringify({
+            // invokeAsUser: the function now refuses anyone who is not signed in,
+            // and supabase-js sends the anonymous key rather than the session
+            // unless the token is attached by hand.
+            const { data, error } = await invokeAsUser('send-pattern-book',
+                JSON.stringify({
                     email: recipientEmail.trim(),
                     pdfDataUri,
                     bookName,
                     senderName: senderName.trim() || undefined,
                     personalMessage: personalMessage.trim() || undefined,
-                }),
-            });
+                }));
 
             if (error || data?.error) {
                 throw new Error(error?.message || data?.error);

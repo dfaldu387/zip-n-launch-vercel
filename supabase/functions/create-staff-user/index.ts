@@ -17,6 +17,14 @@ interface CreateStaffUserRequest {
 // role "Admin" and be given an administrator account.
 const PRIVILEGED_ROLES = ['admin'];
 
+// A role is dangerous because of what it can DO, not because of what it is
+// called. Blocking the name "admin" alone was never enough: roles here have
+// carried far more power than their names suggest — Customer once held 38 of 39
+// permissions, users:manage and roles:manage among them. Any role holding one of
+// these can take over the site, whatever it is called, so only an admin may
+// hand it out.
+const DANGEROUS_PERMISSIONS = ['users:manage', 'roles:manage', 'users:impersonate'];
+
 // Callers send the role in whatever form their screen has: ContactInfo sends the
 // display name ("Show Manager"), the close-out step sends the stored value
 // ("SHOW_MANAGER"). Dropping case and every separator lets both find the same row.
@@ -138,9 +146,26 @@ serve(async (req: Request) => {
 
     // Checked on the resolved code, not on what was sent — asking for the Admin
     // role by its display name must be refused just the same.
-    if (!callerIsAdmin && PRIVILEGED_ROLES.includes(normalizeRole(role))) {
-      console.warn('Blocked privileged role request from', caller.user.id, 'for', requestedRole);
-      return json({ success: false, error: 'That role cannot be assigned here.', created: false }, 403);
+    if (!callerIsAdmin) {
+      let privileged = PRIVILEGED_ROLES.includes(normalizeRole(role));
+
+      // ...and, whatever it is called, refuse any role that carries a permission
+      // capable of taking over the site. eq() not ilike(): role codes contain
+      // underscores, and in SQL an unescaped underscore matches any character.
+      if (!privileged) {
+        const { data: rolePerms } = await supabaseAdmin
+          .from('role_permissions')
+          .select('permission_code')
+          .eq('role_code', role)
+          .in('permission_code', DANGEROUS_PERMISSIONS);
+
+        privileged = (rolePerms?.length ?? 0) > 0;
+      }
+
+      if (privileged) {
+        console.warn('Blocked privileged role request from', caller.user.id, 'for', requestedRole);
+        return json({ success: false, error: 'That role cannot be assigned here.', created: false }, 403);
+      }
     }
 
     console.log(`create-staff-user by ${caller.user.id}: ${normalizedEmail} as ${role}`);
@@ -185,12 +210,15 @@ serve(async (req: Request) => {
           .upsert({ user_id: existingUserId, email, full_name: name, last_name: lastName }, { onConflict: 'user_id' });
       }
 
+      // The caller is told the account exists — the screen needs that to show the
+      // right message — but not what role it holds. Returning the role let any
+      // signed-in member type addresses one by one and find out who the
+      // administrators are, which is nobody's business but ours.
       return json({
         success: true,
         message: 'User already exists',
         userId: existingUserId,
         created: false,
-        existingRole: existingProfile?.role ?? null,
       });
     }
 
