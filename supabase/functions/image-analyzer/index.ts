@@ -26,6 +26,30 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── Only our own images ──────────────────────────────────────────────────
+    // getImageBuffer below fetches whatever address the caller sends, from our
+    // server. Unrestricted that is two problems at once: it will reach internal
+    // addresses on a stranger's behalf, and each call downloads two large models
+    // and runs inference, which is free compute for them and cost for us.
+    //
+    // Nothing in the app calls this function today, so the restriction cannot
+    // break anything; it simply stops the door being useful to anyone who finds
+    // it.
+    const storageOrigin = new URL(Deno.env.get("SUPABASE_URL")).origin;
+    let imageOrigin = "";
+    try {
+      imageOrigin = new URL(String(imageUrl)).origin;
+    } catch {
+      imageOrigin = "";
+    }
+
+    if (imageOrigin !== storageOrigin) {
+      return new Response(
+        JSON.stringify({ error: "That image is not stored here." }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 403 }
+      );
+    }
+
     // Get the image buffer
     const imageBuffer = await getImageBuffer(imageUrl);
 

@@ -111,6 +111,32 @@ serve(async (req) => {
       });
     }
 
+    // ── Only our own score sheets ────────────────────────────────────────────
+    // Every call to this function is a paid request to a vision model on our
+    // key, and the caller chose the image. Anyone who found the URL could point
+    // it at pictures of their own, in a loop, and the first sign of it would be
+    // the invoice.
+    //
+    // A login check is not the answer: a rider scanning a QR code at the arena
+    // has no account and still needs Print Score Sheet to work. Restricting the
+    // image to our own storage keeps that path open and takes the value out of
+    // calling it — all 1,591 score sheet images live in this one project.
+    const storageOrigin = new URL(Deno.env.get("SUPABASE_URL")!).origin;
+    let imageOrigin = "";
+    try {
+      imageOrigin = new URL(String(imageUrl)).origin;
+    } catch {
+      imageOrigin = "";
+    }
+
+    if (imageOrigin !== storageOrigin) {
+      console.warn("Refused field detection for a foreign image:", imageOrigin || imageUrl);
+      return new Response(
+        JSON.stringify({ error: "That image is not a stored score sheet." }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       throw new Error("LOVABLE_API_KEY is not configured");

@@ -35,6 +35,7 @@ const MOCK_WEBSITE_CONTENT = {
   "https://www.nsba.com/judges-forms": null, 
 };
 
+
 // --- CRAWLER LOGIC ---
 
 async function logMessage(supabase, runId, status, message, details = {}) {
@@ -97,8 +98,43 @@ Deno.serve(async (req) => {
   let supabaseClient;
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) throw new Error("Missing Authorization header");
+    // ── Who is asking ───────────────────────────────────────────────────────
+    // The old check was `if (!authHeader) throw` — it only asked whether a
+    // header was PRESENT. Every anonymous request already carries one: the
+    // public key. So the check passed for anybody, and the client below is
+    // built with the SERVICE ROLE key, which bypasses every policy.
+    //
+    // Only the admin console calls this, so the bar is a signed-in admin. The
+    // sibling function schedule-parser has done it this way all along.
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+    if (!token || token === anonKey) {
+      throw new Error("You must be signed in as an administrator.");
+    }
+
+    const authCheckClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+    const { data: callerData } = await authCheckClient.auth.getUser(token);
+    if (!callerData?.user) {
+      throw new Error("You must be signed in as an administrator.");
+    }
+
+    const { data: callerProfile } = await authCheckClient
+      .from("profiles")
+      .select("role")
+      .eq("id", callerData.user.id)
+      .maybeSingle();
+
+    if (String(callerProfile?.role ?? "").toLowerCase() !== "admin") {
+      throw new Error("Only administrators can run this.");
+    }
+
 
     // Use the service role key to allow inserts into the log table
     supabaseClient = createClient(

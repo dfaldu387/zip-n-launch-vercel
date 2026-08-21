@@ -12,6 +12,7 @@ import Navigation from '@/components/Navigation';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 
 const AssetIntelligenceCenterPage = () => {
   const { toast } = useToast();
@@ -51,7 +52,9 @@ const AssetIntelligenceCenterPage = () => {
     toast({ title: 'Starting AI Crawler...', description: 'This may take a few minutes.' });
     try {
       if (!session) throw new Error('You must be logged in to run the crawler.');
-      const { error } = await supabase.functions.invoke('asset-crawler');
+      // invokeAsUser: the crawler now requires a signed-in admin, and
+      // functions.invoke sends the anonymous key rather than the session.
+      const { error } = await invokeAsUser('asset-crawler', {});
       if (error) throw error;
       toast({ title: 'Crawler finished successfully!', description: 'Check the logs for details.' });
       fetchLogs();
