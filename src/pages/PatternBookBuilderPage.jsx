@@ -103,7 +103,9 @@ const PatternBookBuilderPage = () => {
             const timeSpent = Math.round((Date.now() - sessionStartRef.current) / 1000);
             if (timeSpent > 0) {
                 trackPatternEvent('pbb_session_end', {
-                    patternId: projectId || 'new',
+                    // 'new' used to be sent here; pattern_id is a uuid column and
+                    // rejected it, failing the whole insert.
+                    patternId: projectId,
                     timeSpent: timeSpent,
                     discipline: formData.disciplines?.map(d => d.name).join(', '),
                     associationId: Object.keys(formData.associations || {}).filter(k => formData.associations[k]).join(', '),

@@ -160,6 +160,24 @@ export const useAnalyticsTracking = () => {
         return () => clearTimeout(timeout);
     }, [location.pathname, user?.id, isAdmin]);
 
+// analytics_pattern_events.pattern_id is a uuid column, but callers pass whatever
+// identifier they happen to hold — the Pattern Book Builder sends the literal
+// string 'new' before a project has been saved. Postgres rejects that outright,
+// so every one of those views failed with a 400 and left a red error in the
+// console on customer pages. Nothing was lost except the analytics row, but it
+// looked like the site was falling over.
+//
+// Anything that is not a real uuid is recorded as null rather than breaking the
+// insert.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const asUuid = (value) => (typeof value === 'string' && UUID_RE.test(value) ? value : null);
+
+// time_spent_seconds is an integer column; a fractional value is rejected too.
+const asWholeSeconds = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+};
+
     // Track pattern events (skip for admins and anonymous users)
     const trackPatternEvent = useCallback(async (action, patternData = {}) => {
         if (isAdmin || !user?.id) return; // Skip tracking for admins and anonymous
@@ -168,11 +186,11 @@ export const useAnalyticsTracking = () => {
             await supabase.from('analytics_pattern_events').insert({
                 user_id: user.id, // Now guaranteed to have user.id
                 action,
-                pattern_id: patternData.patternId || null,
+                pattern_id: asUuid(patternData.patternId),
                 association_id: patternData.associationId || null,
                 discipline: patternData.discipline || null,
                 difficulty_level: patternData.difficultyLevel || null,
-                time_spent_seconds: patternData.timeSpent || null,
+                time_spent_seconds: asWholeSeconds(patternData.timeSpent),
                 version_id: patternData.versionId || null,
                 device_type: getDeviceType(),
                 browser: getBrowserInfo()

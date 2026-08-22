@@ -1,4 +1,5 @@
 import { toast } from '@/components/ui/use-toast';
+import { supabase } from '@/lib/supabaseClient';
 
 // ErrorBoundary only catches errors thrown while React is rendering. A failed
 // `await` with no .catch (network drop, Supabase timeout, an edge function that
@@ -32,6 +33,34 @@ const isCancellation = (reason) => {
   return /aborted|cancell?ed/i.test(messageOf(reason));
 };
 
+// The stored session is no longer valid — the refresh token was revoked, expired,
+// or cleared on the server. supabase-js keeps retrying and throwing, so the user
+// saw a burst of red pop-ups reading "Invalid Refresh Token: Refresh Token Not
+// Found" and every request kept failing, because the dead tokens stayed in the
+// browser. Nothing told them the fix was simply to sign in again.
+// Matching on any mention of a refresh token, rather than one exact sentence.
+// Supabase words this differently depending on why it failed — "Refresh Token Not
+// Found", "Refresh token is not valid", "refresh_token_not_found" — and an
+// earlier version of this check listed some of them and missed the one the
+// server actually sends. Whatever the wording, an error about the refresh token
+// means the same thing: this session is dead.
+const isExpiredSession = (reason) => {
+  const message = messageOf(reason);
+  return /refresh[_ ]?token/i.test(message)
+      || /session[_ ]not[_ ]found|jwt expired/i.test(message);
+};
+
+// Clearing it locally is enough: the server-side session is already gone, and a
+// network round-trip could fail and leave the bad tokens in place.
+let clearingSession = false;
+const clearDeadSession = () => {
+  if (clearingSession) return;
+  clearingSession = true;
+  Promise.resolve(supabase.auth.signOut({ scope: 'local' }))
+    .catch(() => { /* already gone */ })
+    .finally(() => { clearingSession = false; });
+};
+
 const isNetworkFailure = (reason) =>
   /failed to fetch|networkerror|network request failed|load failed/i.test(messageOf(reason));
 
@@ -41,6 +70,12 @@ export const registerGlobalErrorHandlers = () => {
     if (isCancellation(reason)) return;
 
     console.error('Unhandled promise rejection:', reason);
+
+    if (isExpiredSession(reason)) {
+      clearDeadSession();
+      notify('Your session has expired', 'Please sign in again to continue.');
+      return;
+    }
 
     if (isNetworkFailure(reason)) {
       notify(

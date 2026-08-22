@@ -17,6 +17,14 @@ export const AuthProvider = ({ children }) => {
   const [permissions, setPermissions] = useState([]);
   const [authModalState, setAuthModalState] = useState({ isOpen: false, initialTab: 'signin' });
   const skipAutoCloseRef = useRef(false);
+  // Set while the user is signing out on purpose, so losing the session then is
+  // not reported back to them as an expiry.
+  const deliberateSignOutRef = useRef(false);
+  // Whether we currently believe somebody is signed in.
+  const hadSessionRef = useRef(false);
+  // The expiry can be spotted twice — once by the startup getSession and once by
+  // the auth event that follows it — and the person only needs telling once.
+  const expiryNotifiedRef = useRef(false);
 
   // Which account the profile and permissions currently in state belong to.
   //
@@ -113,17 +121,61 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const notifyExpired = useCallback(() => {
+    if (expiryNotifiedRef.current) return;
+    expiryNotifiedRef.current = true;
+    toast({
+      title: 'Your session has expired',
+      description: 'Please sign in again to continue.',
+    });
+  }, [toast]);
+
   const handleSession = useCallback(async (currentSession) => {
     setSession(currentSession);
     const currentUser = currentSession?.user ?? null;
+
+    // A session that disappears without the user asking is an expiry: the stored
+    // refresh token was rejected and supabase-js signed them out. It handles that
+    // quietly — the only sign was an AuthApiError in the console — so the person
+    // was simply logged out mid-task with no explanation, which reads as the site
+    // breaking. Telling them once turns it into something they can act on.
+    if (hadSessionRef.current && !currentUser && !deliberateSignOutRef.current) {
+      notifyExpired();
+    }
+    hadSessionRef.current = !!currentUser;
+    if (currentUser) expiryNotifiedRef.current = false;
+    // Cleared once the sign-out has been seen, so the next unexpected loss of a
+    // session is still reported.
+    if (!currentUser) deliberateSignOutRef.current = false;
+
     setUser(currentUser);
     await fetchProfileAndPermissions(currentUser);
     setLoading(false);
-  }, [fetchProfileAndPermissions]);
+  }, [fetchProfileAndPermissions, notifyExpired]);
 
   useEffect(() => {
     const getSessionAndHandleUser = async () => {
+      // Read this BEFORE getSession: if the stored refresh token is rejected,
+      // supabase-js clears the key on its way to returning null.
+      //
+      // The in-session check below only catches a session lost while the page is
+      // open. The common case is the other one — somebody comes back the next
+      // day, the refresh token has expired, and the app boots straight to signed
+      // out with nothing but an AuthApiError in the console to explain it.
+      const hadStoredSession = [localStorage, sessionStorage].some((store) => {
+        try {
+          return Object.keys(store).some((k) => k.startsWith('sb-') && k.includes('auth-token'));
+        } catch {
+          return false;   // storage blocked (private mode, blocked cookies)
+        }
+      });
+
       const { data: { session } } = await supabase.auth.getSession();
+
+      if (hadStoredSession && !session) {
+        notifyExpired();
+      }
+
       handleSession(session);
     };
     
@@ -153,7 +205,7 @@ export const AuthProvider = ({ children }) => {
     );
 
     return () => subscription.unsubscribe();
-  }, [handleSession, fetchProfileAndPermissions]);
+  }, [handleSession, fetchProfileAndPermissions, notifyExpired]);
   
   const signUp = useCallback(async (email, password, metadata) => {
     const { firstName, lastName, mobile } = metadata;
@@ -221,6 +273,7 @@ export const AuthProvider = ({ children }) => {
 
   const signOut = useCallback(async () => {
     let error = null;
+    deliberateSignOutRef.current = true;
 
     try {
       const { error: signOutError } = await supabase.auth.signOut();
