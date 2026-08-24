@@ -785,11 +785,14 @@ const PublicBookingPage = () => {
 
         // Circuit / flat / late-entry fees that aren't tied to one barn. Priced at
         // booking time from the fee's own Unit Type, right after the stall lines.
+        // Per-Night fees are excluded — they're already folded into barn.pricePerNight
+        // above, so charging them again here would double-bill the exhibitor.
         const extras = buildExtraStallFeeItems({
             extraStallFees: inventory.extraStallFees,
             stallsByBarn: stallsByBarnFromSelection(selection),
             nights,
             horseCount: Number(details.horseCount) || 0,
+            excludeUnitTypes: ['per_night'],
         });
         items.push(...extras.items);
         subtotal += extras.subtotal;

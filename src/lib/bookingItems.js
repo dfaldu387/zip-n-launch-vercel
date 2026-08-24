@@ -40,12 +40,15 @@ export function buildBookingItems(inventory, selection, nights, { horseCount = 0
     }
 
     // Circuit / flat / late-entry fees that aren't tied to one barn. Added right
-    // after the stall lines so they read together on the invoice.
+    // after the stall lines so they read together on the invoice. Per-Night fees
+    // are excluded here — they're already folded into the barn's nightly rate
+    // above (see nightlyRateForBarn), so charging them again would double-bill.
     const extras = buildExtraStallFeeItems({
         extraStallFees: inventory?.extraStallFees || [],
         stallsByBarn: stallsByBarnFromSelection(selection),
         nights: n,
         horseCount,
+        excludeUnitTypes: ['per_night'],
     });
     items.push(...extras.items);
     subtotal += extras.subtotal;

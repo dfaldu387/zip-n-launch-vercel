@@ -214,20 +214,10 @@ const CreateHorseShowWizardPage = () => {
                                 if (projectId === 'none') {
                                     setFormData(prev => ({ ...prev, linkedProjectId: null }));
                                 } else {
-                                    const project = existingProjects.find(p => p.id === projectId);
-                                    const pd = project?.project_data || {};
-                                    setFormData(prev => ({
-                                        ...prev,
-                                        linkedProjectId: projectId,
-                                        showName: pd.showName || prev.showName,
-                                        showNumber: pd.showNumber || prev.showNumber,
-                                        associations: pd.associations || prev.associations,
-                                        customAssociations: pd.customAssociations || prev.customAssociations,
-                                        fees: pd.fees || prev.fees,
-                                        sponsorLevels: pd.sponsorLevels || prev.sponsorLevels,
-                                        sponsors: pd.sponsors || prev.sponsors,
-                                    }));
-                                    // Silent link — no popup
+                                    // Open the linked show directly instead of copying its fields into
+                                    // this unsaved draft — every save from here on updates THAT show,
+                                    // rather than creating a second draft with the same name.
+                                    navigate(`/horse-show-manager/fee-structure/${projectId}`, { replace: true });
                                 }
                             }}
                             onDuplicated={(newProject) => {

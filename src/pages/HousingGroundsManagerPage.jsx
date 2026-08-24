@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
     Loader2, Home, Hash, Calendar, FolderOpen,
@@ -49,6 +50,7 @@ import {
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
 } from '@/lib/barnGrid';
+import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, scopeLabelForFee } from '@/lib/extraStallFees';
 
 // ── Constants ──
 
@@ -167,6 +169,45 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
         </div>
     </div>
 );
+
+// Tick any combination of barns a stall fee applies to — "All barns" clears any
+// individual picks (and vice versa), so the two never disagree.
+const BarnScopePicker = ({ value, barns, onChange, disabled }) => {
+    const scope = feeScope({ appliesTo: value });
+    const isAll = scope === ALL_BARNS;
+    const toggleBarn = (barnId) => {
+        const current = isAll ? [] : scope;
+        const next = current.includes(barnId) ? current.filter(id => id !== barnId) : [...current, barnId];
+        onChange(next.length === 0 ? ALL_BARNS : next);
+    };
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <Button type="button" variant="outline" size="sm" disabled={disabled} className="h-8 w-full justify-between text-xs font-normal">
+                    <span className="truncate">{scopeLabelForFee({ appliesTo: value }, barns)}</span>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-56 p-2" align="start">
+                <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
+                    {/* Unchecking this while it's on has to land somewhere real — there's no
+                        "nothing selected" state (an empty list reads back as ALL_BARNS; see
+                        feeScope), so it drops to an explicit list of every barn that exists
+                        right now. That's exactly what ticking each barn by hand would give you. */}
+                    <Checkbox checked={isAll} onCheckedChange={(checked) => onChange(checked ? ALL_BARNS : barns.map(b => b.id))} />
+                    All barns (facility)
+                </label>
+                <div className="my-1 border-t" />
+                {barns.map(b => (
+                    <label key={b.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
+                        <Checkbox checked={!isAll && scope.includes(b.id)} onCheckedChange={() => toggleBarn(b.id)} />
+                        {b.name}
+                    </label>
+                ))}
+            </PopoverContent>
+        </Popover>
+    );
+};
 
 // Per-section lock toggle — freeze one Barn / RV area / supply as you finish it so
 // it can't be adjusted by accident. Independent of the page-wide "Locked" lifecycle.
@@ -2223,6 +2264,40 @@ const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive,
     );
 };
 
+// Old shows priced each barn directly (barn.pricePerNight, typed on a Stall Fees
+// row that WAS the barn) — sometimes WITH an all-barns Per-Night "extra" fee
+// already stacked on top of it (that stacking is the whole point of the new
+// model; it isn't new here). That row is gone — a barn's rate is now derived
+// by adding up every Per-Night fee scoped to it. Run once, at load: for each
+// barn, TOP UP the difference between its old price and whatever the existing
+// fees already derive for it, scoped to just that barn, so the total a stall
+// there charges doesn't change. Checking merely "is some per-night fee scoped
+// to this barn" (rather than whether the amounts add up) undercounts whenever
+// an all-barns fee already applies — it would look "covered" even when its
+// amount is less than the barn's own price, and the gap would be lost.
+export const migrateBarnPricesToFees = (barnList, feeList) => {
+    const migrated = [...feeList];
+    for (const barn of barnList) {
+        const oldPrice = Number(barn.pricePerNight) || 0;
+        if (oldPrice <= 0) continue;
+        const derivedSoFar = nightlyRateForBarn(barn.id, feeList);
+        const gap = oldPrice - derivedSoFar;
+        if (gap <= 0) continue; // existing fees already reach (or exceed) the old price
+        migrated.push({
+            id: uuidv4(),
+            name: barn.feeLabel || barn.name,
+            appliesTo: [barn.id],
+            amount: gap,
+            unitType: 'per_night',
+            paymentTiming: barn.paymentTiming || 'pre_entry',
+            dueDate: barn.dueDate || '',
+            lateFee: barn.lateFee || 0,
+            feeLocked: !!barn.feeLocked,
+        });
+    }
+    return migrated;
+};
+
 // ── Main Dashboard ──
 
 const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate }) => {
@@ -2230,11 +2305,44 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const { toast } = useToast();
     const showNights = getShowNights(pd);
 
-    const [barns, setBarns] = useState(() => pd.stallingService?.barns || []);
-    // Stall fees that are NOT one-per-barn: a circuit fee across the whole facility,
-    // or a second fee on a barn that already has a nightly price. appliesTo is either
-    // 'all' (every barn) or a single barn id.
-    const [extraStallFees, setExtraStallFees] = useState(() => pd.stallingService?.extraStallFees || []);
+    // Stall fees: a circuit fee across the whole facility, a fee on one or several
+    // barns, or a barn's own per-night rate. appliesTo is 'all' (every barn) or an
+    // array of barn ids — a fee can now cover any combination, not just one or all.
+    // A barn's nightly rate is DERIVED from these (see the sync effect below); it is
+    // never typed on the barn itself. Computed once, up front, alongside `barns` (both
+    // initializers run the same migration) so the very first render already has
+    // barns' prices matching the fees — the floating auto-save below only treats a
+    // LATER barns/fees change as a real edit, and a mismatch here would otherwise
+    // read as one, silently saving the migration before anyone touched anything.
+    const [extraStallFees, setExtraStallFees] = useState(() => migrateBarnPricesToFees(
+        pd.stallingService?.barns || [],
+        pd.stallingService?.extraStallFees || []
+    ));
+    const [barns, setBarns] = useState(() => {
+        const initialBarns = pd.stallingService?.barns || [];
+        const fees = migrateBarnPricesToFees(initialBarns, pd.stallingService?.extraStallFees || []);
+        return initialBarns.map(b => ({ ...b, pricePerNight: nightlyRateForBarn(b.id, fees) }));
+    });
+
+    // Keep each barn's pricePerNight equal to the sum of its Per-Night stall fees
+    // as fees are edited, so every reader of `barns` (invoices, occupancy, analytics,
+    // live booking pricing) sees the current rate without having to know fees exist.
+    // Skips its first run — barns already starts correctly derived (above) — so
+    // merely loading the page never looks like an edit to the auto-save effect.
+    const priceSyncFirstRun = useRef(true);
+    useEffect(() => {
+        if (priceSyncFirstRun.current) { priceSyncFirstRun.current = false; return; }
+        setBarns(prev => {
+            let changed = false;
+            const next = prev.map(b => {
+                const rate = nightlyRateForBarn(b.id, extraStallFees);
+                if (rate === (b.pricePerNight || 0)) return b;
+                changed = true;
+                return { ...b, pricePerNight: rate };
+            });
+            return changed ? next : prev;
+        });
+    }, [extraStallFees]);
     const [rvAreas, setRvAreas] = useState(() => pd.stallingService?.rvAreas || []);
     // Support Spaces are no longer offered (removed from UI). We still carry any
     // previously-saved data through so it isn't lost, but it's never edited here.
@@ -2265,8 +2373,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // fees (entry, office, admin…) pass through untouched; only stall/RV/supply-type
     // ones are surfaced in the Fees tab. Stored snake_case (the Fee Structure shape).
     const [manualFees, setManualFees] = useState(() => (pd.fees || []).filter(f => f.source !== 'housing'));
-    // Stall-fee row queued for deletion — holds the barn while the confirm dialog is open.
-    const [feeDeleteBarn, setFeeDeleteBarn] = useState(null);
     const updateManualFee = (id, field, value) => setManualFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
     const removeManualFee = (id) => setManualFees(prev => prev.filter(f => f.id !== id));
     // Bridge a snake_case fee to the camelCase shape FeeDetailsFields expects, and
@@ -2388,12 +2494,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const addBarn = () => {
         const letter = String.fromCharCode(65 + barns.length);
         const defaultType = STALL_TYPES[0];
+        const id = uuidv4();
         setBarns(prev => [...prev, {
-            id: uuidv4(),
+            id,
             name: `Barn ${letter}`,
             stallType: defaultType.id,
             stallCount: 10,
-            pricePerNight: defaultType.defaultPrice,
+            // A barn's rate is derived from Per-Night stall fees, never typed here — a
+            // brand new barn starts at whatever an existing "All barns" fee already
+            // gives it (0 if there isn't one yet).
+            pricePerNight: nightlyRateForBarn(id, extraStallFees),
             stallSize: defaultType.defaultSize,
             stalls: Array.from({ length: 10 }, (_, i) => ({
                 id: uuidv4(),
@@ -2421,13 +2531,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setBarns(prev => prev.filter(b => b.id !== barnId));
     };
 
-    // ── Extra stall fees (facility-wide or barn-specific) ──
+    // ── Stall fees (a circuit fee across the facility, or a fee on one or more
+    // barns — a barn's own per-night rate is one of these, unitType 'per_night') ──
     const addExtraStallFee = () => setExtraStallFees(prev => [...prev, {
         id: uuidv4(),
         name: '',
-        appliesTo: 'all',
+        appliesTo: ALL_BARNS,
         amount: 0,
-        unitType: 'per_stall',
+        unitType: 'per_night',
         paymentTiming: 'pre_entry',
         dueDate: '',
         lateFee: 0,
@@ -2437,26 +2548,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setExtraStallFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
     const removeExtraStallFee = (id) =>
         setExtraStallFees(prev => prev.filter(f => f.id !== id));
-    // Plain-language label for the scope dropdown, used in summaries too.
-    const scopeLabel = (fee) => fee.appliesTo === 'all'
-        ? 'All barns'
-        : (barns.find(b => b.id === fee.appliesTo)?.name || 'Barn removed');
-
-    // A Stall Fee row in the Fees tab IS a barn, so deleting the row deletes the
-    // barn and its stalls. Booked stalls block it outright; everything else asks
-    // first and says exactly what goes away.
-    const requestDeleteStallFee = (barn) => {
-        const booked = (barn.stalls || []).filter(s => s.bookingId).length;
-        if (booked > 0) {
-            toast({
-                title: "Can't delete this fee",
-                description: `${barn.name} has ${booked} booked stall${booked === 1 ? '' : 's'}. Move or cancel those bookings first.`,
-                variant: 'destructive',
-            });
-            return;
-        }
-        setFeeDeleteBarn(barn);
-    };
 
     // Duplicate a barn (layout, box types, image, fee details) right below it,
     // with fresh ids and bookings cleared — quick way to make West Barn → Barn B.
@@ -2465,10 +2556,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             const idx = prev.findIndex(b => b.id === barnId);
             if (idx === -1) return prev;
             const src = prev[idx];
+            const newId = uuidv4();
             const copy = {
                 ...src,
-                id: uuidv4(),
+                id: newId,
                 name: `${src.name} (copy)`,
+                // Not src.pricePerNight — the source barn's rate may come from a fee
+                // scoped to its own id specifically, which the copy isn't covered by.
+                // Starts at whatever an "All barns" fee already gives it, same as a
+                // brand new barn; tick the copy into the same fee's scope to match.
+                pricePerNight: nightlyRateForBarn(newId, extraStallFees),
                 stalls: (src.stalls || []).map(s => ({ ...s, id: uuidv4(), bookingId: null })),
             };
             const next = [...prev];
@@ -2483,14 +2580,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             return;
         }
         const defaultBarns = [
-            { name: 'Barn A', type: 'standard', count: 20, price: 75 },
-            { name: 'Barn B', type: 'standard', count: 20, price: 75 },
-            { name: 'Tack Stalls', type: 'tack', count: 10, price: 60 },
+            { id: uuidv4(), name: 'Barn A', type: 'standard', count: 20, price: 75 },
+            { id: uuidv4(), name: 'Barn B', type: 'standard', count: 20, price: 75 },
+            { id: uuidv4(), name: 'Tack Stalls', type: 'tack', count: 10, price: 60 },
         ];
         const generated = defaultBarns.map(b => {
             const typeInfo = STALL_TYPES.find(t => t.id === b.type) || STALL_TYPES[0];
             return {
-                id: uuidv4(),
+                id: b.id,
                 name: b.name,
                 stallType: b.type,
                 stallCount: b.count,
@@ -2508,6 +2605,20 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             };
         });
         setBarns(generated);
+        // A barn's rate must come from a fee, not just the pricePerNight set above —
+        // otherwise it would silently drop to $0 the moment any other fee is edited
+        // (see nightlyRateForBarn). One Per-Night fee per barn, matching its starting price.
+        setExtraStallFees(defaultBarns.map(b => ({
+            id: uuidv4(),
+            name: `${b.name} Rate`,
+            appliesTo: [b.id],
+            amount: b.price,
+            unitType: 'per_night',
+            paymentTiming: 'pre_entry',
+            dueDate: '',
+            lateFee: 0,
+            feeLocked: false,
+        })));
         // Auto-generate an RV area
         setRvAreas([{
             id: uuidv4(),
@@ -2933,14 +3044,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     if (barn) recordDemand(barn.id, barn.name, 'stall');
                 } else if (it.type === 'stall_fee') {
                     // Circuit / flat fees stamped onto the booking. Counted as stall
-                    // money, and against a barn when the fee was barn-specific. A
-                    // facility-wide fee belongs to no single barn, so it is tracked
-                    // separately and shown as its own line under the barn table —
-                    // otherwise the barn rows would not add up to Stalls revenue.
+                    // money, and against a barn when the fee was scoped to exactly one
+                    // barn (it.barnId). A fee spanning several barns or the whole
+                    // facility belongs to no single barn, so it is tracked separately
+                    // and shown as its own line under the barn table — otherwise the
+                    // barn rows would not add up to Stalls revenue.
                     if (isActive) {
                         stallRevenue += itAmt;
                         realizedRevenue += itAmt;
-                        const bs = barnStats.get(it.appliesTo);
+                        const bs = it.barnId ? barnStats.get(it.barnId) : null;
                         if (bs) bs.revenue += itAmt;
                         else facilityFeeRevenue += itAmt;
                     }
@@ -3172,17 +3284,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </table>
                     </div>
 
-                    {/* Extra stall fees are listed but deliberately kept out of the total
-                        above — they are not charged on bookings yet. */}
-                    {extraStallFees.length > 0 && (
+                    {/* Per-Night fees are already folded into the barn rate shown above —
+                        everything else (flat, per-stall, per-horse) is listed here since
+                        it's charged on top, at booking time, not part of the total above. */}
+                    {extraStallFees.some(f => (f.unitType || 'per_stall') !== 'per_night') && (
                         <div className="mt-3 border-t border-indigo-200 dark:border-indigo-800 pt-2 space-y-1">
                             <p className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200">
                                 Extra stall fees <span className="font-normal text-muted-foreground">— charged per booking, not part of the capacity total above</span>
                             </p>
-                            {extraStallFees.map(fee => (
+                            {extraStallFees.filter(f => (f.unitType || 'per_stall') !== 'per_night').map(fee => (
                                 <div key={fee.id} className="flex flex-wrap items-center gap-x-2 text-xs">
                                     <span className="font-medium">{fee.name || 'Stall Fee'}</span>
-                                    <Badge variant="outline" className="text-[10px] font-normal">{scopeLabel(fee)}</Badge>
+                                    <Badge variant="outline" className="text-[10px] font-normal">{scopeLabelForFee(fee, barns)}</Badge>
                                     <span className="text-muted-foreground">
                                         ${(fee.amount || 0).toLocaleString()} · {(FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '')}
                                         {fee.dueDate ? ` · due ${fee.dueDate}` : ''}
@@ -3498,89 +3611,94 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 </p>
                             </div>
 
-                            {/* Stall Fees */}
+                            {/* Stall Fees — every charge on a stall booking. Pick which barns a fee
+                                covers (one, several, or all); tick more than one and it's the same
+                                fee at the same price on each. A barn's own nightly rate is just a
+                                Per Night fee scoped to it — add as many fees per barn as needed and
+                                they add up (e.g. a facility-wide Circuit Fee plus one barn's rate). */}
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <Building2 className="h-4 w-4 text-primary" />
                                         <h4 className="text-sm font-semibold">Stall Fees</h4>
-                                        <Badge variant="outline" className="text-xs">{barns.length + manualFeesByCategory('stall').length}</Badge>
+                                        <Badge variant="outline" className="text-xs">{extraStallFees.length + manualFeesByCategory('stall').length}</Badge>
                                     </div>
-                                    {/* Named for what it really does: each row here IS a barn.
-                                        A fee that isn't a barn belongs in "Extra stall fees" below. */}
-                                    <Button
-                                        onClick={addBarn}
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-7 text-xs"
-                                        title="Creates a new barn in the Inventory tab with its own price. For a fee that is not a barn, use Extra stall fees below."
-                                    >
-                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Barn + Price
+                                    <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
+                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
                                     </Button>
                                 </div>
                                 <p className="text-xs text-muted-foreground -mt-1">
-                                    One row per barn — this is the barn&apos;s own price. A fee that is not tied to one barn goes in <strong>Extra stall fees</strong> below.
+                                    Circuit fee, flat fee, late-entry rate, a barn&apos;s nightly rate — pick which barns each fee applies to. Charged on <strong>new</strong> bookings; bookings already taken keep their original price.
                                 </p>
+
                                 {barns.length === 0 && manualFeesByCategory('stall').length === 0 ? (
-                                    <p className="text-xs text-muted-foreground italic">No barns yet — add one in the Livestock Housing tab, or click "Add Barn + Price".</p>
+                                    <p className="text-xs text-muted-foreground italic">Add a barn first in the Livestock Housing tab, then come back here to set its fee.</p>
                                 ) : (
                                     <div className="space-y-2">
-                                        {barns.map(barn => (
-                                            // feeLocked (this row) is deliberately separate from barn.locked
-                                            // (the Inventory card) — locking the barn must not freeze its price.
-                                            <div key={barn.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', barn.feeLocked && 'opacity-70')}>
+                                        {extraStallFees.length === 0 ? (
+                                            <p className="text-xs text-muted-foreground italic">None yet — click "Add Fee" for a barn's nightly rate, a circuit fee, or a second fee on one barn.</p>
+                                        ) : extraStallFees.map(fee => (
+                                            <div key={fee.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', fee.feeLocked && 'opacity-70')}>
                                                 <div className="flex items-center justify-between gap-2">
-                                                    {/* The fee carries its own label ("Circuit Fee"), independent of the
-                                                        barn name — a barn can hold more than one fee. */}
                                                     <div className="flex items-center gap-1.5 min-w-0 flex-1">
                                                         <Input
-                                                            value={barn.feeLabel || ''}
-                                                            onChange={(e) => updateBarn(barn.id, 'feeLabel', e.target.value)}
-                                                            disabled={barn.feeLocked}
-                                                            placeholder={barn.name}
-                                                            title="Name this fee — leave blank to use the barn name"
+                                                            value={fee.name || ''}
+                                                            onChange={(e) => updateExtraStallFee(fee.id, 'name', e.target.value)}
+                                                            disabled={fee.feeLocked}
+                                                            placeholder="Fee name (e.g. Circuit Fee)"
                                                             className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
                                                         />
-                                                        <Badge variant="outline" className="text-[10px] font-normal shrink-0">{barn.name}</Badge>
-                                                        {barn.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
+                                                        <Badge variant="outline" className="text-[10px] font-normal shrink-0">{scopeLabelForFee(fee, barns)}</Badge>
+                                                        {fee.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
                                                     </div>
                                                     <div className="flex items-center gap-2 shrink-0">
-                                                        <span className="text-xs text-muted-foreground">{(barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stalls</span>
                                                         <SectionLockToggle
-                                                            locked={!!barn.feeLocked}
-                                                            onToggle={() => updateBarn(barn.id, 'feeLocked', !barn.feeLocked)}
+                                                            locked={!!fee.feeLocked}
+                                                            onToggle={() => updateExtraStallFee(fee.id, 'feeLocked', !fee.feeLocked)}
                                                         />
                                                         <Button
                                                             variant="ghost"
                                                             size="icon"
                                                             className="h-6 w-6 text-destructive hover:bg-destructive/10"
-                                                            disabled={barn.feeLocked}
-                                                            title="Delete this stall fee (also removes the barn)"
-                                                            onClick={() => requestDeleteStallFee(barn)}
+                                                            disabled={fee.feeLocked}
+                                                            title="Delete this fee"
+                                                            onClick={() => removeExtraStallFee(fee.id)}
                                                         >
                                                             <Trash2 className="h-3.5 w-3.5" />
                                                         </Button>
                                                     </div>
                                                 </div>
-                                                <fieldset disabled={barn.feeLocked} className="block">
+                                                <fieldset disabled={fee.feeLocked} className="block">
                                                 <FeeDetailsFields
-                                                    item={barn}
-                                                    onUpdate={(field, value) => updateBarn(barn.id, field, value)}
+                                                    item={fee}
+                                                    onUpdate={(field, value) => updateExtraStallFee(fee.id, field, value)}
                                                     unitDefault="per_night"
                                                     showHeader={false}
-                                                    unitOptions={['flat', 'per_night', 'per_stall', 'custom']}
+                                                    unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
+                                                    leadingCols={2}
                                                     leading={(
-                                                        <div className="space-y-1">
-                                                            <Label className="text-xs">Price / Night ($)</Label>
-                                                            <Input
-                                                                type="number"
-                                                                min={0}
-                                                                value={barn.pricePerNight || ''}
-                                                                onChange={(e) => updateBarn(barn.id, 'pricePerNight', parseFloat(e.target.value) || 0)}
-                                                                className="h-8 text-xs"
-                                                                placeholder="$0"
-                                                            />
-                                                        </div>
+                                                        <>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Applies to</Label>
+                                                                <BarnScopePicker
+                                                                    value={fee.appliesTo}
+                                                                    barns={barns}
+                                                                    disabled={fee.feeLocked}
+                                                                    onChange={(val) => updateExtraStallFee(fee.id, 'appliesTo', val)}
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Amount ($)</Label>
+                                                                <Input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    value={fee.amount || ''}
+                                                                    onChange={(e) => updateExtraStallFee(fee.id, 'amount', parseFloat(e.target.value) || 0)}
+                                                                    className="h-8 text-xs"
+                                                                    placeholder="$0"
+                                                                />
+                                                            </div>
+                                                        </>
                                                     )}
                                                 />
                                                 </fieldset>
@@ -3589,105 +3707,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'custom']))}
                                     </div>
                                 )}
-
-                                {/* Extra stall fees — a fee that isn't tied to one barn:
-                                    a circuit fee across the facility, or a second fee on a
-                                    barn that already has a nightly price. */}
-                                <div className="rounded-lg border border-dashed p-3 space-y-3 mt-3">
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div className="min-w-0">
-                                            <h5 className="text-sm font-semibold">Extra stall fees</h5>
-                                            <p className="text-[11px] text-muted-foreground">
-                                                Circuit fee, flat fee, late-entry rate — pick whether it applies to every barn or just one. Charged on <strong>new</strong> bookings; bookings already taken keep their original price.
-                                            </p>
-                                        </div>
-                                        <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
-                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
-                                        </Button>
-                                    </div>
-
-                                    {barns.length === 0 ? (
-                                        <p className="text-xs text-muted-foreground italic">Add a barn first — an extra fee needs something to apply to.</p>
-                                    ) : extraStallFees.length === 0 ? (
-                                        <p className="text-xs text-muted-foreground italic">None yet — click "Add Fee" for a circuit fee or a second fee on one barn.</p>
-                                    ) : (
-                                        <div className="space-y-2">
-                                            {extraStallFees.map(fee => (
-                                                <div key={fee.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', fee.feeLocked && 'opacity-70')}>
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                                            <Input
-                                                                value={fee.name || ''}
-                                                                onChange={(e) => updateExtraStallFee(fee.id, 'name', e.target.value)}
-                                                                disabled={fee.feeLocked}
-                                                                placeholder="Fee name (e.g. Circuit Fee)"
-                                                                className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
-                                                            />
-                                                            <Badge variant="outline" className="text-[10px] font-normal shrink-0">{scopeLabel(fee)}</Badge>
-                                                            {fee.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
-                                                        </div>
-                                                        <div className="flex items-center gap-2 shrink-0">
-                                                            <SectionLockToggle
-                                                                locked={!!fee.feeLocked}
-                                                                onToggle={() => updateExtraStallFee(fee.id, 'feeLocked', !fee.feeLocked)}
-                                                            />
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-6 w-6 text-destructive hover:bg-destructive/10"
-                                                                disabled={fee.feeLocked}
-                                                                title="Delete this fee"
-                                                                onClick={() => removeExtraStallFee(fee.id)}
-                                                            >
-                                                                <Trash2 className="h-3.5 w-3.5" />
-                                                            </Button>
-                                                        </div>
-                                                    </div>
-                                                    <fieldset disabled={fee.feeLocked} className="block">
-                                                    <FeeDetailsFields
-                                                        item={fee}
-                                                        onUpdate={(field, value) => updateExtraStallFee(fee.id, field, value)}
-                                                        unitDefault="per_stall"
-                                                        showHeader={false}
-                                                        unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
-                                                        leadingCols={2}
-                                                        leading={(
-                                                            <>
-                                                                <div className="space-y-1">
-                                                                    <Label className="text-xs">Applies to</Label>
-                                                                    <Select
-                                                                        value={fee.appliesTo || 'all'}
-                                                                        onValueChange={(val) => updateExtraStallFee(fee.id, 'appliesTo', val)}
-                                                                    >
-                                                                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                                                                        <SelectContent>
-                                                                            <SelectItem value="all" className="text-xs">All barns (facility)</SelectItem>
-                                                                            {barns.map(b => (
-                                                                                <SelectItem key={b.id} value={b.id} className="text-xs">{b.name}</SelectItem>
-                                                                            ))}
-                                                                        </SelectContent>
-                                                                    </Select>
-                                                                </div>
-                                                                <div className="space-y-1">
-                                                                    <Label className="text-xs">Amount ($)</Label>
-                                                                    <Input
-                                                                        type="number"
-                                                                        min={0}
-                                                                        value={fee.amount || ''}
-                                                                        onChange={(e) => updateExtraStallFee(fee.id, 'amount', parseFloat(e.target.value) || 0)}
-                                                                        className="h-8 text-xs"
-                                                                        placeholder="$0"
-                                                                    />
-                                                                </div>
-                                                            </>
-                                                        )}
-                                                    />
-                                                    </fieldset>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
                             </div>
 
                             {/* RV & Camping Fees */}
@@ -4064,9 +4083,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         </div>
                                     )}
 
-                                    {/* Extra stall fees — listed, but kept out of Max Revenue
-                                        because they aren't charged on bookings yet. */}
-                                    {extraStallFees.length > 0 && (
+                                    {/* Per-Night fees are already folded into the barn's Price/Night in the
+                                        table above; everything else is charged on top, at booking time. */}
+                                    {extraStallFees.some(f => (f.unitType || 'per_stall') !== 'per_night') && (
                                         <div>
                                             <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
                                                 <DollarSign className="h-4 w-4 text-emerald-600" /> Extra Stall Fees
@@ -4085,10 +4104,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {extraStallFees.map(fee => (
+                                                        {extraStallFees.filter(f => (f.unitType || 'per_stall') !== 'per_night').map(fee => (
                                                             <tr key={fee.id} className="border-b last:border-0">
                                                                 <td className="px-3 py-2 font-medium">{fee.name || 'Stall Fee'}</td>
-                                                                <td className="px-3 py-2">{scopeLabel(fee)}</td>
+                                                                <td className="px-3 py-2">{scopeLabelForFee(fee, barns)}</td>
                                                                 <td className="px-3 py-2 text-right">${(fee.amount || 0).toFixed(2)}</td>
                                                                 <td className="px-3 py-2 text-center text-muted-foreground">
                                                                     {FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '—'}
@@ -4407,20 +4426,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 </TabsContent>
             </Tabs>
 
-            {/* Deleting a Stall Fee row takes its barn with it — name what goes away. */}
-            <ConfirmationDialog
-                isOpen={!!feeDeleteBarn}
-                onClose={() => setFeeDeleteBarn(null)}
-                onConfirm={() => { removeBarn(feeDeleteBarn.id); setFeeDeleteBarn(null); }}
-                title="Delete this stall fee?"
-                description={feeDeleteBarn
-                    ? `"${feeDeleteBarn.name}" is both a fee and a barn, so this also removes its `
-                      + `${(feeDeleteBarn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length} stall(s) from the Inventory tab. This can't be undone.`
-                    : ''}
-                confirmText="Yes, delete"
-                cancelText="Cancel"
-            />
-
             {/* Second step before going live on the public Events page. */}
             <ConfirmationDialog
                 isOpen={confirmPublish}
@@ -4455,9 +4460,7 @@ function feeCategory(f) {
 function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], supplies = [] }) {
     // Scope note carried onto the Fee Structure page so "Circuit Fee" reads as
     // facility-wide there too, without needing the Housing tab open.
-    const scopeNote = (fee) => fee.appliesTo === 'all'
-        ? 'Applies to all barns'
-        : `Applies to ${barns.find(b => b.id === fee.appliesTo)?.name || 'a removed barn'}`;
+    const scopeNote = (fee) => `Applies to ${scopeLabelForFee(fee, barns)}`;
     const make = (sourceType, item, { name, amount, unitDefault }) => ({
         id: `housing-${item.id}`,
         source: 'housing',
@@ -4475,8 +4478,8 @@ function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], suppl
     });
 
     return [
-        // feeLabel is what the organizer typed on the Fees tab; fall back to the area name.
-        ...barns.map(b => make('barn', b, { name: b.feeLabel || b.name, amount: b.pricePerNight, unitDefault: 'per_night' })),
+        // A barn's own nightly rate is just one of these fees (unitType 'per_night',
+        // scoped to that barn) — there is no separate per-barn fee row to sync.
         ...extraStallFees.map(f => ({
             ...make('stall_extra', f, { name: f.name || 'Stall Fee', amount: f.amount, unitDefault: 'per_stall' }),
             notes: [f.notes, scopeNote(f)].filter(Boolean).join(' — '),

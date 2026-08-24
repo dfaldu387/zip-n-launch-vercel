@@ -207,47 +207,10 @@ const ShowStructurePage = () => {
                                 if (projectId === 'none') {
                                     setFormData(prev => ({ ...prev, linkedProjectId: null }));
                                 } else {
-                                    const project = existingProjects.find(p => p.id === projectId);
-                                    const pd = project?.project_data || {};
-                                    const arenasList = pd.arenas || prev.arenas || [];
-                                    setFormData(prev => ({
-                                        ...prev,
-                                        linkedProjectId: projectId,
-                                        showName: pd.showName || prev.showName,
-                                        showNumber: pd.showNumber || prev.showNumber,
-                                        associations: pd.associations || prev.associations,
-                                        customAssociations: pd.customAssociations || prev.customAssociations,
-                                        disciplines: pd.disciplines || prev.disciplines,
-                                        startDate: pd.startDate || prev.startDate,
-                                        endDate: pd.endDate || prev.endDate,
-                                        venueAddress: pd.venueAddress || prev.venueAddress,
-                                        venueName: pd.venueName || prev.venueName,
-                                        arenas: arenasList,
-                                        officials: pd.officials || prev.officials,
-                                        staff: pd.staff || prev.staff,
-                                        sponsorLevels: pd.sponsorLevels || prev.sponsorLevels,
-                                        sponsors: pd.sponsors || prev.sponsors,
-                                        classSponsors: pd.classSponsors || prev.classSponsors,
-                                        arenaSponsors: pd.arenaSponsors || prev.arenaSponsors,
-                                        customSponsors: pd.customSponsors || prev.customSponsors,
-                                        showExpenses: pd.showExpenses || prev.showExpenses,
-                                        awardExpenses: pd.awardExpenses || prev.awardExpenses,
-                                        classAwards: pd.classAwards || prev.classAwards,
-                                        fees: pd.fees || prev.fees,
-                                        showDetails: {
-                                            ...(pd.showDetails || prev.showDetails || {}),
-                                            venue: {
-                                                ...(pd.showDetails?.venue || prev.showDetails?.venue || {}),
-                                                facilityName: pd.venueName || pd.showDetails?.venue?.facilityName || prev.showDetails?.venue?.facilityName || '',
-                                                address: pd.venueAddress || pd.showDetails?.venue?.address || prev.showDetails?.venue?.address || '',
-                                                numberOfArenas: String(arenasList.length || prev.showDetails?.venue?.numberOfArenas || 0),
-                                                arenas: arenasList.map((a, i) => ({
-                                                    id: a.id || `arena-${i}`,
-                                                    name: a.name || `Arena ${i + 1}`,
-                                                })),
-                                            },
-                                        },
-                                    }));
+                                    // Open the linked show directly instead of copying its fields into
+                                    // this unsaved draft — every save from here on updates THAT show,
+                                    // rather than creating a second "Larimer County Fair" project.
+                                    navigate(`/horse-show-manager/show-structure-expenses/${projectId}`, { replace: true });
                                 }
                             }}
                             onDuplicated={(newProject) => {

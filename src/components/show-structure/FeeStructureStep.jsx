@@ -91,7 +91,7 @@ const unitOptionsForFee = (fee) => {
     const id = (fee.standard_id || '').toLowerCase();
     const name = (fee.name || '').toLowerCase();
     let allowed;
-    if (fee.sourceType === 'barn' || id.includes('stall') || name.includes('stall')) allowed = ['flat', 'per_night', 'per_stall', 'custom'];
+    if (fee.sourceType === 'barn' || fee.sourceType === 'stall_extra' || id.includes('stall') || name.includes('stall')) allowed = ['flat', 'per_night', 'per_stall', 'per_horse', 'custom'];
     else if (fee.sourceType === 'rv' || id.includes('rv') || name.includes('rv') || name.includes('camp')) allowed = ['flat', 'per_night', 'custom'];
     else if (fee.sourceType === 'supply') allowed = ['flat', 'per_bag', 'per_night', 'custom'];
     else if (fee.type === 'per_class' || id.includes('class')) allowed = ['flat', 'per_class', 'custom'];
@@ -390,14 +390,21 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
     };
 
     // Edit a Housing-generated fee here and write the change back to its inventory
-    // item (barn / RV / supply) so the Housing page stays the source of truth and
-    // the next Housing save won't overwrite it. Maps snake_case → camelCase.
+    // item (barn / RV / supply / stall fee) so the Housing page stays the source of
+    // truth and the next Housing save won't overwrite it. Maps snake_case → camelCase.
     const updateHousingFee = (id, field, value) => {
         setFormData(prev => {
             const fees = (prev.fees || []).map(f => f.id === id ? { ...f, [field]: value } : f);
             const fee = (prev.fees || []).find(f => f.id === id);
             if (!fee || fee.source !== 'housing') return { ...prev, fees };
-            const listKey = fee.sourceType === 'barn' ? 'barns' : fee.sourceType === 'rv' ? 'rvAreas' : fee.sourceType === 'supply' ? 'supplies' : null;
+            // 'stall_extra' covers every stall fee, including a barn's own nightly
+            // rate — there's no separate 'barn' fee row anymore, only legacy data
+            // from before that change might still carry the old sourceType.
+            const listKey = fee.sourceType === 'barn' ? 'barns'
+                : fee.sourceType === 'rv' ? 'rvAreas'
+                : fee.sourceType === 'supply' ? 'supplies'
+                : fee.sourceType === 'stall_extra' ? 'extraStallFees'
+                : null;
             if (!listKey) return { ...prev, fees };
             const ss = prev.stallingService || {};
             const patchFor = (item) => {
@@ -406,6 +413,7 @@ export const FeeStructureStep = ({ formData, setFormData }) => {
                         const n = parseFloat(value) || 0;
                         if (fee.sourceType === 'supply') return { price: n };
                         if (fee.sourceType === 'rv' && item.pricingModel === 'flat') return { flatRate: n };
+                        if (fee.sourceType === 'stall_extra') return { amount: n };
                         return { pricePerNight: n };
                     }
                     case 'unit_type': return { unitType: value };
