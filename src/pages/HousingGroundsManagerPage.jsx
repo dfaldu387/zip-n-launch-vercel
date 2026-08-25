@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, Suspense, lazy } from 'react';
+import { createPortal } from 'react-dom';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import Navigation from '@/components/Navigation';
@@ -10,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -35,7 +36,6 @@ import { LogoUploader } from '@/components/show-structure/LogoUploader';
 import AddBookingDialog from '@/components/housing/AddBookingDialog';
 import MasterListPanel from '@/components/housing/MasterListPanel';
 import AssignBoard from '@/components/housing/AssignBoard';
-import ConflictAlertsPanel from '@/components/housing/ConflictAlertsPanel';
 // Recharts is ~355 KB and the charts only appear on the Analytics tab, and only
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
@@ -94,6 +94,73 @@ const SUPPLY_PRESETS = [
     // front (not bought at the show), so it defaults to per-stall + pre-entry.
     { name: 'Pre-Bedding (Shavings)', unit: 'per stall', defaultPrice: 25, preBedding: true },
 ];
+
+// Cycled across the top KPI row so each section's stat cards stay visually
+// distinct without hand-picking a color per card (some sections, like
+// Inventory's per-supply cards, have a variable number of cards).
+const STAT_COLOR_PALETTE = [
+    { bg: 'bg-blue-50 dark:bg-blue-950/20', border: 'border-blue-200 dark:border-blue-800', text: 'text-blue-700 dark:text-blue-300' },
+    { bg: 'bg-cyan-50 dark:bg-cyan-950/20', border: 'border-cyan-200 dark:border-cyan-800', text: 'text-cyan-700 dark:text-cyan-300' },
+    { bg: 'bg-purple-50 dark:bg-purple-950/20', border: 'border-purple-200 dark:border-purple-800', text: 'text-purple-700 dark:text-purple-300' },
+    { bg: 'bg-emerald-50 dark:bg-emerald-950/20', border: 'border-emerald-200 dark:border-emerald-800', text: 'text-emerald-700 dark:text-emerald-300' },
+    { bg: 'bg-amber-50 dark:bg-amber-950/20', border: 'border-amber-200 dark:border-amber-800', text: 'text-amber-700 dark:text-amber-300' },
+    { bg: 'bg-rose-50 dark:bg-rose-950/20', border: 'border-rose-200 dark:border-rose-800', text: 'text-rose-700 dark:text-rose-300' },
+    { bg: 'bg-indigo-50 dark:bg-indigo-950/20', border: 'border-indigo-200 dark:border-indigo-800', text: 'text-indigo-700 dark:text-indigo-300' },
+    { bg: 'bg-violet-50 dark:bg-violet-950/20', border: 'border-violet-200 dark:border-violet-800', text: 'text-violet-700 dark:text-violet-300' },
+];
+
+// Shown above both Livestock Housing and RV & Camping — it's one global window
+// (not per-type), just surfaced in both places so it's visible no matter which
+// section someone scrolls to first.
+const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => (
+    <Card className="border-l-4 border-l-indigo-500">
+        <CardContent className="py-4">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div className="flex flex-wrap items-end gap-4">
+                    <div className="flex items-center gap-2 pb-1.5">
+                        <Calendar className="h-4 w-4 text-indigo-500" />
+                        <span className="text-sm font-semibold">Move-in / Move-out</span>
+                    </div>
+                    <div className="space-y-1">
+                        <Label className="text-xs">Move-in date</Label>
+                        <Input
+                            type="date"
+                            value={moveInDate}
+                            max={moveOutDate || undefined}
+                            disabled={datesLocked}
+                            onChange={(e) => setMoveInDate(e.target.value)}
+                            className="h-8 text-xs w-44"
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <Label className="text-xs">Move-out date</Label>
+                        <Input
+                            type="date"
+                            value={moveOutDate}
+                            min={moveInDate || undefined}
+                            disabled={datesLocked}
+                            onChange={(e) => setMoveOutDate(e.target.value)}
+                            className="h-8 text-xs w-44"
+                        />
+                    </div>
+                </div>
+                <Button
+                    type="button"
+                    variant={datesLocked ? 'default' : 'outline'}
+                    size="sm"
+                    className={cn('h-8 text-xs gap-1', datesLocked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+                    onClick={() => setDatesLocked(v => !v)}
+                >
+                    <Lock className="h-3.5 w-3.5" />
+                    {datesLocked ? 'Locked — click to edit' : 'Lock dates'}
+                </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-2">
+                Exhibitors can only choose arrival &amp; departure dates inside this window when booking.
+            </p>
+        </CardContent>
+    </Card>
+);
 
 // Fee-detail options — kept in sync with FeeStructureStep so the questions
 // (Unit Type, Payment Timing) look and read identically on both pages.
@@ -648,7 +715,7 @@ const StallMap = ({
 
 // ── Barn/Area Card ──
 
-const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId, liveBookingIds }) => {
+const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId, liveBookingIds, moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const { toast } = useToast();
     const fileInputRef = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
@@ -831,6 +898,14 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
             {expanded && (
                 <CardContent className="pt-2">
                   <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                    <MoveInOutCard
+                        moveInDate={moveInDate}
+                        moveOutDate={moveOutDate}
+                        datesLocked={datesLocked}
+                        setMoveInDate={setMoveInDate}
+                        setMoveOutDate={setMoveOutDate}
+                        setDatesLocked={setDatesLocked}
+                    />
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div className="space-y-1">
                             <Label className="text-xs">Housing Type</Label>
@@ -1152,7 +1227,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 //   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
     const pricingModel = rvArea.pricingModel || 'nightly';
     // Inventory and fees lock independently: locking the area in the Inventory tab
@@ -1218,6 +1293,14 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory' }) => {
             {expanded && variant === 'inventory' && (
                 <CardContent className="pt-2">
                   <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                    <MoveInOutCard
+                        moveInDate={moveInDate}
+                        moveOutDate={moveOutDate}
+                        datesLocked={datesLocked}
+                        setMoveInDate={setMoveInDate}
+                        setMoveOutDate={setMoveOutDate}
+                        setDatesLocked={setDatesLocked}
+                    />
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                         <div className="space-y-1">
                             <Label className="text-xs"># of Camping Spots</Label>
@@ -2298,12 +2381,97 @@ export const migrateBarnPricesToFees = (barnList, feeList) => {
     return migrated;
 };
 
+// A single Stall Fee row — collapsible like an RvAreaCard fee row, so a long
+// list of fees (circuit fee, per-barn rates, late fees...) can be tidied away.
+const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
+    const [expanded, setExpanded] = useState(true);
+    return (
+        <div className={cn('rounded-lg border border-l-4 border-l-blue-500 bg-muted/20 p-3 space-y-2', fee.feeLocked && 'opacity-70')}>
+            <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        title={expanded ? 'Minimize fee' : 'Open fee'}
+                        onClick={() => setExpanded(!expanded)}
+                    >
+                        {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                    </Button>
+                    <Input
+                        value={fee.name || ''}
+                        onChange={(e) => onUpdateField('name', e.target.value)}
+                        disabled={fee.feeLocked}
+                        placeholder="Fee name (e.g. Circuit Fee)"
+                        className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
+                    />
+                    <Badge variant="outline" className="text-[10px] font-normal shrink-0">{scopeLabelForFee(fee, barns)}</Badge>
+                    {fee.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                    <SectionLockToggle
+                        locked={!!fee.feeLocked}
+                        onToggle={() => onUpdateField('feeLocked', !fee.feeLocked)}
+                    />
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-destructive hover:bg-destructive/10"
+                        disabled={fee.feeLocked}
+                        title="Delete this fee"
+                        onClick={onRemove}
+                    >
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                </div>
+            </div>
+            {expanded && (
+                <fieldset disabled={fee.feeLocked} className="block">
+                    <FeeDetailsFields
+                        item={fee}
+                        onUpdate={onUpdateField}
+                        unitDefault="per_night"
+                        showHeader={false}
+                        unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
+                        leadingCols={2}
+                        leading={(
+                            <>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Applies to</Label>
+                                    <BarnScopePicker
+                                        value={fee.appliesTo}
+                                        barns={barns}
+                                        disabled={fee.feeLocked}
+                                        onChange={(val) => onUpdateField('appliesTo', val)}
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Amount ($)</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        value={fee.amount || ''}
+                                        onChange={(e) => onUpdateField('amount', parseFloat(e.target.value) || 0)}
+                                        className="h-8 text-xs"
+                                        placeholder="$0"
+                                    />
+                                </div>
+                            </>
+                        )}
+                    />
+                </fieldset>
+            )}
+        </div>
+    );
+};
+
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, sectionSelectContainer }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const showNights = getShowNights(pd);
+    const [activeSection, setActiveSection] = useState('inventory');
 
     // Stall fees: a circuit fee across the whole facility, a fee on one or several
     // barns, or a barn's own per-night rate. appliesTo is 'all' (every barn) or an
@@ -2859,7 +3027,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // ── Stats ──
     const totalStalls = barns.reduce((sum, b) => sum + (b.stallCount || 0), 0);
     const totalRvSpots = rvAreas.reduce((sum, r) => sum + (r.spotCount || 0), 0);
-    const totalBookings = bookings.length;
     const confirmedOnly = bookings.filter(b => b.status === 'confirmed').length;
     const checkedInOnly = bookings.filter(b => b.status === 'checked_in').length;
     // "Confirmed" stat shows confirmed-status only.
@@ -3163,6 +3330,95 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [barns, extraStallFees, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
+    // KPI row at the top of the dashboard — the cards shown change with whichever
+    // section is picked in the dropdown, so each section highlights numbers that
+    // are actually relevant to it instead of one fixed set for every section.
+    const sectionStats = useMemo(() => {
+        switch (activeSection) {
+            case 'inventory': {
+                const cards = [
+                    { label: 'Stalls', value: totalStalls },
+                    { label: 'RV Spots', value: totalRvSpots },
+                ];
+                if (supportSpaces.length > 0) cards.push({ label: 'Support Spaces', value: supportSpaces.length });
+
+                // Always show these common supply types so the row isn't empty before
+                // anything's been added — the most commonly ordered show supplies.
+                const DEFAULT_SUPPLY_LABELS = ['Hay (Grass)', 'Shavings', 'Stall Mat Rental'];
+                const suppliesByName = new Map(supplies.map(s => [(s.name || '').trim().toLowerCase(), s]));
+                DEFAULT_SUPPLY_LABELS.forEach(label => {
+                    const key = label.toLowerCase();
+                    const match = suppliesByName.get(key);
+                    cards.push({ label, value: match?.stockQty || 0 });
+                    if (match) suppliesByName.delete(key);
+                });
+                // Any other supplies actually added — custom names, Hay (Alfalfa), etc.
+                suppliesByName.forEach(s => cards.push({ label: s.name || 'Supply', value: s.stockQty || 0 }));
+
+                return cards;
+            }
+            case 'fees':
+                return [
+                    { label: 'Barns Priced', value: barns.length },
+                    { label: 'RV Areas Priced', value: rvAreas.length },
+                    { label: 'Extra Stall Fees', value: extraStallFees.length },
+                    { label: 'Supplies Priced', value: supplies.length },
+                ];
+            case 'pricing':
+                return [
+                    { label: 'Projected Revenue', value: `$${projectedRevenue.toLocaleString()}` },
+                    { label: 'Total Units', value: totalStalls + totalRvSpots },
+                    { label: 'Show Nights', value: showNights },
+                    { label: 'Extra Stall Fees', value: extraStallFees.length },
+                ];
+            case 'bookings':
+                return [
+                    { label: 'Bookings', value: stallBookings.length },
+                    { label: 'Confirmed', value: confirmedOnly },
+                    { label: 'Checked In', value: checkedInOnly },
+                    { label: 'Occupancy', value: `${occupancyRate}%` },
+                ];
+            case 'supplyorders': {
+                const delivered = liveSupplyOrders.filter(isDelivered).length;
+                return [
+                    { label: 'Live Orders', value: liveSupplyOrders.length },
+                    { label: 'Delivered', value: delivered },
+                    { label: 'Pending', value: liveSupplyOrders.length - delivered },
+                ];
+            }
+            case 'masterlist': {
+                const totalHorses = stallBookings.reduce(
+                    (sum, b) => sum + (b.horseCount != null ? b.horseCount : (b.horseNames || []).length), 0
+                );
+                return [
+                    { label: 'Exhibitors', value: stallBookings.length },
+                    { label: 'Horses', value: totalHorses },
+                    { label: 'Confirmed', value: confirmedOnly },
+                    { label: 'Checked In', value: checkedInOnly },
+                ];
+            }
+            case 'assign':
+                return [
+                    { label: 'Stalls Assigned', value: `${occupiedStalls} / ${totalStalls}` },
+                    { label: 'RV Spots Assigned', value: `${occupiedRvSpots} / ${totalRvSpots}` },
+                ];
+            case 'analytics':
+            default:
+                return [
+                    { label: 'Stalls', value: totalStalls },
+                    { label: 'RV Spots', value: totalRvSpots },
+                    { label: 'Bookings', value: stallBookings.length },
+                    { label: 'Confirmed', value: confirmedOnly },
+                    { label: 'Occupancy', value: `${occupancyRate}%` },
+                    { label: 'Projected Revenue', value: `$${projectedRevenue.toLocaleString()}` },
+                ];
+        }
+    }, [
+        activeSection, totalStalls, totalRvSpots, supportSpaces, supplies, barns, rvAreas,
+        extraStallFees, projectedRevenue, showNights, stallBookings, confirmedOnly, checkedInOnly,
+        occupancyRate, liveSupplyOrders, occupiedStalls, occupiedRvSpots,
+    ]);
+
     return (
         <div className="space-y-6">
             {/* Read-only banner (Locked or Published) */}
@@ -3175,152 +3431,40 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 </div>
             )}
 
-            {/* Conflict & capacity alerts */}
-            <ConflictAlertsPanel
-                bookings={bookings}
-                barns={barns}
-                rvAreas={rvAreas}
-                showInfo={pd?.showDetails?.general || pd}
-            />
-
-            {/* KPIs */}
+            {/* KPIs — the cards shown depend on the section picked in the dropdown above */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                <div className="rounded-xl border p-4 bg-blue-50 dark:bg-blue-950/20 border-blue-200">
-                    <p className="text-xs font-medium text-muted-foreground uppercase">Stalls</p>
-                    <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">{totalStalls}</p>
-                </div>
-                <div className="rounded-xl border p-4 bg-cyan-50 dark:bg-cyan-950/20 border-cyan-200">
-                    <p className="text-xs font-medium text-muted-foreground uppercase">RV Spots</p>
-                    <p className="text-2xl font-bold text-cyan-700 dark:text-cyan-300">{totalRvSpots}</p>
-                </div>
-                <div className="rounded-xl border p-4 bg-purple-50 dark:bg-purple-950/20 border-purple-200">
-                    <p className="text-xs font-medium text-muted-foreground uppercase">Bookings</p>
-                    <p className="text-2xl font-bold text-purple-700 dark:text-purple-300">{totalBookings}</p>
-                </div>
-                <div className="rounded-xl border p-4 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200">
-                    <p className="text-xs font-medium text-muted-foreground uppercase">Confirmed</p>
-                    <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{confirmedOnly}</p>
-                    {checkedInOnly > 0 && (
-                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
-                            +{checkedInOnly} checked in
-                        </p>
-                    )}
-                </div>
-                <div className="rounded-xl border p-4 bg-amber-50 dark:bg-amber-950/20 border-amber-200">
-                    <p className="text-xs font-medium text-muted-foreground uppercase">Occupancy</p>
-                    <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{occupancyRate}%</p>
-                </div>
-                <div className="rounded-xl border p-4 bg-rose-50 dark:bg-rose-950/20 border-rose-200">
-                    <p className="text-xs font-medium text-muted-foreground uppercase">Projected Revenue</p>
-                    <p className="text-2xl font-bold text-rose-700 dark:text-rose-300">${projectedRevenue.toLocaleString()}</p>
-                </div>
+                {sectionStats.map((stat, i) => {
+                    const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
+                    return (
+                        <div key={stat.label} className={cn('rounded-xl border p-4', palette.bg, palette.border)}>
+                            <p className="text-xs font-medium text-muted-foreground uppercase">{stat.label}</p>
+                            <p className={cn('text-2xl font-bold', palette.text)}>{stat.value}</p>
+                        </div>
+                    );
+                })}
             </div>
 
-            {/* Stall Fee Summary */}
-            {(barns.length > 0 || rvAreas.length > 0 || supportSpaces.length > 0) && showNights > 0 && (
-                <div className="rounded-xl border p-4 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/30 dark:to-blue-950/30 border-indigo-200 dark:border-indigo-800">
-                    <div className="flex items-center gap-2 mb-3">
-                        <Moon className="h-4 w-4 text-indigo-600" />
-                        <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">Stall Fee Calculator</h3>
-                        <Badge variant="outline" className="text-[10px] ml-auto">
-                            {pd.startDate && new Date(pd.startDate).toLocaleDateString()} — {pd.endDate && new Date(pd.endDate).toLocaleDateString()}
-                        </Badge>
-                    </div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="text-xs text-muted-foreground uppercase">
-                                    <th className="text-left px-2 py-1 font-medium">Barn / Area</th>
-                                    <th className="text-right px-2 py-1 font-medium">Price / Night</th>
-                                    <th className="text-center px-2 py-1 font-medium">Nights</th>
-                                    <th className="text-right px-2 py-1 font-medium">Per Stall Total</th>
-                                    <th className="text-center px-2 py-1 font-medium">Stalls</th>
-                                    <th className="text-right px-2 py-1 font-medium">Max Revenue</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {barns.map(barn => {
-                                    const perStall = (barn.pricePerNight || 0) * showNights;
-                                    const maxRev = perStall * (barn.stallCount || 0);
-                                    return (
-                                        <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                            <td className="px-2 py-1.5 font-medium">{barn.name}</td>
-                                            <td className="px-2 py-1.5 text-right">${(barn.pricePerNight || 0).toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{showNights}</td>
-                                            <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{barn.stallCount || 0}</td>
-                                            <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
-                                        </tr>
-                                    );
-                                })}
-                                {rvAreas.map(rv => {
-                                    const isFlat = rvIsFlat(rv);
-                                    const perSpot = rvPerSpotTotal(rv, showNights);
-                                    const maxRev = perSpot * (rv.spotCount || 0);
-                                    return (
-                                        <tr key={rv.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                            <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV{isFlat ? ' · flat' : ''})</span></td>
-                                            <td className="px-2 py-1.5 text-right">${rvUnitPrice(rv).toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
-                                            <td className="px-2 py-1.5 text-right font-semibold">${perSpot.toFixed(0)}</td>
-                                            <td className="px-2 py-1.5 text-center">{rv.spotCount || 0}</td>
-                                            <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                            <tfoot>
-                                <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
-                                    <td className="px-2 py-1.5" colSpan={4}>Total</td>
-                                    <td className="px-2 py-1.5 text-center">{totalUnits}</td>
-                                    <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
-                                        ${(
-                                            barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0)
-                                            + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights)), 0)
-                                        ).toLocaleString()}
-                                    </td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-
-                    {/* Per-Night fees are already folded into the barn rate shown above —
-                        everything else (flat, per-stall, per-horse) is listed here since
-                        it's charged on top, at booking time, not part of the total above. */}
-                    {extraStallFees.some(f => (f.unitType || 'per_stall') !== 'per_night') && (
-                        <div className="mt-3 border-t border-indigo-200 dark:border-indigo-800 pt-2 space-y-1">
-                            <p className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200">
-                                Extra stall fees <span className="font-normal text-muted-foreground">— charged per booking, not part of the capacity total above</span>
-                            </p>
-                            {extraStallFees.filter(f => (f.unitType || 'per_stall') !== 'per_night').map(fee => (
-                                <div key={fee.id} className="flex flex-wrap items-center gap-x-2 text-xs">
-                                    <span className="font-medium">{fee.name || 'Stall Fee'}</span>
-                                    <Badge variant="outline" className="text-[10px] font-normal">{scopeLabelForFee(fee, barns)}</Badge>
-                                    <span className="text-muted-foreground">
-                                        ${(fee.amount || 0).toLocaleString()} · {(FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '')}
-                                        {fee.dueDate ? ` · due ${fee.dueDate}` : ''}
-                                        {fee.lateFee ? ` · late +$${fee.lateFee}` : ''}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
+            {sectionSelectContainer && createPortal(
+                <Select value={activeSection} onValueChange={setActiveSection}>
+                    <SelectTrigger className="w-full sm:w-64">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="inventory">Inventory</SelectItem>
+                        <SelectItem value="fees">Fees</SelectItem>
+                        <SelectItem value="pricing">Pricing Summary</SelectItem>
+                        <SelectItem value="bookings">Bookings ({stallBookings.length})</SelectItem>
+                        <SelectItem value="supplyorders">Hay &amp; Shavings ({liveSupplyOrders.length})</SelectItem>
+                        <SelectItem value="masterlist">Master List</SelectItem>
+                        <SelectItem value="assign">Assign Stalls</SelectItem>
+                        <SelectItem value="analytics">Analytics</SelectItem>
+                    </SelectContent>
+                </Select>,
+                sectionSelectContainer
             )}
 
-            <Tabs defaultValue="inventory">
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                    <TabsList>
-                        <TabsTrigger value="inventory">Inventory</TabsTrigger>
-                        <TabsTrigger value="fees">Fees</TabsTrigger>
-                        <TabsTrigger value="pricing">Pricing Summary</TabsTrigger>
-                        <TabsTrigger value="bookings">Bookings ({stallBookings.length})</TabsTrigger>
-                        <TabsTrigger value="supplyorders">Hay &amp; Shavings ({liveSupplyOrders.length})</TabsTrigger>
-                        <TabsTrigger value="masterlist">Master List</TabsTrigger>
-                        <TabsTrigger value="assign">Assign Stalls</TabsTrigger>
-                        <TabsTrigger value="analytics">Analytics</TabsTrigger>
-                    </TabsList>
-
+            <Tabs value={activeSection} onValueChange={setActiveSection}>
+                <div className="flex items-center justify-start flex-wrap gap-3">
                     {/* Lifecycle status + auto-save (Draft / Locked / Published) */}
                     <div className="flex items-center gap-2 sm:gap-3 rounded-full border bg-background px-2.5 py-1.5 shadow-sm">
                         <div className="flex items-center rounded-full bg-muted p-0.5">
@@ -3363,83 +3507,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     </div>
                 </div>
 
-                {/* Event cover image — outside the editor so it stays editable even when Published. */}
-                <Card className="mt-4 border-l-4 border-l-pink-500">
-                    <CardContent className="py-3 flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                            {pd.coverImageUrl ? (
-                                <img src={pd.coverImageUrl} alt="Event cover" className="h-12 w-20 rounded object-cover border" />
-                            ) : (
-                                <div className="h-12 w-20 rounded border bg-muted flex items-center justify-center">
-                                    <ImagePlus className="h-5 w-5 text-muted-foreground" />
-                                </div>
-                            )}
-                            <div>
-                                <p className="text-sm font-semibold">Event cover image</p>
-                                <p className="text-[11px] text-muted-foreground">Shown on the public Events page card. Optional — a colored banner is used if none.</p>
-                            </div>
-                        </div>
-                        <LogoUploader
-                            fieldId="cover"
-                            showId={show.id}
-                            currentLogoUrl={pd.coverImageUrl || ''}
-                            onUploadComplete={(url) => onUpdateCover && onUpdateCover(url)}
-                        />
-                    </CardContent>
-                </Card>
-
                 {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
                 <TabsContent value="inventory" className="mt-4">
                           <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && 'opacity-70')}>
-                            {/* Move-in / Move-out window — exhibitors can only book inside these dates. */}
-                            <Card className="border-l-4 border-l-indigo-500">
-                                <CardContent className="py-4">
-                                    <div className="flex flex-wrap items-end justify-between gap-4">
-                                        <div className="flex flex-wrap items-end gap-4">
-                                            <div className="flex items-center gap-2 pb-1.5">
-                                                <Calendar className="h-4 w-4 text-indigo-500" />
-                                                <span className="text-sm font-semibold">Move-in / Move-out</span>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">Move-in date</Label>
-                                                <Input
-                                                    type="date"
-                                                    value={moveInDate}
-                                                    max={moveOutDate || undefined}
-                                                    disabled={datesLocked}
-                                                    onChange={(e) => setMoveInDate(e.target.value)}
-                                                    className="h-8 text-xs w-44"
-                                                />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">Move-out date</Label>
-                                                <Input
-                                                    type="date"
-                                                    value={moveOutDate}
-                                                    min={moveInDate || undefined}
-                                                    disabled={datesLocked}
-                                                    onChange={(e) => setMoveOutDate(e.target.value)}
-                                                    className="h-8 text-xs w-44"
-                                                />
-                                            </div>
-                                        </div>
-                                        <Button
-                                            type="button"
-                                            variant={datesLocked ? 'default' : 'outline'}
-                                            size="sm"
-                                            className={cn('h-8 text-xs gap-1', datesLocked && 'bg-amber-500 hover:bg-amber-600 text-white')}
-                                            onClick={() => setDatesLocked(v => !v)}
-                                        >
-                                            <Lock className="h-3.5 w-3.5" />
-                                            {datesLocked ? 'Locked — click to edit' : 'Lock dates'}
-                                        </Button>
-                                    </div>
-                                    <p className="text-[11px] text-muted-foreground mt-2">
-                                        Exhibitors can only choose arrival &amp; departure dates inside this window when booking.
-                                    </p>
-                                </CardContent>
-                            </Card>
-
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Building2 className="h-5 w-5 text-primary" />
@@ -3448,7 +3518,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <Button onClick={addBarn} variant="outline" size="sm">
-                                        <Plus className="h-4 w-4 mr-1.5" /> Add Area
+                                        <Plus className="h-4 w-4 mr-1.5" /> Add Barn
                                     </Button>
                                     <Button onClick={autoGenerateBarns} variant="outline" size="sm">
                                         <Wand2 className="h-4 w-4 mr-1.5" /> Auto-Generate
@@ -3461,7 +3531,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 <Card>
                                     <CardContent className="py-10 text-center">
                                         <Warehouse className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                                        <p className="text-sm text-muted-foreground">No livestock housing configured. Click "Add Area" or "Auto-Generate" to get started.</p>
+                                        <p className="text-sm text-muted-foreground">No livestock housing configured. Click "Add Barn" or "Auto-Generate" to get started.</p>
                                     </CardContent>
                                 </Card>
                             ) : (
@@ -3476,6 +3546,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onRemove={() => removeBarn(barn.id)}
                                             onDuplicate={() => duplicateBarn(barn.id)}
                                             liveBookingIds={liveBookingIds}
+                                            moveInDate={moveInDate}
+                                            moveOutDate={moveOutDate}
+                                            datesLocked={datesLocked}
+                                            setMoveInDate={setMoveInDate}
+                                            setMoveOutDate={setMoveOutDate}
+                                            setDatesLocked={setDatesLocked}
                                         />
                                     ))}
                                 </div>
@@ -3509,6 +3585,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             rvArea={rv}
                                             onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
                                             onRemove={() => removeRvArea(rv.id)}
+                                            moveInDate={moveInDate}
+                                            moveOutDate={moveOutDate}
+                                            datesLocked={datesLocked}
+                                            setMoveInDate={setMoveInDate}
+                                            setMoveOutDate={setMoveOutDate}
+                                            setDatesLocked={setDatesLocked}
                                         />
                                     ))}
                                 </div>
@@ -3638,71 +3720,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         {extraStallFees.length === 0 ? (
                                             <p className="text-xs text-muted-foreground italic">None yet — click "Add Fee" for a barn's nightly rate, a circuit fee, or a second fee on one barn.</p>
                                         ) : extraStallFees.map(fee => (
-                                            <div key={fee.id} className={cn('rounded-lg border bg-muted/20 p-3 space-y-2', fee.feeLocked && 'opacity-70')}>
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                                        <Input
-                                                            value={fee.name || ''}
-                                                            onChange={(e) => updateExtraStallFee(fee.id, 'name', e.target.value)}
-                                                            disabled={fee.feeLocked}
-                                                            placeholder="Fee name (e.g. Circuit Fee)"
-                                                            className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
-                                                        />
-                                                        <Badge variant="outline" className="text-[10px] font-normal shrink-0">{scopeLabelForFee(fee, barns)}</Badge>
-                                                        {fee.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
-                                                    </div>
-                                                    <div className="flex items-center gap-2 shrink-0">
-                                                        <SectionLockToggle
-                                                            locked={!!fee.feeLocked}
-                                                            onToggle={() => updateExtraStallFee(fee.id, 'feeLocked', !fee.feeLocked)}
-                                                        />
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-6 w-6 text-destructive hover:bg-destructive/10"
-                                                            disabled={fee.feeLocked}
-                                                            title="Delete this fee"
-                                                            onClick={() => removeExtraStallFee(fee.id)}
-                                                        >
-                                                            <Trash2 className="h-3.5 w-3.5" />
-                                                        </Button>
-                                                    </div>
-                                                </div>
-                                                <fieldset disabled={fee.feeLocked} className="block">
-                                                <FeeDetailsFields
-                                                    item={fee}
-                                                    onUpdate={(field, value) => updateExtraStallFee(fee.id, field, value)}
-                                                    unitDefault="per_night"
-                                                    showHeader={false}
-                                                    unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
-                                                    leadingCols={2}
-                                                    leading={(
-                                                        <>
-                                                            <div className="space-y-1">
-                                                                <Label className="text-xs">Applies to</Label>
-                                                                <BarnScopePicker
-                                                                    value={fee.appliesTo}
-                                                                    barns={barns}
-                                                                    disabled={fee.feeLocked}
-                                                                    onChange={(val) => updateExtraStallFee(fee.id, 'appliesTo', val)}
-                                                                />
-                                                            </div>
-                                                            <div className="space-y-1">
-                                                                <Label className="text-xs">Amount ($)</Label>
-                                                                <Input
-                                                                    type="number"
-                                                                    min={0}
-                                                                    value={fee.amount || ''}
-                                                                    onChange={(e) => updateExtraStallFee(fee.id, 'amount', parseFloat(e.target.value) || 0)}
-                                                                    className="h-8 text-xs"
-                                                                    placeholder="$0"
-                                                                />
-                                                            </div>
-                                                        </>
-                                                    )}
-                                                />
-                                                </fieldset>
-                                            </div>
+                                            <ExtraStallFeeRow
+                                                key={fee.id}
+                                                fee={fee}
+                                                barns={barns}
+                                                onUpdateField={(field, value) => updateExtraStallFee(fee.id, field, value)}
+                                                onRemove={() => removeExtraStallFee(fee.id)}
+                                            />
                                         ))}
                                         {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'custom']))}
                                     </div>
@@ -3997,6 +4021,97 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
                 {/* ── Pricing Summary Tab ── */}
                 <TabsContent value="pricing" className="mt-4 space-y-4">
+                    {(barns.length > 0 || rvAreas.length > 0 || supportSpaces.length > 0) && showNights > 0 && (
+                        <div className="rounded-xl border p-4 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/30 dark:to-blue-950/30 border-indigo-200 dark:border-indigo-800">
+                            <div className="flex items-center gap-2 mb-3">
+                                <Moon className="h-4 w-4 text-indigo-600" />
+                                <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">Stall Fee Calculator</h3>
+                                <Badge variant="outline" className="text-[10px] ml-auto">
+                                    {pd.startDate && new Date(pd.startDate).toLocaleDateString()} — {pd.endDate && new Date(pd.endDate).toLocaleDateString()}
+                                </Badge>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="text-xs text-muted-foreground uppercase">
+                                            <th className="text-left px-2 py-1 font-medium">Barn / Area</th>
+                                            <th className="text-right px-2 py-1 font-medium">Price / Night</th>
+                                            <th className="text-center px-2 py-1 font-medium">Nights</th>
+                                            <th className="text-right px-2 py-1 font-medium">Per Stall Total</th>
+                                            <th className="text-center px-2 py-1 font-medium">Stalls</th>
+                                            <th className="text-right px-2 py-1 font-medium">Max Revenue</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {barns.map(barn => {
+                                            const perStall = (barn.pricePerNight || 0) * showNights;
+                                            const maxRev = perStall * (barn.stallCount || 0);
+                                            return (
+                                                <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
+                                                    <td className="px-2 py-1.5 font-medium">{barn.name}</td>
+                                                    <td className="px-2 py-1.5 text-right">${(barn.pricePerNight || 0).toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-center">{showNights}</td>
+                                                    <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-center">{barn.stallCount || 0}</td>
+                                                    <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                        {rvAreas.map(rv => {
+                                            const isFlat = rvIsFlat(rv);
+                                            const perSpot = rvPerSpotTotal(rv, showNights);
+                                            const maxRev = perSpot * (rv.spotCount || 0);
+                                            return (
+                                                <tr key={rv.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
+                                                    <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV{isFlat ? ' · flat' : ''})</span></td>
+                                                    <td className="px-2 py-1.5 text-right">${rvUnitPrice(rv).toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
+                                                    <td className="px-2 py-1.5 text-right font-semibold">${perSpot.toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-center">{rv.spotCount || 0}</td>
+                                                    <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                    <tfoot>
+                                        <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
+                                            <td className="px-2 py-1.5" colSpan={4}>Total</td>
+                                            <td className="px-2 py-1.5 text-center">{totalUnits}</td>
+                                            <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
+                                                ${(
+                                                    barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0)
+                                                    + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights)), 0)
+                                                ).toLocaleString()}
+                                            </td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+
+                            {/* Per-Night fees are already folded into the barn rate shown above —
+                                everything else (flat, per-stall, per-horse) is listed here since
+                                it's charged on top, at booking time, not part of the total above. */}
+                            {extraStallFees.some(f => (f.unitType || 'per_stall') !== 'per_night') && (
+                                <div className="mt-3 border-t border-indigo-200 dark:border-indigo-800 pt-2 space-y-1">
+                                    <p className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200">
+                                        Extra stall fees <span className="font-normal text-muted-foreground">— charged per booking, not part of the capacity total above</span>
+                                    </p>
+                                    {extraStallFees.filter(f => (f.unitType || 'per_stall') !== 'per_night').map(fee => (
+                                        <div key={fee.id} className="flex flex-wrap items-center gap-x-2 text-xs">
+                                            <span className="font-medium">{fee.name || 'Stall Fee'}</span>
+                                            <Badge variant="outline" className="text-[10px] font-normal">{scopeLabelForFee(fee, barns)}</Badge>
+                                            <span className="text-muted-foreground">
+                                                ${(fee.amount || 0).toLocaleString()} · {(FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '')}
+                                                {fee.dueDate ? ` · due ${fee.dueDate}` : ''}
+                                                {fee.lateFee ? ` · late +$${fee.lateFee}` : ''}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <Card>
                         <CardHeader className="pb-3">
                             <CardTitle className="text-base flex items-center gap-2">
@@ -4018,6 +4133,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <th className="text-center px-3 py-2 font-medium">Type</th>
                                                         <th className="text-center px-3 py-2 font-medium">Count</th>
                                                         <th className="text-right px-3 py-2 font-medium">Price/Night</th>
+                                                        <th className="text-center px-3 py-2 font-medium">Unit</th>
                                                         <th className="text-center px-3 py-2 font-medium">Booked</th>
                                                         <th className="text-right px-3 py-2 font-medium">Max Revenue ({showNights || 3} nights)</th>
                                                     </tr>
@@ -4033,6 +4149,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                 <td className="px-3 py-2 text-center text-muted-foreground">{typeInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{barn.stallCount || 0}</td>
                                                                 <td className="px-3 py-2 text-right">${(barn.pricePerNight || 0).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-center text-muted-foreground">Per Night</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant={bookedCount > 0 ? 'default' : 'outline'} className="text-xs">
                                                                         {bookedCount}
@@ -4053,6 +4170,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                 <td className="px-3 py-2 text-center text-cyan-600">{hookupInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{rv.spotCount || 0}</td>
                                                                 <td className="px-3 py-2 text-right">${rvUnitPrice(rv).toFixed(2)}{isFlat ? ' flat' : ''}</td>
+                                                                <td className="px-3 py-2 text-center text-muted-foreground">{isFlat ? 'Flat' : 'Per Night'}</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant={rvBooked > 0 ? 'default' : 'outline'} className="text-xs">{rvBooked}</Badge>
                                                                 </td>
@@ -4066,6 +4184,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <td className="px-3 py-2">Total</td>
                                                         <td className="px-3 py-2" />
                                                         <td className="px-3 py-2 text-center">{totalUnits}</td>
+                                                        <td className="px-3 py-2" />
                                                         <td className="px-3 py-2" />
                                                         <td className="px-3 py-2 text-center">
                                                             {barns.reduce((s, b) => s + bookedStallsForBarn(b), 0)
@@ -4503,6 +4622,7 @@ const HousingGroundsManagerPage = () => {
     const [shows, setShows] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [selectedShow, setSelectedShow] = useState(null);
+    const [sectionSelectMount, setSectionSelectMount] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
 
     const fetchShows = useCallback(async () => {
@@ -4775,6 +4895,8 @@ const HousingGroundsManagerPage = () => {
                 <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
                     <PageHeader title="Housing & Grounds Manager" backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
 
+                    {selectedShow && <div ref={setSectionSelectMount} className="mb-4 max-w-xs" />}
+
                     {!showId && (
                         <div className="mb-6">
                             <LinkToExistingShow
@@ -4792,6 +4914,31 @@ const HousingGroundsManagerPage = () => {
 
                     {selectedShow && (
                         <>
+                            {/* Event cover image — outside the editor so it stays editable even when Published. */}
+                            <Card className="mb-6 border-l-4 border-l-pink-500">
+                                <CardContent className="py-3 flex flex-wrap items-center justify-between gap-3">
+                                    <div className="flex items-center gap-3">
+                                        {selectedShow.project_data?.coverImageUrl ? (
+                                            <img src={selectedShow.project_data.coverImageUrl} alt="Event cover" className="h-12 w-20 rounded object-cover border" />
+                                        ) : (
+                                            <div className="h-12 w-20 rounded border bg-muted flex items-center justify-center">
+                                                <ImagePlus className="h-5 w-5 text-muted-foreground" />
+                                            </div>
+                                        )}
+                                        <div>
+                                            <p className="text-sm font-semibold">Event cover image</p>
+                                            <p className="text-[11px] text-muted-foreground">Shown on the public Events page card. Optional — a colored banner is used if none.</p>
+                                        </div>
+                                    </div>
+                                    <LogoUploader
+                                        fieldId="cover"
+                                        showId={selectedShow.id}
+                                        currentLogoUrl={selectedShow.project_data?.coverImageUrl || ''}
+                                        onUploadComplete={(url) => updateCoverImageImmediate && updateCoverImageImmediate(url)}
+                                    />
+                                </CardContent>
+                            </Card>
+
                             <BookingLinkCard show={selectedShow} />
                             <StallingDashboard
                                 key={selectedShow.id}
@@ -4804,6 +4951,7 @@ const HousingGroundsManagerPage = () => {
                                 onUpdateRvAreas={updateRvAreasImmediate}
                                 onUpdateCover={updateCoverImageImmediate}
                                 onAddBookingImmediate={addBookingImmediate}
+                                sectionSelectContainer={sectionSelectMount}
                             />
                         </>
                     )}
