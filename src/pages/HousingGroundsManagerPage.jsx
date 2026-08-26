@@ -50,7 +50,7 @@ import {
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
 } from '@/lib/barnGrid';
-import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, scopeLabelForFee } from '@/lib/extraStallFees';
+import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, scopeLabelForFee } from '@/lib/extraStallFees';
 
 // ── Constants ──
 
@@ -90,9 +90,9 @@ const SUPPLY_PRESETS = [
     { name: 'Hay (Mixed)', unit: 'bale', defaultPrice: 18 },
     { name: 'Shavings', unit: 'bag', defaultPrice: 12 },
     { name: 'Stall Mat Rental', unit: 'per stall', defaultPrice: 25 },
-    // Pre-bedding: shavings delivered to the stalls before the show and paid up
-    // front (not bought at the show), so it defaults to per-stall + pre-entry.
-    { name: 'Pre-Bedding (Shavings)', unit: 'per stall', defaultPrice: 25, preBedding: true },
+    // Pre-show delivery: shavings delivered to the stalls before the show and paid
+    // up front (not bought at the show), so it defaults to per-stall + pre-entry.
+    { name: 'Pre-Show Delivery (Shavings)', unit: 'per stall', defaultPrice: 25, preBedding: true },
 ];
 
 // Cycled across the top KPI row so each section's stat cards stay visually
@@ -189,7 +189,7 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
             </Label>
         )}
         <div className={cn('grid grid-cols-2 gap-3', showHeader && 'mt-2',
-            !leading ? 'md:grid-cols-4' : leadingCols === 2 ? 'md:grid-cols-6' : 'md:grid-cols-5')}>
+            !leading ? 'md:grid-cols-4' : leadingCols === 3 ? 'md:grid-cols-7' : leadingCols === 2 ? 'md:grid-cols-6' : 'md:grid-cols-5')}>
             {leading}
             <div className="space-y-1">
                 <Label className="text-xs">Unit Type</Label>
@@ -906,6 +906,42 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                         setMoveOutDate={setMoveOutDate}
                         setDatesLocked={setDatesLocked}
                     />
+                    <div className="rounded-lg border border-dashed p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <Checkbox
+                                id={`custom-dates-${barn.id}`}
+                                checked={barn.useCustomDates || false}
+                                onCheckedChange={(checked) => onUpdate('useCustomDates', !!checked)}
+                            />
+                            <Label htmlFor={`custom-dates-${barn.id}`} className="text-xs font-medium cursor-pointer">
+                                This barn moves in/out on different dates than the show default above
+                            </Label>
+                        </div>
+                        {barn.useCustomDates && (
+                            <div className="flex flex-wrap items-end gap-4 pt-1">
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Move-in date</Label>
+                                    <Input
+                                        type="date"
+                                        value={barn.moveInDate || ''}
+                                        max={barn.moveOutDate || undefined}
+                                        onChange={(e) => onUpdate('moveInDate', e.target.value)}
+                                        className="h-8 text-xs w-44"
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Move-out date</Label>
+                                    <Input
+                                        type="date"
+                                        value={barn.moveOutDate || ''}
+                                        min={barn.moveInDate || undefined}
+                                        onChange={(e) => onUpdate('moveOutDate', e.target.value)}
+                                        className="h-8 text-xs w-44"
+                                    />
+                                </div>
+                            </div>
+                        )}
+                    </div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div className="space-y-1">
                             <Label className="text-xs">Housing Type</Label>
@@ -1384,6 +1420,23 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
                             />
                         </div>
                         <div className="space-y-1">
+                            <Label className="text-xs">
+                                {pricingModel === 'flat' ? 'Cost, flat ($)' : 'Cost / Night ($)'}
+                            </Label>
+                            <Input
+                                type="number"
+                                min={0}
+                                value={pricingModel === 'flat' ? (rvArea.costFlat || '') : (rvArea.costPerNight || '')}
+                                onChange={(e) => onUpdate(
+                                    pricingModel === 'flat' ? 'costFlat' : 'costPerNight',
+                                    parseFloat(e.target.value) || 0
+                                )}
+                                className="h-8 text-xs"
+                                placeholder="$0"
+                                title="What this costs you — used to show profit."
+                            />
+                        </div>
+                        <div className="space-y-1">
                             <Label className="text-xs">Payment Timing</Label>
                             <Select value={rvArea.paymentTiming || 'pre_entry'} onValueChange={(val) => onUpdate('paymentTiming', val)}>
                                 <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
@@ -1491,7 +1544,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                             placeholder="Supply name..."
                         />
                         {item.preBedding && (
-                            <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
+                            <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Show</Badge>
                         )}
                         <div className="flex items-end gap-2 flex-shrink-0">
                             <div className="space-y-1">
@@ -1562,6 +1615,17 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                         </div>
                         <div className="space-y-0">
                             <Input
+                                type="number"
+                                min={0}
+                                value={item.cost || ''}
+                                onChange={(e) => onUpdate('cost', parseFloat(e.target.value) || 0)}
+                                className="h-8 text-xs w-20"
+                                placeholder="$ Cost"
+                                title="What this costs you per unit — used to show profit."
+                            />
+                        </div>
+                        <div className="space-y-0">
+                            <Input
                                 value={item.unit || ''}
                                 onChange={(e) => onUpdate('unit', e.target.value)}
                                 className="h-8 text-xs w-24"
@@ -1595,7 +1659,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                     }}
                 />
                 <Label htmlFor={`prebed-${item.id}`} className="text-xs font-normal cursor-pointer">
-                    Pre-bedding — delivered to stalls before the show (paid in advance, not sold at the show)
+                    Pre-Show Delivery — delivered to stalls before the show (paid in advance, not sold at the show)
                 </Label>
             </div>
           </fieldset>
@@ -2433,7 +2497,7 @@ const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
                         unitDefault="per_night"
                         showHeader={false}
                         unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
-                        leadingCols={2}
+                        leadingCols={3}
                         leading={(
                             <>
                                 <div className="space-y-1">
@@ -2456,6 +2520,18 @@ const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
                                         placeholder="$0"
                                     />
                                 </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Cost / Expense ($)</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        value={fee.cost || ''}
+                                        onChange={(e) => onUpdateField('cost', parseFloat(e.target.value) || 0)}
+                                        className="h-8 text-xs"
+                                        placeholder="$0"
+                                        title="What this costs you, same unit as Amount — used to show profit."
+                                    />
+                                </div>
                             </>
                         )}
                     />
@@ -2472,6 +2548,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const { toast } = useToast();
     const showNights = getShowNights(pd);
     const [activeSection, setActiveSection] = useState('inventory');
+
+    // Stall Fee Calculator "What-If" mode — a scratch estimator, never saved. Lets
+    // the organizer type a hypothetical number sold per barn/RV area (e.g. "if I
+    // sell 200 stalls") to see estimated revenue/profit, separate from the Pricing
+    // & Revenue Summary below it, which always reflects real booking data.
+    const [whatIfMode, setWhatIfMode] = useState(false);
+    const [whatIfCounts, setWhatIfCounts] = useState({}); // { [barnOrRvId]: estimatedQty }
+    const whatIfQtyFor = (id, actual) => {
+        const v = whatIfCounts[id];
+        return v === undefined || v === '' ? actual : (Number(v) || 0);
+    };
+    const setWhatIfQty = (id, value) => setWhatIfCounts(prev => ({ ...prev, [id]: value }));
 
     // Stall fees: a circuit fee across the whole facility, a fee on one or several
     // barns, or a barn's own per-night rate. appliesTo is 'all' (every barn) or an
@@ -2706,6 +2794,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         name: '',
         appliesTo: ALL_BARNS,
         amount: 0,
+        cost: 0,
         unitType: 'per_night',
         paymentTiming: 'pre_entry',
         dueDate: '',
@@ -3107,6 +3196,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const rvIsFlat = (r) => r.pricingModel === 'flat';
     const rvUnitPrice = (r) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0));
     const rvPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0) * nights);
+    const rvCostPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.costFlat || 0) : (r.costPerNight || 0) * nights);
 
     // "Booked" counts for the Pricing Summary — reservations that aren't cancelled,
     // measured in physical spaces. Stalls use the modern stall→booking pin
@@ -3135,6 +3225,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         let facilityFeeRevenue = 0; // extra stall fees that apply to every barn
         let cancelledCount = 0;
         let totalBookingsCount = bookings.length;
+
+        // Realized cost / profit — priced live off the current Cost fields, the
+        // same way revenue is priced live off current Amount fields (see below).
+        // Support spaces carry no cost basis, so they contribute revenue only.
+        let realizedCost = 0;
 
         // Per-area breakdowns — Robert reads occupancy and revenue barn by barn and
         // by RV hookup type, not as one show-wide number.
@@ -3205,6 +3300,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     if (isActive) {
                         stallRevenue += liveStallAmt;
                         realizedRevenue += liveStallAmt;
+                        realizedCost += count * nights * (barn ? nightlyCostForBarn(barn.id, extraStallFees) : 0);
                         const bs = barnStats.get(it.refId);
                         if (bs) { bs.revenue += liveStallAmt; bs.bookings += 1; }
                     }
@@ -3219,6 +3315,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     if (isActive) {
                         stallRevenue += itAmt;
                         realizedRevenue += itAmt;
+                        const fee = extraStallFees.find(f => f.id === it.refId);
+                        if (fee) realizedCost += (Number(it.qty) || 0) * (Number(fee.cost) || 0);
                         const bs = it.barnId ? barnStats.get(it.barnId) : null;
                         if (bs) bs.revenue += itAmt;
                         else facilityFeeRevenue += itAmt;
@@ -3231,6 +3329,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             recordDemand(area.id, area.name, 'rv');
                             const rs = rvTypeStats.get(rvTypeKey(area));
                             if (rs && isActive) { rs.occupied += Number(it.qty) || 0; rs.revenue += itAmt; }
+                            if (isActive) {
+                                const isFlat = rvIsFlat(area);
+                                const unitCost = isFlat ? (Number(area.costFlat) || 0) : (Number(area.costPerNight) || 0) * nights;
+                                realizedCost += (Number(it.qty) || 0) * unitCost;
+                            }
                         }
                     }
                 } else if (it.type === 'support') {
@@ -3241,6 +3344,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         realizedRevenue += itAmt;
                         const ss = supplyStats.get(it.refId);
                         if (ss) { ss.qty += Number(it.qty) || 0; ss.revenue += itAmt; }
+                        const supply = supplies.find(s => s.id === it.refId);
+                        if (supply) realizedCost += (Number(it.qty) || 0) * (Number(supply.cost) || 0);
                     }
                 } else if (isActive) {
                     // Anything else still belongs in the total, even if it has no slice.
@@ -3294,6 +3399,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 bySupplies: supplyRevenue,
                 bySupport: supportRevenue,
             },
+            // Realized cost / profit — same live-pricing approach as revenue above,
+            // using each item's current Cost field (barn/RV/supply/fee). Support
+            // spaces have no cost basis and are revenue-only.
+            cost: { total: realizedCost },
+            profit: { total: realizedRevenue - realizedCost },
             noShow: { count: cancelledCount, total: totalBookingsCount, rate: noShowRate },
             peakDemand,
             demandList: demandList.slice(0, 5),
@@ -3308,7 +3418,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             bySupplyItem: [...supplyStats.values()],
             facilityFeeRevenue,
         };
-    }, [bookings, barns, rvAreas, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
+    }, [bookings, barns, extraStallFees, rvAreas, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
         await onSave({ barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
@@ -4026,10 +4136,32 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             <div className="flex items-center gap-2 mb-3">
                                 <Moon className="h-4 w-4 text-indigo-600" />
                                 <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">Stall Fee Calculator</h3>
+                                <div className="flex items-center rounded-md border border-indigo-300 dark:border-indigo-700 overflow-hidden text-[11px] ml-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setWhatIfMode(false)}
+                                        className={cn('px-2 py-1', !whatIfMode ? 'bg-indigo-600 text-white' : 'bg-transparent text-indigo-700 dark:text-indigo-300')}
+                                    >
+                                        Capacity
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setWhatIfMode(true)}
+                                        className={cn('px-2 py-1', whatIfMode ? 'bg-indigo-600 text-white' : 'bg-transparent text-indigo-700 dark:text-indigo-300')}
+                                        title="Type a hypothetical number sold to estimate revenue &amp; profit — doesn't change your real inventory or bookings."
+                                    >
+                                        What-If
+                                    </button>
+                                </div>
                                 <Badge variant="outline" className="text-[10px] ml-auto">
                                     {pd.startDate && new Date(pd.startDate).toLocaleDateString()} — {pd.endDate && new Date(pd.endDate).toLocaleDateString()}
                                 </Badge>
                             </div>
+                            {whatIfMode && (
+                                <p className="text-[11px] text-indigo-700 dark:text-indigo-300 -mt-2 mb-2">
+                                    Type how many you expect to sell — this is just an estimate and doesn't touch your real inventory, bookings, or the Pricing &amp; Revenue Summary below.
+                                </p>
+                            )}
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
@@ -4038,37 +4170,66 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             <th className="text-right px-2 py-1 font-medium">Price / Night</th>
                                             <th className="text-center px-2 py-1 font-medium">Nights</th>
                                             <th className="text-right px-2 py-1 font-medium">Per Stall Total</th>
-                                            <th className="text-center px-2 py-1 font-medium">Stalls</th>
-                                            <th className="text-right px-2 py-1 font-medium">Max Revenue</th>
+                                            <th className="text-center px-2 py-1 font-medium">{whatIfMode ? 'Est. Sold' : 'Stalls'}</th>
+                                            <th className="text-right px-2 py-1 font-medium">{whatIfMode ? 'Est. Revenue' : 'Max Revenue'}</th>
+                                            <th className="text-right px-2 py-1 font-medium">{whatIfMode ? 'Est. Profit' : 'Max Profit'}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {barns.map(barn => {
+                                            const qty = whatIfMode ? whatIfQtyFor(barn.id, barn.stallCount || 0) : (barn.stallCount || 0);
                                             const perStall = (barn.pricePerNight || 0) * showNights;
-                                            const maxRev = perStall * (barn.stallCount || 0);
+                                            const maxRev = perStall * qty;
+                                            const costPerStall = nightlyCostForBarn(barn.id, extraStallFees) * showNights;
+                                            const maxProfit = (perStall - costPerStall) * qty;
                                             return (
                                                 <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
                                                     <td className="px-2 py-1.5 font-medium">{barn.name}</td>
                                                     <td className="px-2 py-1.5 text-right">${(barn.pricePerNight || 0).toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">{showNights}</td>
                                                     <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
-                                                    <td className="px-2 py-1.5 text-center">{barn.stallCount || 0}</td>
+                                                    <td className="px-2 py-1.5 text-center">
+                                                        {whatIfMode ? (
+                                                            <Input
+                                                                type="number"
+                                                                min={0}
+                                                                value={whatIfCounts[barn.id] ?? (barn.stallCount || 0)}
+                                                                onChange={(e) => setWhatIfQty(barn.id, e.target.value)}
+                                                                className="h-7 text-xs w-16 mx-auto text-center"
+                                                            />
+                                                        ) : (barn.stallCount || 0)}
+                                                    </td>
                                                     <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
+                                                    <td className="px-2 py-1.5 text-right font-bold text-emerald-700 dark:text-emerald-400">${maxProfit.toLocaleString()}</td>
                                                 </tr>
                                             );
                                         })}
                                         {rvAreas.map(rv => {
                                             const isFlat = rvIsFlat(rv);
+                                            const qty = whatIfMode ? whatIfQtyFor(rv.id, rv.spotCount || 0) : (rv.spotCount || 0);
                                             const perSpot = rvPerSpotTotal(rv, showNights);
-                                            const maxRev = perSpot * (rv.spotCount || 0);
+                                            const maxRev = perSpot * qty;
+                                            const costPerSpot = rvCostPerSpotTotal(rv, showNights);
+                                            const maxProfit = (perSpot - costPerSpot) * qty;
                                             return (
                                                 <tr key={rv.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
                                                     <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV{isFlat ? ' · flat' : ''})</span></td>
                                                     <td className="px-2 py-1.5 text-right">${rvUnitPrice(rv).toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
                                                     <td className="px-2 py-1.5 text-right font-semibold">${perSpot.toFixed(0)}</td>
-                                                    <td className="px-2 py-1.5 text-center">{rv.spotCount || 0}</td>
+                                                    <td className="px-2 py-1.5 text-center">
+                                                        {whatIfMode ? (
+                                                            <Input
+                                                                type="number"
+                                                                min={0}
+                                                                value={whatIfCounts[rv.id] ?? (rv.spotCount || 0)}
+                                                                onChange={(e) => setWhatIfQty(rv.id, e.target.value)}
+                                                                className="h-7 text-xs w-16 mx-auto text-center"
+                                                            />
+                                                        ) : (rv.spotCount || 0)}
+                                                    </td>
                                                     <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
+                                                    <td className="px-2 py-1.5 text-right font-bold text-emerald-700 dark:text-emerald-400">${maxProfit.toLocaleString()}</td>
                                                 </tr>
                                             );
                                         })}
@@ -4076,11 +4237,22 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <tfoot>
                                         <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
                                             <td className="px-2 py-1.5" colSpan={4}>Total</td>
-                                            <td className="px-2 py-1.5 text-center">{totalUnits}</td>
+                                            <td className="px-2 py-1.5 text-center">
+                                                {whatIfMode
+                                                    ? barns.reduce((s, b) => s + whatIfQtyFor(b.id, b.stallCount || 0), 0)
+                                                        + rvAreas.reduce((s, r) => s + whatIfQtyFor(r.id, r.spotCount || 0), 0)
+                                                    : totalUnits}
+                                            </td>
                                             <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
                                                 ${(
-                                                    barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * showNights), 0)
-                                                    + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights)), 0)
+                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * (b.pricePerNight || 0) * showNights, 0)
+                                                    + rvAreas.reduce((sum, r) => sum + (whatIfMode ? whatIfQtyFor(r.id, r.spotCount || 0) : (r.spotCount || 0)) * rvPerSpotTotal(r, showNights), 0)
+                                                ).toLocaleString()}
+                                            </td>
+                                            <td className="px-2 py-1.5 text-right text-emerald-700 dark:text-emerald-400">
+                                                ${(
+                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * ((b.pricePerNight || 0) - nightlyCostForBarn(b.id, extraStallFees)) * showNights, 0)
+                                                    + rvAreas.reduce((sum, r) => sum + (whatIfMode ? whatIfQtyFor(r.id, r.spotCount || 0) : (r.spotCount || 0)) * (rvPerSpotTotal(r, showNights) - rvCostPerSpotTotal(r, showNights)), 0)
                                                 ).toLocaleString()}
                                             </td>
                                         </tr>
@@ -4105,6 +4277,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 {fee.dueDate ? ` · due ${fee.dueDate}` : ''}
                                                 {fee.lateFee ? ` · late +$${fee.lateFee}` : ''}
                                             </span>
+                                            {!!fee.cost && (
+                                                <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                                                    · profit ${((fee.amount || 0) - (fee.cost || 0)).toLocaleString()}/unit
+                                                </span>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
@@ -4136,6 +4313,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <th className="text-center px-3 py-2 font-medium">Unit</th>
                                                         <th className="text-center px-3 py-2 font-medium">Booked</th>
                                                         <th className="text-right px-3 py-2 font-medium">Max Revenue ({showNights || 3} nights)</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Max Profit</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -4143,6 +4321,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
                                                         const bookedCount = bookedStallsForBarn(barn);
                                                         const maxRev = (barn.stallCount || 0) * (barn.pricePerNight || 0) * (showNights || 3);
+                                                        const maxProfit = (barn.stallCount || 0) * ((barn.pricePerNight || 0) - nightlyCostForBarn(barn.id, extraStallFees)) * (showNights || 3);
                                                         return (
                                                             <tr key={barn.id} className="border-b last:border-0">
                                                                 <td className="px-3 py-2 font-medium">{barn.name}</td>
@@ -4156,6 +4335,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                     </Badge>
                                                                 </td>
                                                                 <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
+                                                                <td className="px-3 py-2 text-right font-semibold text-emerald-600">${maxProfit.toLocaleString()}</td>
                                                             </tr>
                                                         );
                                                     })}
@@ -4164,6 +4344,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         const isFlat = rvIsFlat(rv);
                                                         const rvBooked = bookedSpotsForRvArea(rv);
                                                         const maxRev = (rv.spotCount || 0) * rvPerSpotTotal(rv, showNights || 3);
+                                                        const maxProfit = (rv.spotCount || 0) * (rvPerSpotTotal(rv, showNights || 3) - rvCostPerSpotTotal(rv, showNights || 3));
                                                         return (
                                                             <tr key={rv.id} className="border-b last:border-0">
                                                                 <td className="px-3 py-2 font-medium">{rv.name}{isFlat && <span className="text-xs text-cyan-600"> · flat</span>}</td>
@@ -4175,6 +4356,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                     <Badge variant={rvBooked > 0 ? 'default' : 'outline'} className="text-xs">{rvBooked}</Badge>
                                                                 </td>
                                                                 <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
+                                                                <td className="px-3 py-2 text-right font-semibold text-emerald-600">${maxProfit.toLocaleString()}</td>
                                                             </tr>
                                                         );
                                                     })}
@@ -4194,6 +4376,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             ${(
                                                                 barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0)
                                                                 + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights || 3)), 0)
+                                                            ).toLocaleString()}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right text-emerald-600">
+                                                            ${(
+                                                                barns.reduce((sum, b) => sum + ((b.stallCount || 0) * ((b.pricePerNight || 0) - nightlyCostForBarn(b.id, extraStallFees)) * (showNights || 3)), 0)
+                                                                + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (rvPerSpotTotal(r, showNights || 3) - rvCostPerSpotTotal(r, showNights || 3))), 0)
                                                             ).toLocaleString()}
                                                         </td>
                                                     </tr>
@@ -4217,6 +4405,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             <th className="text-left px-3 py-2 font-medium">Fee</th>
                                                             <th className="text-left px-3 py-2 font-medium">Applies to</th>
                                                             <th className="text-right px-3 py-2 font-medium">Amount</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Cost</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Profit</th>
                                                             <th className="text-center px-3 py-2 font-medium">Unit</th>
                                                             <th className="text-center px-3 py-2 font-medium">Due</th>
                                                             <th className="text-right px-3 py-2 font-medium">Late Fee</th>
@@ -4228,6 +4418,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                 <td className="px-3 py-2 font-medium">{fee.name || 'Stall Fee'}</td>
                                                                 <td className="px-3 py-2">{scopeLabelForFee(fee, barns)}</td>
                                                                 <td className="px-3 py-2 text-right">${(fee.amount || 0).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-right text-muted-foreground">${(fee.cost || 0).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-right font-semibold text-emerald-600">${((fee.amount || 0) - (fee.cost || 0)).toFixed(2)}</td>
                                                                 <td className="px-3 py-2 text-center text-muted-foreground">
                                                                     {FEE_UNIT_TYPE_OPTIONS.find(o => o.value === (fee.unitType || 'per_stall'))?.label || '—'}
                                                                 </td>
@@ -4253,11 +4445,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <tr className="border-b bg-muted/30">
                                                             <th className="text-left px-3 py-2 font-medium">Item</th>
                                                             <th className="text-right px-3 py-2 font-medium">Price</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Cost</th>
                                                             <th className="text-center px-3 py-2 font-medium">Unit</th>
                                                             <th className="text-center px-3 py-2 font-medium">Stock</th>
                                                             <th className="text-center px-3 py-2 font-medium">Sold</th>
                                                             <th className="text-center px-3 py-2 font-medium">Remaining</th>
                                                             <th className="text-right px-3 py-2 font-medium">Stock Value</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Stock Profit</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
@@ -4269,6 +4463,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                 <tr key={item.id} className="border-b last:border-0">
                                                                     <td className="px-3 py-2 font-medium">{item.name}</td>
                                                                     <td className="px-3 py-2 text-right">${(item.price || 0).toFixed(2)}</td>
+                                                                    <td className="px-3 py-2 text-right text-muted-foreground">${(item.cost || 0).toFixed(2)}</td>
                                                                     <td className="px-3 py-2 text-center text-muted-foreground">{item.unit || '-'}</td>
                                                                     <td className="px-3 py-2 text-center">{stock === 0 ? <span className="text-muted-foreground">∞</span> : stock}</td>
                                                                     <td className="px-3 py-2 text-center">{sold}</td>
@@ -4282,15 +4477,19 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                         )}
                                                                     </td>
                                                                     <td className="px-3 py-2 text-right font-semibold">${((item.price || 0) * stock).toLocaleString()}</td>
+                                                                    <td className="px-3 py-2 text-right font-semibold text-emerald-600">${(((item.price || 0) - (item.cost || 0)) * stock).toLocaleString()}</td>
                                                                 </tr>
                                                             );
                                                         })}
                                                     </tbody>
                                                     <tfoot>
                                                         <tr className="bg-muted/30 font-semibold">
-                                                            <td className="px-3 py-2" colSpan={6}>Total Stock Value</td>
+                                                            <td className="px-3 py-2" colSpan={7}>Total Stock Value</td>
                                                             <td className="px-3 py-2 text-right">
                                                                 ${supplies.reduce((sum, s) => sum + ((s.price || 0) * (s.stockQty || 0)), 0).toLocaleString()}
+                                                            </td>
+                                                            <td className="px-3 py-2 text-right text-emerald-600">
+                                                                ${supplies.reduce((sum, s) => sum + (((s.price || 0) - (s.cost || 0)) * (s.stockQty || 0)), 0).toLocaleString()}
                                                             </td>
                                                         </tr>
                                                     </tfoot>
@@ -4322,7 +4521,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                                 {/* 1. Occupancy */}
                                 <div className="rounded-xl border-2 p-5 bg-amber-50 dark:bg-amber-950/20 border-amber-200">
                                     <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide mb-1">Occupancy</p>
@@ -4344,7 +4543,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </div>
                                 </div>
 
-                                {/* 3. No-show / cancel rate */}
+                                {/* 3. Profit — Revenue minus each item's Cost / Expense field */}
+                                <div className="rounded-xl border-2 p-5 bg-teal-50 dark:bg-teal-950/20 border-teal-200">
+                                    <p className="text-xs font-semibold text-teal-700 dark:text-teal-300 uppercase tracking-wide mb-1">Realized Profit</p>
+                                    <p className="text-4xl font-bold text-teal-900 dark:text-teal-200">${analytics.profit.total.toLocaleString()}</p>
+                                    <p className="text-xs text-teal-700/80 dark:text-teal-400/80 mt-2">
+                                        Cost: ${analytics.cost.total.toLocaleString()}
+                                    </p>
+                                </div>
+
+                                {/* 4. No-show / cancel rate */}
                                 <div className="rounded-xl border-2 p-5 bg-red-50 dark:bg-red-950/20 border-red-200">
                                     <p className="text-xs font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide mb-1">No-show / Cancel</p>
                                     <p className="text-4xl font-bold text-red-900 dark:text-red-200">{analytics.noShow.rate}%</p>
@@ -4353,7 +4561,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </p>
                                 </div>
 
-                                {/* 4. Peak demand zone */}
+                                {/* 5. Peak demand zone */}
                                 <div className="rounded-xl border-2 p-5 bg-purple-50 dark:bg-purple-950/20 border-purple-200">
                                     <p className="text-xs font-semibold text-purple-700 dark:text-purple-300 uppercase tracking-wide mb-1">Peak Demand</p>
                                     {analytics.peakDemand ? (
@@ -4379,7 +4587,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     )}
                                 </div>
 
-                                {/* 5. Power load */}
+                                {/* 6. Power load */}
                                 <div className="rounded-xl border-2 p-5 bg-blue-50 dark:bg-blue-950/20 border-blue-200">
                                     <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 uppercase tracking-wide mb-1">RV Power Load</p>
                                     {analytics.powerLoad.ampsCapacity > 0 ? (

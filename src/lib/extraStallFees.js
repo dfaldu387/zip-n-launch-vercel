@@ -67,6 +67,19 @@ export function nightlyRateForBarn(barnId, stallFees = []) {
     }, 0);
 }
 
+/**
+ * A barn's nightly COST (what it costs the facility, not what it charges) —
+ * the same Per-Night fees as nightlyRateForBarn, summing each fee's `cost`
+ * field instead of its `amount`. Used to show Max Profit alongside Max Revenue.
+ */
+export function nightlyCostForBarn(barnId, stallFees = []) {
+    return (stallFees || []).reduce((sum, fee) => {
+        if ((fee.unitType || 'per_stall') !== 'per_night') return sum;
+        if (!feeAppliesToBarn(fee, barnId)) return sum;
+        return sum + (Number(fee.cost) || 0);
+    }, 0);
+}
+
 /** Plain-language scope label for badges, summaries and invoices. */
 export function scopeLabelForFee(fee, barns = []) {
     const scope = feeScope(fee);
