@@ -50,7 +50,7 @@ import {
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
 } from '@/lib/barnGrid';
-import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, scopeLabelForFee } from '@/lib/extraStallFees';
+import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee } from '@/lib/extraStallFees';
 
 // ── Constants ──
 
@@ -90,9 +90,6 @@ const SUPPLY_PRESETS = [
     { name: 'Hay (Mixed)', unit: 'bale', defaultPrice: 18 },
     { name: 'Shavings', unit: 'bag', defaultPrice: 12 },
     { name: 'Stall Mat Rental', unit: 'per stall', defaultPrice: 25 },
-    // Pre-show delivery: shavings delivered to the stalls before the show and paid
-    // up front (not bought at the show), so it defaults to per-stall + pre-entry.
-    { name: 'Pre-Show Delivery (Shavings)', unit: 'per stall', defaultPrice: 25, preBedding: true },
 ];
 
 // Cycled across the top KPI row so each section's stat cards stay visually
@@ -169,6 +166,7 @@ const FEE_UNIT_TYPE_OPTIONS = [
     { value: 'per_horse', label: 'Per Horse' },
     { value: 'per_night', label: 'Per Night' },
     { value: 'per_stall', label: 'Per Stall' },
+    { value: 'per_bale', label: 'Per Bale' },
     { value: 'per_bag', label: 'Per Bag' },
     { value: 'custom', label: 'Custom Unit' },
 ];
@@ -181,7 +179,11 @@ const FEE_TIMING_OPTIONS = [
 
 // Shared fee-detail block (Unit Type, Payment Timing, Due Date, Late Fee) so every
 // inventory card asks the same questions as the Fee Structure page.
-const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeader = true, leading = null, leadingCols = 1, unitOptions = null }) => (
+const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeader = true, leading = null, leadingCols = 1, unitOptions = null, dueDateRequiresFlag = null }) => {
+    // Some items (Pre-Show Delivery supplies) only need a Due Date once the
+    // organizer opts into early delivery — otherwise there's nothing to be due by.
+    const dueDateEnabled = !dueDateRequiresFlag || !!item[dueDateRequiresFlag];
+    return (
     <div className={showHeader ? 'border-t pt-3' : ''}>
         {showHeader && (
             <Label className="text-xs font-semibold flex items-center gap-1.5 text-emerald-600">
@@ -214,10 +216,11 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
                 </Select>
             </div>
             <div className="space-y-1">
-                <Label className="text-xs">Due Date</Label>
+                <Label className="text-xs">Due Date{!dueDateEnabled && ' (needs Pre-Show Delivery)'}</Label>
                 <Input
                     type="date"
-                    value={item.dueDate || ''}
+                    disabled={!dueDateEnabled}
+                    value={dueDateEnabled ? (item.dueDate || '') : ''}
                     onChange={(e) => onUpdate('dueDate', e.target.value)}
                     className="h-8 text-xs"
                 />
@@ -235,7 +238,8 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
             </div>
         </div>
     </div>
-);
+    );
+};
 
 // Tick any combination of barns a stall fee applies to — "All barns" clears any
 // individual picks (and vice versa), so the two never disagree.
@@ -1602,8 +1606,9 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                     {item.preBedding && (
                         <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
                     )}
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                        <div className="space-y-0">
+                    <div className="flex items-end gap-2 flex-shrink-0">
+                        <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground block">Price</Label>
                             <Input
                                 type="number"
                                 min={0}
@@ -1613,7 +1618,8 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                                 placeholder="$ Price"
                             />
                         </div>
-                        <div className="space-y-0">
+                        <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground block">Cost</Label>
                             <Input
                                 type="number"
                                 min={0}
@@ -1624,7 +1630,8 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                                 title="What this costs you per unit — used to show profit."
                             />
                         </div>
-                        <div className="space-y-0">
+                        <div className="space-y-0.5">
+                            <Label className="text-[10px] text-muted-foreground block">Unit</Label>
                             <Input
                                 value={item.unit || ''}
                                 onChange={(e) => onUpdate('unit', e.target.value)}
@@ -1642,7 +1649,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
 
           <fieldset disabled={locked} className="space-y-3 block">
             {/* Fee details — same questions as the Fee Structure page */}
-            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault="per_bag" unitOptions={['flat', 'per_bag', 'per_night', 'custom']} />
+            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault={item.unit === 'bale' ? 'per_bale' : 'per_bag'} unitOptions={['flat', 'per_bale', 'per_bag', 'per_night', 'custom']} dueDateRequiresFlag="preBedding" />
 
             {/* Pre-bedding — shavings delivered to the stalls before the show, paid up front */}
             <div className="flex items-center gap-2 border-t pt-2">
@@ -1655,11 +1662,14 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                         if (checked) {
                             onUpdate('unitType', 'per_stall');
                             onUpdate('paymentTiming', 'pre_entry');
+                        } else {
+                            // Without pre-delivery there's nothing to be due by.
+                            onUpdate('dueDate', '');
                         }
                     }}
                 />
                 <Label htmlFor={`prebed-${item.id}`} className="text-xs font-normal cursor-pointer">
-                    Pre-Show Delivery — delivered to stalls before the show (paid in advance, not sold at the show)
+                    Pre-Show Delivery — delivered to stalls before the show (paid in advance). Still sold as a regular walk-up item at the show after the due date.
                 </Label>
             </div>
           </fieldset>
@@ -3198,6 +3208,27 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const rvPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0) * nights);
     const rvCostPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.costFlat || 0) : (r.costPerNight || 0) * nights);
 
+    // Barns work the same way, but the "flat or per-night" choice isn't typed
+    // directly — it's whichever kind of stall fee (Flat vs Per-Night) is scoped
+    // to the barn in the Fees tab. Robert's real shows almost always sell a
+    // stall flat, with per-night being the rare exception — so a Flat fee, when
+    // present, always wins over the barn's per-night rate (never both at once).
+    const barnFlatTotal = (barn) => flatRateForBarn(barn.id, extraStallFees);
+    const barnIsFlat = (barn) => barnFlatTotal(barn) > 0;
+    const barnUnitPrice = (barn) => (barnIsFlat(barn) ? barnFlatTotal(barn) : (barn.pricePerNight || 0));
+    const barnPerStallTotal = (barn, nights) => (barnIsFlat(barn) ? barnFlatTotal(barn) : (barn.pricePerNight || 0) * nights);
+    const barnCostPerStallTotal = (barn, nights) => (barnIsFlat(barn) ? flatCostForBarn(barn.id, extraStallFees) : nightlyCostForBarn(barn.id, extraStallFees) * nights);
+    // A Flat fee fully reflected in a barn's row shouldn't also appear in the
+    // separate "Extra Stall Fees" list below — that would double-count it.
+    // Only fold it out of that list once it actually lands on a real barn (an
+    // orphaned scope — e.g. a deleted barn — stays listed so it isn't lost).
+    const flatFeeMergedIntoBarnRow = (fee) => {
+        if ((fee.unitType || 'per_stall') !== 'flat') return false;
+        const scope = feeScope(fee);
+        return scope === ALL_BARNS ? barns.length > 0 : scope.some(id => barns.some(b => b.id === id));
+    };
+    const isExtraFee = (f) => (f.unitType || 'per_stall') !== 'per_night' && !flatFeeMergedIntoBarnRow(f);
+
     // "Booked" counts for the Pricing Summary — reservations that aren't cancelled,
     // measured in physical spaces. Stalls use the modern stall→booking pin
     // (stall.bookingId), RV uses the booked quantity from the booking's line items.
@@ -3906,7 +3937,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 onRemove={() => removeSupply(item.id)}
                                             />
                                         ))}
-                                        {manualFeesByCategory('supply').map(f => renderManualFee(f, ['flat', 'per_bag', 'per_night', 'custom']))}
+                                        {manualFeesByCategory('supply').map(f => renderManualFee(f, ['flat', 'per_bale', 'per_bag', 'per_night', 'custom']))}
                                     </div>
                                 )}
                             </div>
@@ -4177,16 +4208,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </thead>
                                     <tbody>
                                         {barns.map(barn => {
+                                            const isFlat = barnIsFlat(barn);
                                             const qty = whatIfMode ? whatIfQtyFor(barn.id, barn.stallCount || 0) : (barn.stallCount || 0);
-                                            const perStall = (barn.pricePerNight || 0) * showNights;
+                                            const perStall = barnPerStallTotal(barn, showNights);
                                             const maxRev = perStall * qty;
-                                            const costPerStall = nightlyCostForBarn(barn.id, extraStallFees) * showNights;
+                                            const costPerStall = barnCostPerStallTotal(barn, showNights);
                                             const maxProfit = (perStall - costPerStall) * qty;
                                             return (
                                                 <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                                    <td className="px-2 py-1.5 font-medium">{barn.name}</td>
-                                                    <td className="px-2 py-1.5 text-right">${(barn.pricePerNight || 0).toFixed(0)}</td>
-                                                    <td className="px-2 py-1.5 text-center">{showNights}</td>
+                                                    <td className="px-2 py-1.5 font-medium">{barn.name}{isFlat && <span className="text-xs text-emerald-600"> · flat</span>}</td>
+                                                    <td className="px-2 py-1.5 text-right">${barnUnitPrice(barn).toFixed(0)}{isFlat ? ' flat' : ''}</td>
+                                                    <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
                                                     <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">
                                                         {whatIfMode ? (
@@ -4245,13 +4277,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             </td>
                                             <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
                                                 ${(
-                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * (b.pricePerNight || 0) * showNights, 0)
+                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * barnPerStallTotal(b, showNights), 0)
                                                     + rvAreas.reduce((sum, r) => sum + (whatIfMode ? whatIfQtyFor(r.id, r.spotCount || 0) : (r.spotCount || 0)) * rvPerSpotTotal(r, showNights), 0)
                                                 ).toLocaleString()}
                                             </td>
                                             <td className="px-2 py-1.5 text-right text-emerald-700 dark:text-emerald-400">
                                                 ${(
-                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * ((b.pricePerNight || 0) - nightlyCostForBarn(b.id, extraStallFees)) * showNights, 0)
+                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * (barnPerStallTotal(b, showNights) - barnCostPerStallTotal(b, showNights)), 0)
                                                     + rvAreas.reduce((sum, r) => sum + (whatIfMode ? whatIfQtyFor(r.id, r.spotCount || 0) : (r.spotCount || 0)) * (rvPerSpotTotal(r, showNights) - rvCostPerSpotTotal(r, showNights)), 0)
                                                 ).toLocaleString()}
                                             </td>
@@ -4260,15 +4292,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 </table>
                             </div>
 
-                            {/* Per-Night fees are already folded into the barn rate shown above —
-                                everything else (flat, per-stall, per-horse) is listed here since
-                                it's charged on top, at booking time, not part of the total above. */}
-                            {extraStallFees.some(f => (f.unitType || 'per_stall') !== 'per_night') && (
+                            {/* A barn's own Flat/Per-Night fee is already folded into its row
+                                above — this lists what's still charged on top, at booking time
+                                (per-stall, per-horse, custom, plus any Flat fee that didn't land
+                                on an existing barn). */}
+                            {extraStallFees.some(isExtraFee) && (
                                 <div className="mt-3 border-t border-indigo-200 dark:border-indigo-800 pt-2 space-y-1">
                                     <p className="text-[11px] font-semibold text-indigo-900 dark:text-indigo-200">
                                         Extra stall fees <span className="font-normal text-muted-foreground">— charged per booking, not part of the capacity total above</span>
                                     </p>
-                                    {extraStallFees.filter(f => (f.unitType || 'per_stall') !== 'per_night').map(fee => (
+                                    {extraStallFees.filter(isExtraFee).map(fee => (
                                         <div key={fee.id} className="flex flex-wrap items-center gap-x-2 text-xs">
                                             <span className="font-medium">{fee.name || 'Stall Fee'}</span>
                                             <Badge variant="outline" className="text-[10px] font-normal">{scopeLabelForFee(fee, barns)}</Badge>
@@ -4319,16 +4352,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 <tbody>
                                                     {barns.map(barn => {
                                                         const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
+                                                        const isFlat = barnIsFlat(barn);
                                                         const bookedCount = bookedStallsForBarn(barn);
-                                                        const maxRev = (barn.stallCount || 0) * (barn.pricePerNight || 0) * (showNights || 3);
-                                                        const maxProfit = (barn.stallCount || 0) * ((barn.pricePerNight || 0) - nightlyCostForBarn(barn.id, extraStallFees)) * (showNights || 3);
+                                                        const maxRev = (barn.stallCount || 0) * barnPerStallTotal(barn, showNights || 3);
+                                                        const maxProfit = (barn.stallCount || 0) * (barnPerStallTotal(barn, showNights || 3) - barnCostPerStallTotal(barn, showNights || 3));
                                                         return (
                                                             <tr key={barn.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{barn.name}</td>
+                                                                <td className="px-3 py-2 font-medium">{barn.name}{isFlat && <span className="text-xs text-emerald-600"> · flat</span>}</td>
                                                                 <td className="px-3 py-2 text-center text-muted-foreground">{typeInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{barn.stallCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">${(barn.pricePerNight || 0).toFixed(2)}</td>
-                                                                <td className="px-3 py-2 text-center text-muted-foreground">Per Night</td>
+                                                                <td className="px-3 py-2 text-right">${barnUnitPrice(barn).toFixed(2)}{isFlat ? ' flat' : ''}</td>
+                                                                <td className="px-3 py-2 text-center text-muted-foreground">{isFlat ? 'Flat' : 'Per Night'}</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant={bookedCount > 0 ? 'default' : 'outline'} className="text-xs">
                                                                         {bookedCount}
@@ -4374,13 +4408,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         </td>
                                                         <td className="px-3 py-2 text-right">
                                                             ${(
-                                                                barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (b.pricePerNight || 0) * (showNights || 3)), 0)
+                                                                barns.reduce((sum, b) => sum + ((b.stallCount || 0) * barnPerStallTotal(b, showNights || 3)), 0)
                                                                 + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights || 3)), 0)
                                                             ).toLocaleString()}
                                                         </td>
                                                         <td className="px-3 py-2 text-right text-emerald-600">
                                                             ${(
-                                                                barns.reduce((sum, b) => sum + ((b.stallCount || 0) * ((b.pricePerNight || 0) - nightlyCostForBarn(b.id, extraStallFees)) * (showNights || 3)), 0)
+                                                                barns.reduce((sum, b) => sum + ((b.stallCount || 0) * (barnPerStallTotal(b, showNights || 3) - barnCostPerStallTotal(b, showNights || 3))), 0)
                                                                 + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * (rvPerSpotTotal(r, showNights || 3) - rvCostPerSpotTotal(r, showNights || 3))), 0)
                                                             ).toLocaleString()}
                                                         </td>
@@ -4390,9 +4424,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         </div>
                                     )}
 
-                                    {/* Per-Night fees are already folded into the barn's Price/Night in the
-                                        table above; everything else is charged on top, at booking time. */}
-                                    {extraStallFees.some(f => (f.unitType || 'per_stall') !== 'per_night') && (
+                                    {/* A barn's own Flat/Per-Night fee is already folded into its row in the
+                                        table above; this lists what's still charged on top, at booking time
+                                        (per-stall, per-horse, custom, plus any Flat fee that didn't land on
+                                        an existing barn). */}
+                                    {extraStallFees.some(isExtraFee) && (
                                         <div>
                                             <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
                                                 <DollarSign className="h-4 w-4 text-emerald-600" /> Extra Stall Fees
@@ -4413,7 +4449,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {extraStallFees.filter(f => (f.unitType || 'per_stall') !== 'per_night').map(fee => (
+                                                        {extraStallFees.filter(isExtraFee).map(fee => (
                                                             <tr key={fee.id} className="border-b last:border-0">
                                                                 <td className="px-3 py-2 font-medium">{fee.name || 'Stall Fee'}</td>
                                                                 <td className="px-3 py-2">{scopeLabelForFee(fee, barns)}</td>
@@ -4816,7 +4852,7 @@ function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], suppl
             amount: r.pricingModel === 'flat' ? r.flatRate : r.pricePerNight,
             unitDefault: r.pricingModel === 'flat' ? 'flat' : 'per_night',
         })),
-        ...supplies.map(s => make('supply', s, { name: s.name, amount: s.price, unitDefault: 'per_bag' })),
+        ...supplies.map(s => make('supply', s, { name: s.name, amount: s.price, unitDefault: s.unit === 'bale' ? 'per_bale' : 'per_bag' })),
     ];
 }
 

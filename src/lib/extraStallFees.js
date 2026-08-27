@@ -80,6 +80,31 @@ export function nightlyCostForBarn(barnId, stallFees = []) {
     }, 0);
 }
 
+/**
+ * A barn's flat-rate total = every Flat stall fee scoped to it, added up.
+ * Most real shows sell stalls at one flat price for the whole stay, with a
+ * per-night rate being the rare exception — so when a barn carries a flat
+ * fee, that flat total IS the barn's price (see barnIsFlat / barnUnitPrice
+ * in HousingGroundsManagerPage.jsx), not an extra charge bolted on top of a
+ * separate per-night number.
+ */
+export function flatRateForBarn(barnId, stallFees = []) {
+    return (stallFees || []).reduce((sum, fee) => {
+        if ((fee.unitType || 'per_stall') !== 'flat') return sum;
+        if (!feeAppliesToBarn(fee, barnId)) return sum;
+        return sum + (Number(fee.amount) || 0);
+    }, 0);
+}
+
+/** Same as flatRateForBarn, summing each fee's `cost` instead of `amount`. */
+export function flatCostForBarn(barnId, stallFees = []) {
+    return (stallFees || []).reduce((sum, fee) => {
+        if ((fee.unitType || 'per_stall') !== 'flat') return sum;
+        if (!feeAppliesToBarn(fee, barnId)) return sum;
+        return sum + (Number(fee.cost) || 0);
+    }, 0);
+}
+
 /** Plain-language scope label for badges, summaries and invoices. */
 export function scopeLabelForFee(fee, barns = []) {
     const scope = feeScope(fee);

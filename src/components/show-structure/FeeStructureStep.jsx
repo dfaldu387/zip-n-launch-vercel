@@ -46,6 +46,7 @@ const UNIT_TYPE_OPTIONS = [
     { value: 'per_horse', label: 'Per Horse' },
     { value: 'per_night', label: 'Per Night' },
     { value: 'per_stall', label: 'Per Stall' },
+    { value: 'per_bale', label: 'Per Bale' },
     { value: 'per_bag', label: 'Per Bag' },
     { value: 'per_class', label: 'Per Class' },
     { value: 'custom', label: 'Custom Unit' },
@@ -56,6 +57,7 @@ const UNIT_TYPE_LABELS = {
     per_horse: 'Per Horse',
     per_night: 'Per Night',
     per_stall: 'Per Stall',
+    per_bale: 'Per Bale',
     per_bag: 'Per Bag',
     per_class: 'Per Class',
     custom: 'Custom',
@@ -93,9 +95,10 @@ const unitOptionsForFee = (fee) => {
     let allowed;
     if (fee.sourceType === 'barn' || fee.sourceType === 'stall_extra' || id.includes('stall') || name.includes('stall')) allowed = ['flat', 'per_night', 'per_stall', 'per_horse', 'custom'];
     else if (fee.sourceType === 'rv' || id.includes('rv') || name.includes('rv') || name.includes('camp')) allowed = ['flat', 'per_night', 'custom'];
-    else if (fee.sourceType === 'supply') allowed = ['flat', 'per_bag', 'per_night', 'custom'];
+    else if (fee.sourceType === 'supply') allowed = ['flat', 'per_bale', 'per_bag', 'per_night', 'custom'];
     else if (fee.type === 'per_class' || id.includes('class')) allowed = ['flat', 'per_class', 'custom'];
     else if (fee.type === 'per_horse') allowed = ['flat', 'per_horse', 'custom'];
+    else if (fee.unit_type === 'per_bale' || id.includes('hay')) allowed = ['flat', 'per_bale', 'custom'];
     else if (fee.unit_type === 'per_bag' || id.includes('shav') || id.includes('bed')) allowed = ['flat', 'per_bag', 'custom'];
     else allowed = ['flat', 'per_night', 'custom'];
     const set = new Set(allowed);
