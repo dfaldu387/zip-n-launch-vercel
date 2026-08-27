@@ -101,7 +101,16 @@ const QuickSupplyOrderPage = () => {
         if (showId) loadShow();
     }, [showId, toast]);
 
-    const supplies = useMemo(() => show?.inventory?.supplies || [], [show]);
+    // A supply flagged Pre-Show Delivery only (not also Delivered at Show) is a
+    // pre-order item — it stays off the walk-up list until move-in has started,
+    // then it's sold as a walk-up item too, same as anything already flagged
+    // Delivered at Show. See HousingGroundsManagerPage.jsx SupplyItemCard.
+    const supplies = useMemo(() => {
+        const all = show?.inventory?.supplies || [];
+        const moveInDate = show?.bookWindow?.start;
+        const moveInStarted = !moveInDate || new Date().toISOString().slice(0, 10) >= moveInDate;
+        return all.filter(s => s.deliveredAtShow || !s.preBedding || moveInStarted);
+    }, [show]);
 
     // Already sold, counted server-side now. Caps the stepper so we never
     // oversell past remaining stock.

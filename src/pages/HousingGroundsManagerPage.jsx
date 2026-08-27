@@ -21,7 +21,7 @@ import {
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
-    ClipboardList, Package, Truck, Undo2,
+    ClipboardList, Package, Truck, Undo2, ArrowUpDown,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -275,6 +275,85 @@ const BarnScopePicker = ({ value, barns, onChange, disabled }) => {
                         {b.name}
                     </label>
                 ))}
+            </PopoverContent>
+        </Popover>
+    );
+};
+
+// Raise or lower every fee in one section (Stall / RV / Supply) by the same
+// dollar amount in one click, instead of opening each fee row individually.
+// Locked fees are skipped so a frozen price never moves by accident.
+const BulkAdjustControl = ({ label, onApply }) => {
+    const [amount, setAmount] = useState('');
+    const [open, setOpen] = useState(false);
+    const apply = () => {
+        const delta = parseFloat(amount);
+        if (!Number.isFinite(delta) || delta === 0) return;
+        onApply(delta);
+        setAmount('');
+        setOpen(false);
+    };
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="h-7 text-xs">
+                    <ArrowUpDown className="h-3.5 w-3.5 mr-1" /> Raise/Lower All
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-3" align="end">
+                <Label className="text-xs">Change every {label} fee by ($)</Label>
+                <div className="flex items-center gap-2 mt-1.5">
+                    <Input
+                        type="number"
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && apply()}
+                        placeholder="e.g. 10 or -10"
+                        className="h-8 text-xs"
+                    />
+                    <Button size="sm" className="h-8 text-xs shrink-0" onClick={apply}>Apply</Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1.5">Positive raises, negative lowers. Locked fees are skipped.</p>
+            </PopoverContent>
+        </Popover>
+    );
+};
+
+// Restocking is additive — you sold 600 shavings and got a new pallet in, you
+// don't retype the old count. This adds to stockQty instead of overwriting it
+// (typing directly into Stock on hand still works for a one-off correction).
+const AddStockControl = ({ onAdd, disabled }) => {
+    const [amount, setAmount] = useState('');
+    const [open, setOpen] = useState(false);
+    const apply = () => {
+        const qty = parseInt(amount, 10);
+        if (!Number.isFinite(qty) || qty <= 0) return;
+        onAdd(qty);
+        setAmount('');
+        setOpen(false);
+    };
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" disabled={disabled} title="Add stock">
+                    <Plus className="h-3.5 w-3.5" />
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-52 p-3" align="start">
+                <Label className="text-xs">Add to stock</Label>
+                <div className="flex items-center gap-2 mt-1.5">
+                    <Input
+                        type="number"
+                        min={1}
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && apply()}
+                        placeholder="e.g. 200"
+                        className="h-8 text-xs"
+                    />
+                    <Button size="sm" className="h-8 text-xs shrink-0" onClick={apply}>Add</Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1.5">Adds to current stock — doesn't replace it.</p>
             </PopoverContent>
         </Popover>
     );
@@ -1550,6 +1629,9 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                         {item.preBedding && (
                             <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Show</Badge>
                         )}
+                        {item.deliveredAtShow && (
+                            <Badge className="bg-cyan-600 text-white text-[10px] flex-shrink-0">At-Show</Badge>
+                        )}
                         <div className="flex items-end gap-2 flex-shrink-0">
                             <div className="space-y-1">
                                 <Label className="text-[10px] text-muted-foreground">Stock on hand</Label>
@@ -1562,6 +1644,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                                     placeholder="0"
                                 />
                             </div>
+                            <AddStockControl onAdd={(qty) => onUpdate('stockQty', (item.stockQty || 0) + qty)} disabled={locked} />
                             <div className="space-y-1 text-center">
                                 <Label className="text-[10px] text-muted-foreground block">Unit</Label>
                                 <span className="text-xs text-muted-foreground inline-block h-8 leading-8">{item.unit || 'each'}</span>
@@ -1605,6 +1688,9 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                     />
                     {item.preBedding && (
                         <Badge className="bg-amber-600 text-white text-[10px] flex-shrink-0">Pre-Bed</Badge>
+                    )}
+                    {item.deliveredAtShow && (
+                        <Badge className="bg-cyan-600 text-white text-[10px] flex-shrink-0">At-Show</Badge>
                     )}
                     <div className="flex items-end gap-2 flex-shrink-0">
                         <div className="space-y-0.5">
@@ -1651,26 +1737,38 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
             {/* Fee details — same questions as the Fee Structure page */}
             <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault={item.unit === 'bale' ? 'per_bale' : 'per_bag'} unitOptions={['flat', 'per_bale', 'per_bag', 'per_night', 'custom']} dueDateRequiresFlag="preBedding" />
 
-            {/* Pre-bedding — shavings delivered to the stalls before the show, paid up front */}
-            <div className="flex items-center gap-2 border-t pt-2">
-                <Checkbox
-                    id={`prebed-${item.id}`}
-                    checked={item.preBedding || false}
-                    onCheckedChange={(checked) => {
-                        onUpdate('preBedding', !!checked);
-                        // Pre-bed is ordered ahead of the show — nudge the fee defaults to match.
-                        if (checked) {
-                            onUpdate('unitType', 'per_stall');
-                            onUpdate('paymentTiming', 'pre_entry');
-                        } else {
-                            // Without pre-delivery there's nothing to be due by.
-                            onUpdate('dueDate', '');
-                        }
-                    }}
-                />
-                <Label htmlFor={`prebed-${item.id}`} className="text-xs font-normal cursor-pointer">
-                    Pre-Show Delivery — delivered to stalls before the show (paid in advance). Still sold as a regular walk-up item at the show after the due date.
-                </Label>
+            {/* Delivery options — independent checkboxes; can be pre-delivered, sold at the show, or both */}
+            <div className="border-t pt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                    <Checkbox
+                        id={`prebed-${item.id}`}
+                        checked={item.preBedding || false}
+                        onCheckedChange={(checked) => {
+                            onUpdate('preBedding', !!checked);
+                            // Pre-bed is ordered ahead of the show — nudge the fee defaults to match.
+                            if (checked) {
+                                onUpdate('unitType', 'per_stall');
+                                onUpdate('paymentTiming', 'pre_entry');
+                            } else {
+                                // Without pre-delivery there's nothing to be due by.
+                                onUpdate('dueDate', '');
+                            }
+                        }}
+                    />
+                    <Label htmlFor={`prebed-${item.id}`} className="text-xs font-normal cursor-pointer">
+                        Pre-Show Delivery — delivered to stalls before the show (paid in advance)
+                    </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                    <Checkbox
+                        id={`atshow-${item.id}`}
+                        checked={item.deliveredAtShow || false}
+                        onCheckedChange={(checked) => onUpdate('deliveredAtShow', !!checked)}
+                    />
+                    <Label htmlFor={`atshow-${item.id}`} className="text-xs font-normal cursor-pointer">
+                        Delivered at Show — sold as a walk-up item during the show
+                    </Label>
+                </div>
             </div>
           </fieldset>
         </div>
@@ -2647,6 +2745,26 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const asInventoryShape = (f) => ({ ...f, unitType: f.unit_type, paymentTiming: f.payment_timing, dueDate: f.due_date, lateFee: f.late_fee_amount, customUnitLabel: f.custom_unit_label });
     const onUpdateManualFee = (id) => (field, value) => updateManualFee(id, FEE_FIELD_MAP[field] || field, value);
     const manualFeesByCategory = (cat) => manualFees.filter(f => feeCategory(f) === cat);
+    // Bump every manual (Fee Structure-sourced) fee in one category by delta, skipping locked ones.
+    const bulkAdjustManualFees = (cat, delta) => setManualFees(prev => prev.map(f =>
+        (feeCategory(f) === cat && !f.fee_locked) ? { ...f, amount: Math.max(0, (Number(f.amount) || 0) + delta) } : f
+    ));
+    const bulkAdjustStallFees = (delta) => {
+        setExtraStallFees(prev => prev.map(f => f.feeLocked ? f : { ...f, amount: Math.max(0, (Number(f.amount) || 0) + delta) }));
+        bulkAdjustManualFees('stall', delta);
+    };
+    const bulkAdjustRvFees = (delta) => {
+        setRvAreas(prev => prev.map(r => {
+            if (r.feeLocked) return r;
+            const field = r.pricingModel === 'flat' ? 'flatRate' : 'pricePerNight';
+            return { ...r, [field]: Math.max(0, (Number(r[field]) || 0) + delta) };
+        }));
+        bulkAdjustManualFees('rv', delta);
+    };
+    const bulkAdjustSupplyFees = (delta) => {
+        setSupplies(prev => prev.map(s => s.feeLocked ? s : { ...s, price: Math.max(0, (Number(s.price) || 0) + delta) }));
+        bulkAdjustManualFees('supply', delta);
+    };
     // A fee that came from the Fee Structure page (no inventory item behind it).
     const renderManualFee = (f, unitOptions) => {
         const feeLocked = !!f.fee_locked;
@@ -3846,9 +3964,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <h4 className="text-sm font-semibold">Stall Fees</h4>
                                         <Badge variant="outline" className="text-xs">{extraStallFees.length + manualFeesByCategory('stall').length}</Badge>
                                     </div>
-                                    <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
-                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
-                                    </Button>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <BulkAdjustControl label="Stall" onApply={bulkAdjustStallFees} />
+                                        <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
+                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
+                                        </Button>
+                                    </div>
                                 </div>
                                 <p className="text-xs text-muted-foreground -mt-1">
                                     Circuit fee, flat fee, late-entry rate, a barn&apos;s nightly rate — pick which barns each fee applies to. Charged on <strong>new</strong> bookings; bookings already taken keep their original price.
@@ -3882,9 +4003,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <h4 className="text-sm font-semibold">RV & Camping Fees</h4>
                                         <Badge variant="outline" className="text-xs">{rvAreas.length + manualFeesByCategory('rv').length}</Badge>
                                     </div>
-                                    <Button onClick={addRvArea} variant="outline" size="sm" className="h-7 text-xs">
-                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add RV Fee
-                                    </Button>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <BulkAdjustControl label="RV" onApply={bulkAdjustRvFees} />
+                                        <Button onClick={addRvArea} variant="outline" size="sm" className="h-7 text-xs">
+                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add RV Fee
+                                        </Button>
+                                    </div>
                                 </div>
                                 <p className="text-xs text-muted-foreground -mt-1">RV hookups (full / partial / dry), trailer parking, camping spots.</p>
                                 {rvAreas.length === 0 && manualFeesByCategory('rv').length === 0 ? (
@@ -3913,9 +4037,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <h4 className="text-sm font-semibold">Supply Fees</h4>
                                         <Badge variant="outline" className="text-xs">{supplies.length + manualFeesByCategory('supply').length}</Badge>
                                     </div>
-                                    <Button onClick={() => addSupply()} variant="outline" size="sm" className="h-7 text-xs">
-                                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Supply Fee
-                                    </Button>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <BulkAdjustControl label="Supply" onApply={bulkAdjustSupplyFees} />
+                                        <Button onClick={() => addSupply()} variant="outline" size="sm" className="h-7 text-xs">
+                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add Supply Fee
+                                        </Button>
+                                    </div>
                                 </div>
                                 {/* Quick-add presets */}
                                 <div className="flex flex-wrap gap-1.5">
