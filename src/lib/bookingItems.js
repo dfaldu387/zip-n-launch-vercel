@@ -11,7 +11,7 @@
 // (they depend on the exhibitor's arrival/departure vs the show window). A quick
 // internal booking prices the base stall / RV / supply lines only.
 
-import { buildExtraStallFeeItems, stallsByBarnFromSelection } from './extraStallFees';
+import { buildExtraStallFeeItems, buildBarnStallItems, stallsByBarnFromSelection } from './extraStallFees';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -19,36 +19,30 @@ export function buildBookingItems(inventory, selection, nights, { horseCount = 0
     const items = [];
     let subtotal = 0;
     const n = Math.max(1, Number(nights) || 1);
+    const stallsByBarn = stallsByBarnFromSelection(selection);
 
-    for (const barn of inventory?.barns || []) {
-        const qty = selection?.stalls?.[barn.id] || 0;
-        if (qty > 0) {
-            const unitPrice = barn.pricePerNight || 0;
-            const amount = qty * unitPrice * n;
-            subtotal += amount;
-            items.push({
-                type: 'stall',
-                refId: barn.id,
-                name: `${barn.name} × ${qty}`,
-                detail: `${money(unitPrice)}/night × ${n} night${n !== 1 ? 's' : ''} × ${qty}`,
-                qty,
-                nights: n,
-                unitPrice,
-                amount,
-            });
-        }
-    }
+    const barnStalls = buildBarnStallItems({
+        barns: inventory?.barns || [],
+        stallsByBarn,
+        extraStallFees: inventory?.extraStallFees || [],
+        nights: n,
+    });
+    items.push(...barnStalls.items);
+    subtotal += barnStalls.subtotal;
 
-    // Circuit / flat / late-entry fees that aren't tied to one barn. Added right
-    // after the stall lines so they read together on the invoice. Per-Night fees
-    // are excluded here — they're already folded into the barn's nightly rate
-    // above (see nightlyRateForBarn), so charging them again would double-bill.
+    // Circuit / late-entry / other facility-wide fees that aren't tied to one
+    // barn. Added right after the stall lines so they read together on the
+    // invoice. Per-Night fees are excluded — they're already folded into the
+    // barn's nightly rate above (see nightlyRateForBarn); Flat fees are
+    // excluded too — a barn with one is charged its flat rate directly in the
+    // stall line above (see buildBarnStallItems), so charging either again
+    // here would double-bill.
     const extras = buildExtraStallFeeItems({
         extraStallFees: inventory?.extraStallFees || [],
-        stallsByBarn: stallsByBarnFromSelection(selection),
+        stallsByBarn,
         nights: n,
         horseCount,
-        excludeUnitTypes: ['per_night'],
+        excludeUnitTypes: ['per_night', 'flat'],
     });
     items.push(...extras.items);
     subtotal += extras.subtotal;

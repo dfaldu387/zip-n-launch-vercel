@@ -44,7 +44,7 @@ const FILTERS = [
 
 // ────────────────────── Booking Card ──────────────────────
 
-const BookingCard = ({ booking, barns, onUpdateStatus, isSaving }) => {
+const BookingCard = ({ booking, barns, extraStallFees, onUpdateStatus, isSaving }) => {
     const meta = STATUS_META[booking.status] || STATUS_META.pending;
     const stalls = getAssignedStallsForBooking(booking, barns);
 
@@ -55,8 +55,9 @@ const BookingCard = ({ booking, barns, onUpdateStatus, isSaving }) => {
     const pricedStalls = stalls.map(s => ({
         ...s,
         pricePerNight: (barns || []).find(b => b.id === s.barnId)?.pricePerNight || 0,
+        barnName: (barns || []).find(b => b.id === s.barnId)?.name,
     }));
-    const bookingTotal = computeBookingTotal(booking, pricedStalls);
+    const bookingTotal = computeBookingTotal(booking, pricedStalls, extraStallFees);
 
     const rvItems = (booking.items || []).filter(i => i.type === 'rv');
     const supportItems = (booking.items || []).filter(i => i.type === 'support');
@@ -297,6 +298,7 @@ const CheckInPage = () => {
     const stalling = show?.project_data?.stallingService || {};
     const bookings = stalling.bookings || [];
     const barns = stalling.barns || [];
+    const extraStallFees = stalling.extraStallFees || [];
 
     const counts = useMemo(() => {
         const c = { all: bookings.length, pending: 0, confirmed: 0, checked_in: 0, checked_out: 0, cancelled: 0 };
@@ -484,6 +486,7 @@ const CheckInPage = () => {
                                         key={booking.id}
                                         booking={booking}
                                         barns={barns}
+                                        extraStallFees={extraStallFees}
                                         onUpdateStatus={updateBookingStatus}
                                         isSaving={isSaving}
                                     />

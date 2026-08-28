@@ -222,6 +222,7 @@ function drawFooter(doc, { booking, show, organizerContact }) {
  * @param {object} params.booking          Booking object (with items[], exhibitorName, etc.)
  * @param {object} params.show             { id, name, startDate, endDate, venueFacility }
  * @param {Array}  [params.assignedStalls] Optional: pre-computed stall assignments to print
+ * @param {Array}  [params.extraStallFees] Show's stall fees, for Flat-fee-priced barns
  * @param {object} [params.options]
  * @param {string} [params.options.brandName]        Header name (default: "EquiPatterns")
  * @param {string} [params.options.invoiceNumber]    Custom invoice number (default: derived from booking id)
@@ -230,7 +231,7 @@ function drawFooter(doc, { booking, show, organizerContact }) {
  * @param {string} [params.options.organizerContact] Email/phone shown in footer
  * @param {number} [params.options.amountPaid]       Amount already paid (default 0)
  */
-export async function generateInvoicePdf({ booking, show, assignedStalls = [], options = {} }) {
+export async function generateInvoicePdf({ booking, show, assignedStalls = [], extraStallFees = [], options = {} }) {
     // Async so jsPDF (~350 KB) loads when an invoice is actually generated, not
     // when the Housing page opens. This module also exports plain pricing
     // helpers that the page needs at render time.
@@ -265,7 +266,7 @@ export async function generateInvoicePdf({ booking, show, assignedStalls = [], o
     const tableStartY = drawShowAndBillTo(doc, { show, booking });
 
     // Line items table
-    const items = buildLineItems(booking || {}, assignedStalls);
+    const items = buildLineItems(booking || {}, assignedStalls, extraStallFees);
     const subtotal = items.reduce((s, r) => s + (Number(r.total) || 0), 0);
 
     autoTable(doc, {

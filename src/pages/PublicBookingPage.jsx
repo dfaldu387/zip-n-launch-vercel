@@ -21,7 +21,7 @@ import { useToast } from '@/components/ui/use-toast';
 const Divider = () => <div className="h-px bg-border my-2" />;
 import { supabase } from '@/lib/supabaseClient';
 import { startStallCheckout } from '@/lib/housingCheckout';
-import { buildExtraStallFeeItems, stallsByBarnFromSelection } from '@/lib/extraStallFees';
+import { buildExtraStallFeeItems, buildBarnStallItems, flatRateForBarn, stallsByBarnFromSelection } from '@/lib/extraStallFees';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -84,7 +84,7 @@ const QtyStepper = ({ value, onChange, max, min = 0 }) => (
 // ───────────────────────── Step 1: Select Items ─────────────────────────
 
 const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
-    const { barns, rvAreas, supportSpaces, supplies } = inventory;
+    const { barns, rvAreas, supportSpaces, supplies, extraStallFees } = inventory;
 
     const updateQty = (key, qty) => {
         setSelection(prev => ({ ...prev, [key]: qty }));
@@ -115,12 +115,15 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                             const available = Math.max(totalStalls - (Number(barn.taken) || 0), 0);
                             const soldOut = totalStalls > 0 && available === 0;
                             const qty = selection.stalls?.[barn.id] || 0;
+                            const flatRate = flatRateForBarn(barn.id, extraStallFees);
+                            const isFlat = flatRate > 0;
+                            const priceLabel = isFlat ? `${money(flatRate)} flat` : `${money(barn.pricePerNight)}/night`;
                             return (
                                 <div key={barn.id} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div className="flex-1">
                                         <p className="font-semibold text-sm">{barn.name}</p>
                                         <p className="text-xs text-muted-foreground">
-                                            {money(barn.pricePerNight)}/night ·{' '}
+                                            {priceLabel} ·{' '}
                                             {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
                                             {barn.stallSize && ` · ${barn.stallSize}`}
                                         </p>
@@ -669,13 +672,18 @@ const PublicBookingPage = () => {
                 if (!data) throw new Error('This show could not be found.');
                 setShow(data);
 
-                // Pre-fill arrival/departure with show window if available
-                const start = data?.showWindow?.start;
+                // Pre-fill arrival/departure. The move-in/move-out window
+                // (bookWindow) is what exhibitors must actually book within —
+                // it can differ from the show's competition dates (showWindow)
+                // — so it takes priority; fall back to showWindow when the
+                // organizer hasn't set a separate move-in/move-out window.
+                const start = data?.bookWindow?.start || data?.showWindow?.start;
+                const end = data?.bookWindow?.end || data?.showWindow?.end;
                 if (start) {
                     setDetails(d => ({
                         ...d,
                         arrivalDate: d.arrivalDate || start,
-                        departureDate: d.departureDate || data?.showWindow?.end || start,
+                        departureDate: d.departureDate || end || start,
                     }));
                 }
             } catch (err) {
@@ -765,34 +773,28 @@ const PublicBookingPage = () => {
         const items = [];
         let subtotal = 0;
 
-        for (const barn of inventory.barns) {
-            const qty = selection.stalls?.[barn.id] || 0;
-            if (qty > 0) {
-                const amount = qty * (barn.pricePerNight || 0) * nights;
-                subtotal += amount;
-                items.push({
-                    type: 'stall',
-                    refId: barn.id,
-                    name: `${barn.name} × ${qty}`,
-                    detail: `${money(barn.pricePerNight)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${qty}`,
-                    qty,
-                    nights,
-                    unitPrice: barn.pricePerNight || 0,
-                    amount,
-                });
-            }
-        }
+        const stallsByBarn = stallsByBarnFromSelection(selection);
+        const barnStalls = buildBarnStallItems({
+            barns: inventory.barns,
+            stallsByBarn,
+            extraStallFees: inventory.extraStallFees,
+            nights,
+        });
+        items.push(...barnStalls.items);
+        subtotal += barnStalls.subtotal;
 
-        // Circuit / flat / late-entry fees that aren't tied to one barn. Priced at
-        // booking time from the fee's own Unit Type, right after the stall lines.
-        // Per-Night fees are excluded — they're already folded into barn.pricePerNight
-        // above, so charging them again here would double-bill the exhibitor.
+        // Circuit / late-entry / other facility-wide fees that aren't tied to one
+        // barn. Priced at booking time from the fee's own Unit Type, right after
+        // the stall lines. Per-Night fees are excluded — they're already folded
+        // into barn.pricePerNight above. Flat fees are excluded too — a barn with
+        // one is charged its flat rate directly in the stall line above (see
+        // buildBarnStallItems), so charging either again here would double-bill.
         const extras = buildExtraStallFeeItems({
             extraStallFees: inventory.extraStallFees,
-            stallsByBarn: stallsByBarnFromSelection(selection),
+            stallsByBarn,
             nights,
             horseCount: Number(details.horseCount) || 0,
-            excludeUnitTypes: ['per_night'],
+            excludeUnitTypes: ['per_night', 'flat'],
         });
         items.push(...extras.items);
         subtotal += extras.subtotal;

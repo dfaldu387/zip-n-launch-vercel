@@ -2,8 +2,13 @@
 //
 // A fee is scoped to the barns it applies to: 'all' (the whole facility) or a
 // list of barn ids. Robert's model: one fee row can cover several barns at once
-// ("Circuit Fee — $200 flat, Barns A/B/C/D"), and a barn can carry as many fees
-// as the organizer likes ("Luxury Barn — $300 flat" on top of it). Fees add up.
+// ("Circuit Fee — $200 per stall, Barns A/B/C/D"), and a barn can carry as many
+// fees as the organizer likes ("Luxury Barn — $300 flat" on top of it). Fees add up.
+//
+// Flat and Per Stall both charge per stall booked in scope — Flat means "one
+// price for the whole stay" (as opposed to Per Night, which multiplies by
+// nights too); it is NOT a one-time charge. A genuine one-time charge that
+// fires once no matter how many stalls are booked uses unitType 'per_booking'.
 //
 // Barns themselves are inventory, not fees. A barn's nightly rate is DERIVED
 // from the Per-Night fees ticked for it (see nightlyRateForBarn) — the organizer
@@ -165,9 +170,13 @@ export function buildExtraStallFeeItems({
 
         let qty;
         let detail;
-        if (unitType === 'per_stall') {
+        if (unitType === 'per_stall' || unitType === 'flat') {
+            // Flat = one price for the whole stay per stall (no nights multiplier),
+            // as opposed to Per Night. Still scales with how many stalls are booked.
             qty = inScope;
-            detail = `${money(rate)} per stall × ${inScope}`;
+            detail = unitType === 'flat'
+                ? `${money(rate)} flat × ${inScope} stall${inScope !== 1 ? 's' : ''}`
+                : `${money(rate)} per stall × ${inScope}`;
         } else if (unitType === 'per_night') {
             qty = inScope * n;
             detail = `${money(rate)}/night × ${n} night${n !== 1 ? 's' : ''} × ${inScope}`;
@@ -175,8 +184,12 @@ export function buildExtraStallFeeItems({
             // Fall back to the stall count when the booking carries no horse list.
             qty = Number(horseCount) > 0 ? Number(horseCount) : inScope;
             detail = `${money(rate)} per horse × ${qty}`;
+        } else if (unitType === 'per_booking') {
+            // A genuine one-time charge — fires once no matter how many stalls.
+            qty = 1;
+            detail = `${money(rate)} one-time`;
         } else {
-            // flat / custom — charged once per booking.
+            // custom — charged once per booking.
             qty = 1;
             detail = `${money(rate)} flat`;
         }
@@ -195,6 +208,57 @@ export function buildExtraStallFeeItems({
             qty,
             unitPrice: rate,
             amount,
+        });
+    }
+
+    return { items, subtotal };
+}
+
+/**
+ * Build the per-barn stall line items for a booking selection.
+ *
+ * A barn whose price is driven by a Flat stall fee (see flatRateForBarn) is
+ * charged that flat rate per stall instead of nights × pricePerNight — the
+ * flat fee IS the barn's price (Robert's real shows almost always sell a
+ * stall flat), not a separate charge bolted on top. Callers must therefore
+ * pass `excludeUnitTypes: ['per_night', 'flat']` to buildExtraStallFeeItems
+ * so the same money isn't also billed as a standalone "Stall Fee" line.
+ *
+ * @param {object} args
+ * @param {Array}  args.barns           Inventory barns ({ id, name, pricePerNight })
+ * @param {object} args.stallsByBarn    { [barnId]: stallCount } being booked
+ * @param {Array}  args.extraStallFees  Fees from stallingService.extraStallFees
+ * @param {number} [args.nights]        Nights of the stay (min 1)
+ * @returns {{items: Array, subtotal: number}}
+ */
+export function buildBarnStallItems({ barns = [], stallsByBarn = {}, extraStallFees = [], nights = 1 }) {
+    const items = [];
+    let subtotal = 0;
+    const n = Math.max(1, Number(nights) || 1);
+
+    for (const barn of barns) {
+        const qty = Number(stallsByBarn[barn.id]) || 0;
+        if (qty <= 0) continue;
+
+        const flatRate = flatRateForBarn(barn.id, extraStallFees);
+        const isFlat = flatRate > 0;
+        const unitPrice = isFlat ? flatRate : (Number(barn.pricePerNight) || 0);
+        const amount = isFlat ? qty * unitPrice : qty * unitPrice * n;
+        const detail = isFlat
+            ? `${money(unitPrice)} flat × ${qty}`
+            : `${money(unitPrice)}/night × ${n} night${n !== 1 ? 's' : ''} × ${qty}`;
+
+        subtotal += amount;
+        items.push({
+            type: 'stall',
+            refId: barn.id,
+            name: `${barn.name} × ${qty}`,
+            detail,
+            qty,
+            nights: n,
+            unitPrice,
+            amount,
+            flat: isFlat,
         });
     }
 

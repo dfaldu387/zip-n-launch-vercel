@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    buildExtraStallFeeItems, stallsByBarnFromSelection,
+    buildExtraStallFeeItems, buildBarnStallItems, stallsByBarnFromSelection,
     feeScope, feeAppliesToBarn, nightlyRateForBarn, scopeLabelForFee, ALL_BARNS,
 } from './extraStallFees';
 
@@ -35,9 +35,18 @@ describe('buildExtraStallFeeItems', () => {
         expect(items).toEqual([]);
     });
 
-    it('charges a flat fee once, whatever the stall count', () => {
+    it('charges a flat fee per stall, ignoring nights', () => {
         const { subtotal } = buildExtraStallFeeItems({
             extraStallFees: [OFFICE],
+            stallsByBarn: { barnA: 9 },
+            nights: 5,
+        });
+        expect(subtotal).toBe(360); // 9 stalls × $40, same regardless of the 5 nights
+    });
+
+    it('charges a per_booking fee once, whatever the stall count', () => {
+        const { subtotal } = buildExtraStallFeeItems({
+            extraStallFees: [{ ...OFFICE, unitType: 'per_booking' }],
             stallsByBarn: { barnA: 9 },
             nights: 5,
         });
@@ -69,7 +78,7 @@ describe('buildExtraStallFeeItems', () => {
             stallsByBarn: { barnA: 4 },
         });
         expect(items).toHaveLength(2);
-        expect(subtotal).toBe(840); // 4 × 200 + 40
+        expect(subtotal).toBe(960); // 4 × 200 + 4 × 40
     });
 
     it('returns nothing when the show has no extra fees', () => {
@@ -80,13 +89,13 @@ describe('buildExtraStallFeeItems', () => {
 describe('multi-barn scope', () => {
     const MULTI = { id: 'f4', name: 'Circuit Fee', appliesTo: ['barnA', 'barnC'], amount: 200, unitType: 'flat' };
 
-    it('charges once for a flat fee scoped to several barns, counting stalls across them', () => {
+    it('charges a flat fee scoped to several barns per stall across them', () => {
         const { items, subtotal } = buildExtraStallFeeItems({
             extraStallFees: [MULTI],
             stallsByBarn: { barnA: 2, barnB: 5, barnC: 1 },
         });
         expect(items).toHaveLength(1);
-        expect(subtotal).toBe(200); // barnB isn't in scope, but the flat fee still fires once
+        expect(subtotal).toBe(600); // barnB isn't in scope; 3 stalls across barnA+barnC × $200
     });
 
     it('skips a multi-barn fee when none of its barns are booked', () => {
@@ -118,6 +127,45 @@ describe('multi-barn scope', () => {
         });
         expect(items).toHaveLength(1);
         expect(items[0].refId).toBe('f4');
+    });
+});
+
+describe('buildBarnStallItems', () => {
+    const barnA = { id: 'barnA', name: 'Barn A', pricePerNight: 75 };
+    const barnB = { id: 'barnB', name: 'Barn B', pricePerNight: 0 };
+
+    it('prices a barn with no flat fee per night as before', () => {
+        const { items, subtotal } = buildBarnStallItems({
+            barns: [barnA],
+            stallsByBarn: { barnA: 1 },
+            extraStallFees: [],
+            nights: 5,
+        });
+        expect(subtotal).toBe(375); // 1 stall × $75/night × 5 nights
+        expect(items[0].flat).toBe(false);
+    });
+
+    it('charges a barn covered by a Flat fee its flat rate per stall, ignoring nights', () => {
+        const allBarnsFlat = { id: 'f1', appliesTo: 'all', amount: 300, unitType: 'flat' };
+        const { items, subtotal } = buildBarnStallItems({
+            barns: [barnA, barnB],
+            stallsByBarn: { barnA: 1, barnB: 2 },
+            extraStallFees: [allBarnsFlat],
+            nights: 5,
+        });
+        // Barn A: flat wins over its $75/night rate. Barn B: flat is its only price.
+        expect(subtotal).toBe(300 + 600); // 1×$300 + 2×$300
+        expect(items.find(i => i.refId === 'barnA').flat).toBe(true);
+        expect(items.find(i => i.refId === 'barnB').flat).toBe(true);
+    });
+
+    it('skips barns with zero stalls booked', () => {
+        const { items } = buildBarnStallItems({
+            barns: [barnA, barnB],
+            stallsByBarn: { barnA: 0 },
+            extraStallFees: [],
+        });
+        expect(items).toEqual([]);
     });
 });
 

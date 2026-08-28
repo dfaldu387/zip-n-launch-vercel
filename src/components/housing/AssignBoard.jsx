@@ -443,6 +443,27 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
         return null;
     };
 
+    // A booking that ordered stalls in more than one barn (e.g. 1 in Barn A +
+    // 1 in Barn B) can still be assigned however the organizer likes — nothing
+    // blocks putting both in Barn A. But pricing now follows wherever a stall
+    // REALLY ends up (see buildStallRows in src/lib/bookingPricing.js), so
+    // this is just a heads-up the moment that barn's own ordered qty would be
+    // exceeded, not a block.
+    const stallOrderMismatchHint = (unitId, bookingId) => {
+        const barn = (barns || []).find(b => (b.stalls || []).some(s => s.id === unitId));
+        const b = bookingById[bookingId];
+        if (!barn || !b) return null;
+        const stallItems = (b.items || []).filter(it => it.type === 'stall');
+        if (stallItems.length <= 1) return null; // nothing to compare a single-barn order against
+        const orderedHere = stallItems
+            .filter(it => it.refId === barn.id)
+            .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+        const alreadyHere = getAssignedStallsForBooking(b, barns).filter(s => s.barnId === barn.id).length;
+        if (alreadyHere < orderedHere) return null;
+        const summary = stallItems.map(it => `${Number(it.qty) || 0}× ${it.name || it.refId}`).join(', ');
+        return `${b.exhibitorName || 'This booking'} ordered: ${summary}. Placing another here bills at ${barn.name}'s rate.`;
+    };
+
     // Enforce the booking's cap: never assign more units than the booking was
     // booked for. To add more, the booking must be updated on the Bookings tab
     // first. Reassigning a unit the booking already owns doesn't change its count,
@@ -459,6 +480,10 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                 variant: 'destructive',
             });
             return;
+        }
+        if (mode === 'stalls') {
+            const hint = stallOrderMismatchHint(unitId, bookingId);
+            if (hint) toast({ title: 'Different barn than ordered', description: hint });
         }
         cfg.assign(unitId, bookingId);
     };

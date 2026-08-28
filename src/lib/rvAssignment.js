@@ -53,3 +53,15 @@ export function assignRvSpotToBooking(rvAreas, spotId, bookingId) {
 
 // Clear a single spot.
 export const unassignRvSpot = (rvAreas, spotId) => assignRvSpotToBooking(rvAreas, spotId, null);
+
+// Clear EVERY spot pinned to a booking (mirrors unassignBookingStalls in
+// stallAssignment.js) — used when a booking is cancelled or deleted, so its
+// RV spots go back to available instead of staying stuck "taken" forever.
+export function unassignBookingRvSpots(rvAreas, bookingId) {
+    return (rvAreas || []).map(area => ({
+        ...area,
+        spots: (area.spots || []).map(spot =>
+            spot.bookingId === bookingId ? { ...spot, bookingId: null } : spot
+        ),
+    }));
+}

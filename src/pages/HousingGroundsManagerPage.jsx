@@ -40,7 +40,8 @@ import AssignBoard from '@/components/housing/AssignBoard';
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
-import { getRequestedStallCount, getAssignedStallsForBooking, planAutoAssign, applyPlanToBarns, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
+import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
+import { unassignBookingRvSpots } from '@/lib/rvAssignment';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import {
@@ -166,6 +167,7 @@ const FEE_UNIT_TYPE_OPTIONS = [
     { value: 'per_horse', label: 'Per Horse' },
     { value: 'per_night', label: 'Per Night' },
     { value: 'per_stall', label: 'Per Stall' },
+    { value: 'per_booking', label: 'One-Time Fee' },
     { value: 'per_bale', label: 'Per Bale' },
     { value: 'per_bag', label: 'Per Bag' },
     { value: 'custom', label: 'Custom Unit' },
@@ -1777,7 +1779,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
 
 // ── Booking Row ──
 
-const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall, onUpdateStallCount }) => {
+const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall, onUpdateStallCount }) => {
     // Bookings stay LOCKED by default so a stray click can't change or delete
     // them. Editing is an explicit, two-step action: press Edit → change fields →
     // Save (or Cancel to discard). Deleting is also two-step: press ✕ → confirm.
@@ -1870,8 +1872,9 @@ const BookingRow = ({ booking, barns, onUpdate, onRemove, onManageStalls, onStat
     const pricedStalls = assignedStalls.map(s => ({
         ...s,
         pricePerNight: barns.find(b => b.id === s.barnId)?.pricePerNight || 0,
+        barnName: barns.find(b => b.id === s.barnId)?.name,
     }));
-    const bookingTotal = computeBookingTotal(booking, pricedStalls);
+    const bookingTotal = computeBookingTotal(booking, pricedStalls, extraStallFees);
     const paidAmount = booking.paidAmount != null
         ? Number(booking.paidAmount)
         : (booking.paymentStatus === 'paid' ? bookingTotal : 0);
@@ -2604,7 +2607,7 @@ const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
                         onUpdate={onUpdateField}
                         unitDefault="per_night"
                         showHeader={false}
-                        unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'custom']}
+                        unitOptions={['flat', 'per_night', 'per_stall', 'per_horse', 'per_booking', 'custom']}
                         leadingCols={3}
                         leading={(
                             <>
@@ -2651,7 +2654,7 @@ const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, sectionSelectContainer }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const showNights = getShowNights(pd);
@@ -2857,22 +2860,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         });
     }, [remoteBookingsRef]);
 
-    // Auto-assign stalls for any unassigned bookings (e.g. online bookings that
-    // requested N stalls but had none picked). Runs once per show load, mirrors the
-    // "Smart Auto-Assign" button, and persists immediately. Organizer can still
-    // change stalls with "Manage".
-    const autoAssignedRef = useRef(false);
-    useEffect(() => {
-        if (autoAssignedRef.current) return;
-        if (!barns.length || !bookings.length) return;
-        const { plan } = planAutoAssign(bookings, barns);
-        if (plan.length > 0) {
-            autoAssignedRef.current = true;
-            const newBarns = applyPlanToBarns(barns, plan);
-            setBarns(newBarns);
-            onUpdateBarns?.(newBarns); // persist like the Smart Auto-Assign button does
-        }
-    }, [barns, bookings, onUpdateBarns]);
+    // Robert (2026-08-27 video): new bookings should stay unassigned until he
+    // places them himself — no silent auto-assign the moment this page loads.
+    // src/lib/stallAssignment.js still exports planAutoAssign/applyPlanToBarns
+    // for a future explicit organizer action; nothing calls them on load here.
 
     // ── Barn CRUD ──
     const addBarn = () => {
@@ -3167,8 +3158,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         }));
     };
 
-    const removeBooking = (bookingId) => {
+    const removeBooking = async (bookingId) => {
         setBookings(prev => prev.filter(b => b.id !== bookingId));
+        if (onRemoveBookingImmediate) await onRemoveBookingImmediate(bookingId);
     };
 
     // Live at-show hay/shavings reorders are supplies-only (no stalls/dates) — keep
@@ -3283,8 +3275,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             const pricedStalls = getAssignedStallsForBooking(b, barns).map(s => ({
                 ...s,
                 pricePerNight: barns.find(x => x.id === s.barnId)?.pricePerNight || 0,
+                barnName: barns.find(x => x.id === s.barnId)?.name,
             }));
-            const live = computeBookingTotal(b, pricedStalls);
+            const live = computeBookingTotal(b, pricedStalls, extraStallFees);
             if (live > 0) { total += live; continue; }
 
             // Legacy fallback: an old single-stall booking with no line items and no
@@ -3297,7 +3290,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             }
         }
         return total;
-    }, [bookings, barns]);
+    }, [bookings, barns, extraStallFees]);
 
     // How many of each supply have been sold across live bookings — drives the
     // supply inventory (Stock on-hand → Sold → Remaining). Booking supply line
@@ -3990,7 +3983,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 onRemove={() => removeExtraStallFee(fee.id)}
                                             />
                                         ))}
-                                        {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'custom']))}
+                                        {manualFeesByCategory('stall').map(f => renderManualFee(f, ['flat', 'per_night', 'per_stall', 'per_booking', 'custom']))}
                                     </div>
                                 )}
                             </div>
@@ -4122,6 +4115,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <BookingRow
                                             booking={booking}
                                             barns={barns}
+                                            extraStallFees={extraStallFees}
                                             onUpdate={(field, value) => updateBooking(booking.id, field, value)}
                                             onRemove={() => removeBooking(booking.id)}
                                             onStatusChange={changeBookingStatus}
@@ -4134,8 +4128,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         // the "Email invoice" button below reflect the real amount owed — not
                                         // the stale stored total, which is $0 for pre-fee bookings.
                                         const bPricedStalls = getAssignedStallsForBooking(booking, barns)
-                                            .map(s => ({ ...s, pricePerNight: barns.find(b => b.id === s.barnId)?.pricePerNight || 0 }));
-                                        const bTotal = computeBookingTotal(booking, bPricedStalls);
+                                            .map(s => ({
+                                                ...s,
+                                                pricePerNight: barns.find(b => b.id === s.barnId)?.pricePerNight || 0,
+                                                barnName: barns.find(b => b.id === s.barnId)?.name,
+                                            }));
+                                        const bTotal = computeBookingTotal(booking, bPricedStalls, extraStallFees);
                                         const bPaid = Number(booking.paidAmount ?? (booking.paymentStatus === 'paid' ? bTotal : 0));
                                         const bDue = Math.max(0, bTotal - bPaid);
                                         return (
@@ -4149,7 +4147,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             const assignedStalls = getAssignedStallsForBooking(booking, barns)
                                                 .map(s => {
                                                     const barn = barns.find(b => b.id === s.barnId);
-                                                    return { barnId: s.barnId, number: s.number, pricePerNight: barn?.pricePerNight || 0 };
+                                                    return { barnId: s.barnId, barnName: barn?.name, number: s.number, pricePerNight: barn?.pricePerNight || 0 };
                                                 });
                                             await downloadInvoicePdf({
                                                 booking,
@@ -4161,6 +4159,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                     venueFacility: pd?.showDetails?.venue?.facilityName,
                                                 },
                                                 assignedStalls,
+                                                extraStallFees,
                                                 options: {
                                                     organizerContact: pd?.showDetails?.general?.managerContactEmail,
                                                     // Without this the PDF always printed "Total" and never showed
@@ -5180,6 +5179,35 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
+    // Delete a booking immediately (no Save All needed). The delete button in the
+    // Bookings list only ever updated local React state — a deleted booking looked
+    // gone until the next remote refresh silently brought it right back, because
+    // it was never actually removed from the database. Releases any stalls/RV
+    // spots pinned to it in the SAME write, same as cancelling, so they don't
+    // stay stuck "taken" by a booking that no longer exists.
+    const removeBookingImmediate = useCallback(async (bookingId) => {
+        if (!selectedShow) return;
+        try {
+            const svc = selectedShow.project_data?.stallingService || {};
+            const updatedBookings = (svc.bookings || []).filter(b => b.id !== bookingId);
+            const updatedBarns = unassignBookingStalls(svc.barns || [], bookingId);
+            const updatedRvAreas = unassignBookingRvSpots(svc.rvAreas || [], bookingId);
+            const updatedData = stampModuleStatusOnSave({
+                ...selectedShow.project_data,
+                stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns, rvAreas: updatedRvAreas },
+            }, 'housing');
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+        } catch (error) {
+            toast({ title: 'Delete failed', description: error.message, variant: 'destructive' });
+        }
+    }, [selectedShow, toast]);
+
     // Append a manually-created booking to the DB immediately (no Save All needed),
     // mirroring updateBookingStatusImmediate so it survives a refresh right away.
     const addBookingImmediate = useCallback(async (booking) => {
@@ -5322,6 +5350,7 @@ const HousingGroundsManagerPage = () => {
                                 onUpdateRvAreas={updateRvAreasImmediate}
                                 onUpdateCover={updateCoverImageImmediate}
                                 onAddBookingImmediate={addBookingImmediate}
+                                onRemoveBookingImmediate={removeBookingImmediate}
                                 sectionSelectContainer={sectionSelectMount}
                             />
                         </>
