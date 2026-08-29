@@ -145,7 +145,7 @@ describe('buildBarnStallItems', () => {
         expect(items[0].flat).toBe(false);
     });
 
-    it('charges a barn covered by a Flat fee its flat rate per stall, ignoring nights', () => {
+    it('adds a Flat fee on top of a barn\'s per-night rate instead of replacing it', () => {
         const allBarnsFlat = { id: 'f1', appliesTo: 'all', amount: 300, unitType: 'flat' };
         const { items, subtotal } = buildBarnStallItems({
             barns: [barnA, barnB],
@@ -153,8 +153,9 @@ describe('buildBarnStallItems', () => {
             extraStallFees: [allBarnsFlat],
             nights: 5,
         });
-        // Barn A: flat wins over its $75/night rate. Barn B: flat is its only price.
-        expect(subtotal).toBe(300 + 600); // 1×$300 + 2×$300
+        // Barn A: $75/night × 5 nights + $300 flat = $675/stall. Barn B has no
+        // per-night rate, so the flat fee is its only price: $300/stall.
+        expect(subtotal).toBe(675 + 600); // 1×$675 + 2×$300
         expect(items.find(i => i.refId === 'barnA').flat).toBe(true);
         expect(items.find(i => i.refId === 'barnB').flat).toBe(true);
     });

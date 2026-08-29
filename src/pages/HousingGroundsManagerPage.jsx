@@ -51,7 +51,7 @@ import {
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
 } from '@/lib/barnGrid';
-import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee } from '@/lib/extraStallFees';
+import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee, barnPerStallTotal as computeBarnPerStallTotal, barnPerStallCost as computeBarnPerStallCost } from '@/lib/extraStallFees';
 
 // ── Constants ──
 
@@ -3319,16 +3319,29 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const rvPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0) * nights);
     const rvCostPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.costFlat || 0) : (r.costPerNight || 0) * nights);
 
-    // Barns work the same way, but the "flat or per-night" choice isn't typed
-    // directly — it's whichever kind of stall fee (Flat vs Per-Night) is scoped
-    // to the barn in the Fees tab. Robert's real shows almost always sell a
-    // stall flat, with per-night being the rare exception — so a Flat fee, when
-    // present, always wins over the barn's per-night rate (never both at once).
+    // Barns work the same way, but the price isn't typed directly on the barn —
+    // it's whichever stall fees (Flat and/or Per-Night) are scoped to it in the
+    // Fees tab, added together. A barn can carry a per-night base rate AND a
+    // flat add-on (an install fee scoped to "all barns", say) at the same time.
     const barnFlatTotal = (barn) => flatRateForBarn(barn.id, extraStallFees);
+    const barnHasNightly = (barn) => (barn.pricePerNight || 0) > 0;
     const barnIsFlat = (barn) => barnFlatTotal(barn) > 0;
-    const barnUnitPrice = (barn) => (barnIsFlat(barn) ? barnFlatTotal(barn) : (barn.pricePerNight || 0));
-    const barnPerStallTotal = (barn, nights) => (barnIsFlat(barn) ? barnFlatTotal(barn) : (barn.pricePerNight || 0) * nights);
-    const barnCostPerStallTotal = (barn, nights) => (barnIsFlat(barn) ? flatCostForBarn(barn.id, extraStallFees) : nightlyCostForBarn(barn.id, extraStallFees) * nights);
+    const barnPerStallTotal = (barn, nights) => computeBarnPerStallTotal(barn.id, extraStallFees, nights);
+    const barnCostPerStallTotal = (barn, nights) => computeBarnPerStallCost(barn.id, extraStallFees, nights);
+    // "$150/night", "$25 flat", or "$150/night + $25 flat" when a barn carries both.
+    const barnPriceLabel = (barn) => {
+        const parts = [];
+        if (barnHasNightly(barn)) parts.push(`$${(barn.pricePerNight || 0).toFixed(0)}/night`);
+        if (barnIsFlat(barn)) parts.push(`$${barnFlatTotal(barn).toFixed(0)} flat`);
+        return parts.length > 0 ? parts.join(' + ') : '$0';
+    };
+    const barnUnitLabel = (barn) => {
+        const nightly = barnHasNightly(barn);
+        const flat = barnIsFlat(barn);
+        if (nightly && flat) return 'Mixed';
+        if (flat) return 'Flat';
+        return 'Per Night';
+    };
     // A Flat fee fully reflected in a barn's row shouldn't also appear in the
     // separate "Extra Stall Fees" list below — that would double-count it.
     // Only fold it out of that list once it actually lands on a real barn (an
@@ -4343,8 +4356,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             return (
                                                 <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
                                                     <td className="px-2 py-1.5 font-medium">{barn.name}{isFlat && <span className="text-xs text-emerald-600"> · flat</span>}</td>
-                                                    <td className="px-2 py-1.5 text-right">${barnUnitPrice(barn).toFixed(0)}{isFlat ? ' flat' : ''}</td>
-                                                    <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
+                                                    <td className="px-2 py-1.5 text-right">{barnPriceLabel(barn)}</td>
+                                                    <td className="px-2 py-1.5 text-center">{barnHasNightly(barn) ? showNights : '—'}</td>
                                                     <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">
                                                         {whatIfMode ? (
@@ -4487,8 +4500,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                                 <td className="px-3 py-2 font-medium">{barn.name}{isFlat && <span className="text-xs text-emerald-600"> · flat</span>}</td>
                                                                 <td className="px-3 py-2 text-center text-muted-foreground">{typeInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{barn.stallCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">${barnUnitPrice(barn).toFixed(2)}{isFlat ? ' flat' : ''}</td>
-                                                                <td className="px-3 py-2 text-center text-muted-foreground">{isFlat ? 'Flat' : 'Per Night'}</td>
+                                                                <td className="px-3 py-2 text-right">{barnPriceLabel(barn)}</td>
+                                                                <td className="px-3 py-2 text-center text-muted-foreground">{barnUnitLabel(barn)}</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant={bookedCount > 0 ? 'default' : 'outline'} className="text-xs">
                                                                         {bookedCount}

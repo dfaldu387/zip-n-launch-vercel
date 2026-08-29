@@ -87,11 +87,10 @@ export function nightlyCostForBarn(barnId, stallFees = []) {
 
 /**
  * A barn's flat-rate total = every Flat stall fee scoped to it, added up.
- * Most real shows sell stalls at one flat price for the whole stay, with a
- * per-night rate being the rare exception — so when a barn carries a flat
- * fee, that flat total IS the barn's price (see barnIsFlat / barnUnitPrice
- * in HousingGroundsManagerPage.jsx), not an extra charge bolted on top of a
- * separate per-night number.
+ * This stacks on top of the barn's Per-Night total (see barnPerStallTotal) —
+ * a barn can carry a per-night base rate AND a flat add-on (an install fee
+ * that applies to "all barns", say) and both charge. "Fees add up" per the
+ * note at the top of this file.
  */
 export function flatRateForBarn(barnId, stallFees = []) {
     return (stallFees || []).reduce((sum, fee) => {
@@ -108,6 +107,24 @@ export function flatCostForBarn(barnId, stallFees = []) {
         if (!feeAppliesToBarn(fee, barnId)) return sum;
         return sum + (Number(fee.cost) || 0);
     }, 0);
+}
+
+/**
+ * A barn's real per-stall price for the stay: its Per-Night fees × nights,
+ * plus every Flat fee scoped to it. Both stack — see the "Fees add up" note
+ * at the top of this file. The single source of truth for what one stall in
+ * this barn costs, used by the Housing calculator, the public booking page
+ * and invoices alike so they never disagree.
+ */
+export function barnPerStallTotal(barnId, stallFees = [], nights = 1) {
+    const n = Math.max(1, Number(nights) || 1);
+    return nightlyRateForBarn(barnId, stallFees) * n + flatRateForBarn(barnId, stallFees);
+}
+
+/** Same as barnPerStallTotal, summing each fee's `cost` instead of `amount`. */
+export function barnPerStallCost(barnId, stallFees = [], nights = 1) {
+    const n = Math.max(1, Number(nights) || 1);
+    return nightlyCostForBarn(barnId, stallFees) * n + flatCostForBarn(barnId, stallFees);
 }
 
 /** Plain-language scope label for badges, summaries and invoices. */
@@ -217,12 +234,10 @@ export function buildExtraStallFeeItems({
 /**
  * Build the per-barn stall line items for a booking selection.
  *
- * A barn whose price is driven by a Flat stall fee (see flatRateForBarn) is
- * charged that flat rate per stall instead of nights × pricePerNight — the
- * flat fee IS the barn's price (Robert's real shows almost always sell a
- * stall flat), not a separate charge bolted on top. Callers must therefore
- * pass `excludeUnitTypes: ['per_night', 'flat']` to buildExtraStallFeeItems
- * so the same money isn't also billed as a standalone "Stall Fee" line.
+ * A barn's price is its Per-Night fees × nights PLUS every Flat fee scoped
+ * to it — both stack (see barnPerStallTotal). Callers must therefore pass
+ * `excludeUnitTypes: ['per_night', 'flat']` to buildExtraStallFeeItems so
+ * the same money isn't also billed again as a standalone "Stall Fee" line.
  *
  * @param {object} args
  * @param {Array}  args.barns           Inventory barns ({ id, name, pricePerNight })
@@ -240,13 +255,15 @@ export function buildBarnStallItems({ barns = [], stallsByBarn = {}, extraStallF
         const qty = Number(stallsByBarn[barn.id]) || 0;
         if (qty <= 0) continue;
 
+        const nightlyRate = Number(barn.pricePerNight) || 0;
         const flatRate = flatRateForBarn(barn.id, extraStallFees);
-        const isFlat = flatRate > 0;
-        const unitPrice = isFlat ? flatRate : (Number(barn.pricePerNight) || 0);
-        const amount = isFlat ? qty * unitPrice : qty * unitPrice * n;
-        const detail = isFlat
-            ? `${money(unitPrice)} flat × ${qty}`
-            : `${money(unitPrice)}/night × ${n} night${n !== 1 ? 's' : ''} × ${qty}`;
+        const perStallUnit = nightlyRate * n + flatRate;
+        const amount = qty * perStallUnit;
+
+        const parts = [];
+        if (nightlyRate > 0) parts.push(`${money(nightlyRate)}/night × ${n} night${n !== 1 ? 's' : ''}`);
+        if (flatRate > 0) parts.push(`${money(flatRate)} flat`);
+        const detail = `${(parts.length > 0 ? parts.join(' + ') : money(0))} × ${qty}`;
 
         subtotal += amount;
         items.push({
@@ -256,9 +273,14 @@ export function buildBarnStallItems({ barns = [], stallsByBarn = {}, extraStallF
             detail,
             qty,
             nights: n,
-            unitPrice,
+            // Only the per-night component — booking-time flat fees are
+            // re-derived live from the barn (see flatRateForBarn) wherever this
+            // is read back, so storing them here would double-bill on a stall
+            // that's later priced from this fallback (unassigned stalls in
+            // bookingPricing.js's buildStallRows).
+            unitPrice: nightlyRate,
             amount,
-            flat: isFlat,
+            flat: flatRate > 0,
         });
     }
 

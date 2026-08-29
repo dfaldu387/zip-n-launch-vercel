@@ -116,8 +116,12 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                             const soldOut = totalStalls > 0 && available === 0;
                             const qty = selection.stalls?.[barn.id] || 0;
                             const flatRate = flatRateForBarn(barn.id, extraStallFees);
+                            const hasNightly = (Number(barn.pricePerNight) || 0) > 0;
                             const isFlat = flatRate > 0;
-                            const priceLabel = isFlat ? `${money(flatRate)} flat` : `${money(barn.pricePerNight)}/night`;
+                            const priceParts = [];
+                            if (hasNightly) priceParts.push(`${money(barn.pricePerNight)}/night`);
+                            if (isFlat) priceParts.push(`${money(flatRate)} flat`);
+                            const priceLabel = priceParts.length > 0 ? priceParts.join(' + ') : money(0);
                             return (
                                 <div key={barn.id} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div className="flex-1">
