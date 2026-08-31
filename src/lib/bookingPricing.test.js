@@ -143,6 +143,29 @@ describe('computeBookingTotal — Flat stall fees', () => {
     });
 });
 
+describe('computeBookingTotal — per-barn nights (task 4 night picker)', () => {
+    it("bills each barn for its OWN picked nights, not the booking's overall nights", () => {
+        // Exhibitor's overall stay is 3 nights, but Barn A was only booked for 2
+        // of them (see buildBarnStallItems' nightsByBarn) — the item carries its
+        // own `nights: 2`, stamped at booking time.
+        const booking = {
+            id: 'bk-8',
+            nights: 3,
+            items: [{ type: 'stall', refId: 'barn-a', name: 'Barn A', qty: 3, unitPrice: 75, nights: 2 }],
+        };
+        expect(computeBookingTotal(booking, stalls(3, 75, 'barn-a'))).toBe(450); // 3 × 2 × $75, not 3 × 3 × $75
+    });
+
+    it('falls back to the booking-level nights for an older item with no nights stamped', () => {
+        const booking = {
+            id: 'bk-9',
+            nights: 3,
+            items: [{ type: 'stall', refId: 'barn-a', name: 'Barn A', qty: 3, unitPrice: 75 }],
+        };
+        expect(computeBookingTotal(booking, stalls(3, 75, 'barn-a'))).toBe(675); // 3 × 3 × $75
+    });
+});
+
 describe('buildLineItems', () => {
     it('shows the live price in the detail text, never a stale $0.00/night', () => {
         // The invoice PDF used to print "$0.00/night" next to a $50 unit price.

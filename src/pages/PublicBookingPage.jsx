@@ -22,6 +22,7 @@ const Divider = () => <div className="h-px bg-border my-2" />;
 import { supabase } from '@/lib/supabaseClient';
 import { startStallCheckout } from '@/lib/housingCheckout';
 import { buildExtraStallFeeItems, buildBarnStallItems, flatRateForBarn, stallsByBarnFromSelection } from '@/lib/extraStallFees';
+import { nightsInRange } from '@/lib/stallNights';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -83,11 +84,25 @@ const QtyStepper = ({ value, onChange, max, min = 0 }) => (
 
 // ───────────────────────── Step 1: Select Items ─────────────────────────
 
-const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
+const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) => {
     const { barns, rvAreas, supportSpaces, supplies, extraStallFees } = inventory;
+    const showNights = useMemo(() => nightsInRange(bookWindow?.start, bookWindow?.end), [bookWindow?.start, bookWindow?.end]);
 
     const updateQty = (key, qty) => {
         setSelection(prev => ({ ...prev, [key]: qty }));
+    };
+
+    // Which nights a barn's stalls are needed for — defaults to every night of
+    // the show's move-in/move-out window (same total as before this picker
+    // existed) until the exhibitor unchecks one.
+    const toggleBarnNight = (barnId, date) => {
+        setSelection(prev => {
+            const current = prev.barnNights?.[barnId] || showNights;
+            const next = current.includes(date)
+                ? current.filter(d => d !== date)
+                : [...current, date].sort();
+            return { ...prev, barnNights: { ...(prev.barnNights || {}), [barnId]: next } };
+        });
     };
 
     const updateRvFields = (rvId, fields) => {
@@ -122,24 +137,57 @@ const Step1_SelectItems = ({ inventory, selection, setSelection }) => {
                             if (hasNightly) priceParts.push(`${money(barn.pricePerNight)}/night`);
                             if (isFlat) priceParts.push(`${money(flatRate)} flat`);
                             const priceLabel = priceParts.length > 0 ? priceParts.join(' + ') : money(0);
+                            const selectedNights = selection.barnNights?.[barn.id] || showNights;
+                            // Only barns priced Per Night need "which nights" — a Flat fee
+                            // charges the same no matter how many nights are ticked.
+                            const showNightPicker = qty > 0 && hasNightly && showNights.length > 1;
                             return (
-                                <div key={barn.id} className="flex items-center justify-between p-3 border rounded-lg">
-                                    <div className="flex-1">
-                                        <p className="font-semibold text-sm">{barn.name}</p>
-                                        <p className="text-xs text-muted-foreground">
-                                            {priceLabel} ·{' '}
-                                            {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
-                                            {barn.stallSize && ` · ${barn.stallSize}`}
-                                        </p>
+                                <div key={barn.id} className="p-3 border rounded-lg space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex-1">
+                                            <p className="font-semibold text-sm">{barn.name}</p>
+                                            <p className="text-xs text-muted-foreground">
+                                                {priceLabel} ·{' '}
+                                                {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
+                                                {barn.stallSize && ` · ${barn.stallSize}`}
+                                            </p>
+                                        </div>
+                                        <QtyStepper
+                                            value={qty}
+                                            max={available}
+                                            onChange={(v) => setSelection(prev => ({
+                                                ...prev,
+                                                stalls: { ...(prev.stalls || {}), [barn.id]: v },
+                                            }))}
+                                        />
                                     </div>
-                                    <QtyStepper
-                                        value={qty}
-                                        max={available}
-                                        onChange={(v) => setSelection(prev => ({
-                                            ...prev,
-                                            stalls: { ...(prev.stalls || {}), [barn.id]: v },
-                                        }))}
-                                    />
+                                    {showNightPicker && (
+                                        <div className="pt-2 border-t">
+                                            <p className="text-xs text-muted-foreground mb-1.5">Which nights do you need {qty} stall{qty !== 1 ? 's' : ''} in {barn.name}?</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {showNights.map(date => {
+                                                    const checked = selectedNights.includes(date);
+                                                    return (
+                                                        <button
+                                                            key={date}
+                                                            type="button"
+                                                            onClick={() => toggleBarnNight(barn.id, date)}
+                                                            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${checked
+                                                                ? 'bg-primary text-primary-foreground border-primary'
+                                                                : 'bg-background text-muted-foreground border-input hover:bg-muted'}`}
+                                                        >
+                                                            {format(parseISO(date), 'MMM d')}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground mt-1.5">
+                                                {selectedNights.length === 0
+                                                    ? 'Select at least one night.'
+                                                    : `${qty} stall${qty !== 1 ? 's' : ''} × ${selectedNights.length} night${selectedNights.length !== 1 ? 's' : ''} = ${money(qty * selectedNights.length * (barn.pricePerNight || 0) + qty * flatRate)}`}
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}
@@ -778,11 +826,20 @@ const PublicBookingPage = () => {
         let subtotal = 0;
 
         const stallsByBarn = stallsByBarnFromSelection(selection);
+        // A barn priced Per Night can be booked for fewer nights than the full
+        // stay (task 4's night picker) — only barns the exhibitor has actually
+        // touched carry an override; everything else still uses the global
+        // `nights` from the arrival/departure dates below.
+        const nightsByBarn = {};
+        for (const [barnId, dates] of Object.entries(selection.barnNights || {})) {
+            nightsByBarn[barnId] = dates.length;
+        }
         const barnStalls = buildBarnStallItems({
             barns: inventory.barns,
             stallsByBarn,
             extraStallFees: inventory.extraStallFees,
             nights,
+            nightsByBarn,
         });
         items.push(...barnStalls.items);
         subtotal += barnStalls.subtotal;
@@ -938,6 +995,13 @@ const PublicBookingPage = () => {
                     variant: 'destructive',
                 });
                 return false;
+            }
+            for (const barn of inventory.barns) {
+                const qty = selection.stalls?.[barn.id] || 0;
+                if (qty > 0 && (selection.barnNights?.[barn.id]?.length === 0)) {
+                    toast({ title: 'Select at least one night', description: `Pick which nights you need ${barn.name} for.`, variant: 'destructive' });
+                    return false;
+                }
             }
         }
         if (step === 2) {
@@ -1300,7 +1364,7 @@ const PublicBookingPage = () => {
                         {/* Step body */}
                         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                             <div className="lg:col-span-3">
-                                {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} />}
+                                {step === 1 && <Step1_SelectItems inventory={inventory} selection={selection} setSelection={setSelection} bookWindow={bookWindow} />}
                                 {step === 2 && <Step2_Details details={details} setDetails={setDetails} showWindow={showWindow} bookWindow={bookWindow} />}
                                 {step === 3 && <Step3_Review orderSummary={orderSummary} details={details} onSubmit={handleSubmit} isSubmitting={isSubmitting} />}
                             </div>

@@ -31,6 +31,17 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
     const orderedTotal = stallItems.reduce((s, it) => s + (Number(it.qty) || 0), 0);
     const used = (assignedStalls || []).slice(0, orderedTotal);
 
+    // Nights actually billed per barn at booking time — an exhibitor can pick
+    // fewer nights than the full stay for a barn priced Per Night (task 4's
+    // night picker), so a stall isn't always billed for the booking's overall
+    // `nights`. Falls back to `nights` for bookings made before that existed,
+    // or a stall reassigned to a barn absent from the original order.
+    const nightsByBarn = new Map();
+    for (const it of stallItems) {
+        if (it.refId != null && it.nights != null) nightsByBarn.set(it.refId, Number(it.nights) || nights);
+    }
+    const nightsFor = (barnId) => nightsByBarn.get(barnId) ?? nights;
+
     const byBarn = new Map();
     for (const s of used) {
         if (!byBarn.has(s.barnId)) byBarn.set(s.barnId, []);
@@ -39,6 +50,7 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
 
     for (const [barnId, group] of byBarn) {
         const count = group.length;
+        const barnNights = nightsFor(barnId);
         const nightlyRate = group[0]?.pricePerNight ?? 0;
         const flatRate = flatRateForBarn(barnId, extraStallFees);
         // Mixed = a barn with BOTH a per-night rate and a flat add-on (e.g. an
@@ -47,13 +59,13 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         // so it's billed as one combined per-stall figure instead — same as
         // a pure-flat barn, just with both parts folded in.
         const isMixed = nightlyRate > 0 && flatRate > 0;
-        const perStallUnit = nightlyRate * nights + flatRate;
+        const perStallUnit = nightlyRate * barnNights + flatRate;
         const total = count * perStallUnit;
         const barnName = group[0]?.barnName || group[0]?.name || barnId;
         const numbers = group.map(s => s.number || s.stallNumber).filter(Boolean);
 
         const parts = [];
-        if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${nights} night${nights !== 1 ? 's' : ''}`);
+        if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
         if (flatRate > 0) parts.push(`${fmtMoney(flatRate)} flat`);
 
         let description = `${barnName} × ${count}`;
@@ -62,7 +74,7 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
 
         rows.push({
             description,
-            qty: (flatRate > 0 || isMixed) ? count : count * nights,
+            qty: (flatRate > 0 || isMixed) ? count : count * barnNights,
             unitPrice: isMixed ? perStallUnit : (flatRate > 0 ? flatRate : nightlyRate),
             total,
         });
@@ -79,14 +91,15 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         if (take <= 0) continue;
         deficit -= take;
 
+        const barnNights = nightsFor(it.refId);
         const nightlyRate = Number(it.unitPrice) || 0;
         const flatRate = flatRateForBarn(it.refId, extraStallFees);
         const isMixed = nightlyRate > 0 && flatRate > 0;
-        const perStallUnit = nightlyRate * nights + flatRate;
+        const perStallUnit = nightlyRate * barnNights + flatRate;
         const total = take * perStallUnit;
 
         const parts = [];
-        if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${nights} night${nights !== 1 ? 's' : ''}`);
+        if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
         if (flatRate > 0) parts.push(`${fmtMoney(flatRate)} flat`);
 
         let description = it.name || 'Stalls';
@@ -95,7 +108,7 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
 
         rows.push({
             description,
-            qty: (flatRate > 0 || isMixed) ? take : take * nights,
+            qty: (flatRate > 0 || isMixed) ? take : take * barnNights,
             unitPrice: isMixed ? perStallUnit : (flatRate > 0 ? flatRate : nightlyRate),
             total,
         });

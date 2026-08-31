@@ -2539,13 +2539,16 @@ export const migrateBarnPricesToFees = (barnList, feeList) => {
         const oldPrice = Number(barn.pricePerNight) || 0;
         if (oldPrice <= 0) continue;
         const derivedSoFar = nightlyRateForBarn(barn.id, feeList);
-        const gap = oldPrice - derivedSoFar;
-        if (gap <= 0) continue; // existing fees already reach (or exceed) the old price
+        if (derivedSoFar >= oldPrice) continue; // an All-Barns default fee already reaches (or exceeds) the old price
+        // A barn that gets its own named fee stops inheriting the All-Barns
+        // default entirely (see barnHasOwnFee in extraStallFees.js) — so the
+        // new fee must cover the barn's FULL old price, not just the shortfall
+        // against the default it's about to lose.
         migrated.push({
             id: uuidv4(),
             name: barn.feeLabel || barn.name,
             appliesTo: [barn.id],
-            amount: gap,
+            amount: oldPrice,
             unitType: 'per_night',
             paymentTiming: barn.paymentTiming || 'pre_entry',
             dueDate: barn.dueDate || '',

@@ -1,9 +1,14 @@
 // Stall fees — every charge that attaches to a stall booking.
 //
 // A fee is scoped to the barns it applies to: 'all' (the whole facility) or a
-// list of barn ids. Robert's model: one fee row can cover several barns at once
-// ("Circuit Fee — $200 per stall, Barns A/B/C/D"), and a barn can carry as many
-// fees as the organizer likes ("Luxury Barn — $300 flat" on top of it). Fees add up.
+// list of barn ids. Robert's model: one fee row can cover several NAMED barns
+// at once ("Circuit Fee — $200 per stall, Barns A/B/C/D"), and a barn can carry
+// as many named fees as the organizer likes ("Luxury Barn — $300 flat" on top
+// of it) — those stack. 'all' ("All Barns") is different: it is the DEFAULT
+// tier for barns that have no fee of their own, not an add-on. A barn with its
+// own named fee (see barnHasOwnFee) is priced from that fee alone and never
+// also picks up an 'all' fee — "Barn A, or B, or all barns", per Robert, not
+// "Barn A and all barns".
 //
 // Flat and Per Stall both charge per stall booked in scope — Flat means "one
 // price for the whole stay" (as opposed to Per Night, which multiplies by
@@ -51,6 +56,20 @@ export function feeAppliesToBarn(fee, barnId) {
 }
 
 /**
+ * Does `barnId` carry at least one fee scoped specifically to it (as opposed
+ * to "All Barns")? A barn with its own fee is priced from that fee alone —
+ * "All Barns" fees are the DEFAULT for barns that don't have one, not an
+ * add-on stacked on top of a barn-specific fee. Per Robert: "Barn A, or B,
+ * or all barns" — a barn is priced under exactly one tier.
+ */
+export function barnHasOwnFee(barnId, stallFees = []) {
+    return (stallFees || []).some(fee => {
+        const scope = feeScope(fee);
+        return scope !== ALL_BARNS && scope.includes(barnId);
+    });
+}
+
+/**
  * The one barn a fee belongs to, or null when it spans several / the facility.
  * Used by analytics to decide whether the money lands on a barn row or in the
  * facility-wide bucket.
@@ -65,8 +84,11 @@ export function soleBarnForFee(fee) {
  * This is what replaces the hand-typed price that used to live on the barn.
  */
 export function nightlyRateForBarn(barnId, stallFees = []) {
+    const exclusive = barnHasOwnFee(barnId, stallFees);
     return (stallFees || []).reduce((sum, fee) => {
         if ((fee.unitType || 'per_stall') !== 'per_night') return sum;
+        const scope = feeScope(fee);
+        if (exclusive && scope === ALL_BARNS) return sum;
         if (!feeAppliesToBarn(fee, barnId)) return sum;
         return sum + (Number(fee.amount) || 0);
     }, 0);
@@ -78,8 +100,11 @@ export function nightlyRateForBarn(barnId, stallFees = []) {
  * field instead of its `amount`. Used to show Max Profit alongside Max Revenue.
  */
 export function nightlyCostForBarn(barnId, stallFees = []) {
+    const exclusive = barnHasOwnFee(barnId, stallFees);
     return (stallFees || []).reduce((sum, fee) => {
         if ((fee.unitType || 'per_stall') !== 'per_night') return sum;
+        const scope = feeScope(fee);
+        if (exclusive && scope === ALL_BARNS) return sum;
         if (!feeAppliesToBarn(fee, barnId)) return sum;
         return sum + (Number(fee.cost) || 0);
     }, 0);
@@ -93,8 +118,11 @@ export function nightlyCostForBarn(barnId, stallFees = []) {
  * note at the top of this file.
  */
 export function flatRateForBarn(barnId, stallFees = []) {
+    const exclusive = barnHasOwnFee(barnId, stallFees);
     return (stallFees || []).reduce((sum, fee) => {
         if ((fee.unitType || 'per_stall') !== 'flat') return sum;
+        const scope = feeScope(fee);
+        if (exclusive && scope === ALL_BARNS) return sum;
         if (!feeAppliesToBarn(fee, barnId)) return sum;
         return sum + (Number(fee.amount) || 0);
     }, 0);
@@ -102,8 +130,11 @@ export function flatRateForBarn(barnId, stallFees = []) {
 
 /** Same as flatRateForBarn, summing each fee's `cost` instead of `amount`. */
 export function flatCostForBarn(barnId, stallFees = []) {
+    const exclusive = barnHasOwnFee(barnId, stallFees);
     return (stallFees || []).reduce((sum, fee) => {
         if ((fee.unitType || 'per_stall') !== 'flat') return sum;
+        const scope = feeScope(fee);
+        if (exclusive && scope === ALL_BARNS) return sum;
         if (!feeAppliesToBarn(fee, barnId)) return sum;
         return sum + (Number(fee.cost) || 0);
     }, 0);
@@ -168,17 +199,20 @@ export function buildExtraStallFeeItems({
     let subtotal = 0;
     const n = Math.max(1, Number(nights) || 1);
     const skip = new Set(excludeUnitTypes || []);
-    const totalStalls = Object.values(stallsByBarn).reduce((s, q) => s + (Number(q) || 0), 0);
 
     for (const fee of extraStallFees) {
         const unitType = fee.unitType || 'per_stall';
         if (skip.has(unitType)) continue;
 
-        // "All barns" counts every stall on the booking; a scoped fee only counts
-        // the stalls booked in the barns it covers. No stalls in scope → no charge.
+        // "All barns" counts every stall on the booking EXCEPT stalls in a barn
+        // that has its own named fee (that barn is priced from its own fee
+        // instead — see barnHasOwnFee). A scoped fee only counts the stalls
+        // booked in the barns it names. No stalls in scope → no charge.
         const scope = feeScope(fee);
         const inScope = scope === ALL_BARNS
-            ? totalStalls
+            ? Object.entries(stallsByBarn).reduce((s, [barnId, qty]) => (
+                barnHasOwnFee(barnId, extraStallFees) ? s : s + (Number(qty) || 0)
+            ), 0)
             : scope.reduce((s, barnId) => s + (Number(stallsByBarn[barnId]) || 0), 0);
         if (inScope <= 0) continue;
 
@@ -243,18 +277,24 @@ export function buildExtraStallFeeItems({
  * @param {Array}  args.barns           Inventory barns ({ id, name, pricePerNight })
  * @param {object} args.stallsByBarn    { [barnId]: stallCount } being booked
  * @param {Array}  args.extraStallFees  Fees from stallingService.extraStallFees
- * @param {number} [args.nights]        Nights of the stay (min 1)
+ * @param {number} [args.nights]        Nights of the stay (min 1) — the default
+ *                                      for any barn not listed in `nightsByBarn`
+ * @param {object} [args.nightsByBarn]  { [barnId]: nightCount } — lets an
+ *                                      exhibitor pick fewer nights than the full
+ *                                      stay for a specific barn (task 4's night
+ *                                      picker). Falls back to `nights` per barn.
  * @returns {{items: Array, subtotal: number}}
  */
-export function buildBarnStallItems({ barns = [], stallsByBarn = {}, extraStallFees = [], nights = 1 }) {
+export function buildBarnStallItems({ barns = [], stallsByBarn = {}, extraStallFees = [], nights = 1, nightsByBarn = {} }) {
     const items = [];
     let subtotal = 0;
-    const n = Math.max(1, Number(nights) || 1);
+    const fallbackNights = Math.max(1, Number(nights) || 1);
 
     for (const barn of barns) {
         const qty = Number(stallsByBarn[barn.id]) || 0;
         if (qty <= 0) continue;
 
+        const n = nightsByBarn[barn.id] != null ? Math.max(1, Number(nightsByBarn[barn.id]) || 1) : fallbackNights;
         const nightlyRate = Number(barn.pricePerNight) || 0;
         const flatRate = flatRateForBarn(barn.id, extraStallFees);
         const perStallUnit = nightlyRate * n + flatRate;

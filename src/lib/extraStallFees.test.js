@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     buildExtraStallFeeItems, buildBarnStallItems, stallsByBarnFromSelection,
-    feeScope, feeAppliesToBarn, nightlyRateForBarn, scopeLabelForFee, ALL_BARNS,
+    feeScope, feeAppliesToBarn, nightlyRateForBarn, flatRateForBarn, scopeLabelForFee, ALL_BARNS,
 } from './extraStallFees';
 
 const CIRCUIT = { id: 'f1', name: 'Circuit Fee', appliesTo: 'all', amount: 200, unitType: 'per_stall' };
@@ -72,17 +72,33 @@ describe('buildExtraStallFeeItems', () => {
         }).subtotal).toBe(100);
     });
 
-    it('ignores zero-amount fees and adds several fees together', () => {
+    it('ignores zero-amount fees and adds several fees together, across barns', () => {
         const { items, subtotal } = buildExtraStallFeeItems({
             extraStallFees: [CIRCUIT, OFFICE, { id: 'f3', appliesTo: 'all', amount: 0 }],
-            stallsByBarn: { barnA: 4 },
+            stallsByBarn: { barnA: 4, barnB: 3 },
         });
+        // barnA has its own named fee (OFFICE), so the 'all' Circuit Fee only
+        // counts barnB's stalls — see the "exclusive All Barns fee" rule.
         expect(items).toHaveLength(2);
-        expect(subtotal).toBe(960); // 4 × 200 + 4 × 40
+        expect(subtotal).toBe(760); // barnB: 3 × $200 (circuit) + barnA: 4 × $40 (office)
     });
 
     it('returns nothing when the show has no extra fees', () => {
         expect(buildExtraStallFeeItems({ stallsByBarn: { barnA: 4 } }).items).toEqual([]);
+    });
+
+    it("excludes stalls in a barn with its own named fee from an 'All Barns' fee's count", () => {
+        const barnAOwn = { id: 'f9', appliesTo: 'barnA', amount: 25, unitType: 'per_night' };
+        const { items, subtotal } = buildExtraStallFeeItems({
+            extraStallFees: [CIRCUIT, barnAOwn],
+            stallsByBarn: { barnA: 4, barnB: 2 },
+            excludeUnitTypes: ['per_night'],
+        });
+        // Circuit Fee ('all', per_stall) only counts barnB's 2 stalls — barnA has
+        // its own named fee, so it's excluded from the "All Barns" default tier.
+        expect(items).toHaveLength(1);
+        expect(items[0].qty).toBe(2);
+        expect(subtotal).toBe(400); // 2 stalls × $200
     });
 });
 
@@ -168,18 +184,59 @@ describe('buildBarnStallItems', () => {
         });
         expect(items).toEqual([]);
     });
+
+    it("bills a barn for its own picked nights, not the booking's overall nights (task 4)", () => {
+        // Robert: 3 stalls needed for only 1 of a 3-night stay should bill 3
+        // stall-nights, not 9. Barn A here is picked for 2 of 3 nights.
+        const { items, subtotal } = buildBarnStallItems({
+            barns: [barnA],
+            stallsByBarn: { barnA: 3 },
+            extraStallFees: [],
+            nights: 3,
+            nightsByBarn: { barnA: 2 },
+        });
+        expect(items[0].nights).toBe(2);
+        expect(subtotal).toBe(450); // 3 stalls × 2 nights × $75
+    });
+
+    it('falls back to the flat `nights` for a barn not listed in nightsByBarn', () => {
+        const { items } = buildBarnStallItems({
+            barns: [barnA, barnB],
+            stallsByBarn: { barnA: 1, barnB: 1 },
+            extraStallFees: [],
+            nights: 4,
+            nightsByBarn: { barnA: 2 }, // barnB untouched, uses the flat 4
+        });
+        expect(items.find(i => i.refId === 'barnA').nights).toBe(2);
+        expect(items.find(i => i.refId === 'barnB').nights).toBe(4);
+    });
 });
 
 describe('nightlyRateForBarn', () => {
     it('sums every per-night fee scoped to the barn, ignoring other unit types', () => {
         const fees = [
-            { id: 'f1', appliesTo: 'all', amount: 75, unitType: 'per_night' },
             { id: 'f2', appliesTo: ['barnA'], amount: 25, unitType: 'per_night' },
+            { id: 'f5', appliesTo: ['barnA'], amount: 10, unitType: 'per_night' },
             { id: 'f3', appliesTo: ['barnA'], amount: 300, unitType: 'flat' },
             { id: 'f4', appliesTo: ['barnB'], amount: 50, unitType: 'per_night' },
         ];
-        expect(nightlyRateForBarn('barnA', fees)).toBe(100);
-        expect(nightlyRateForBarn('barnB', fees)).toBe(125);
+        expect(nightlyRateForBarn('barnA', fees)).toBe(35);
+        expect(nightlyRateForBarn('barnB', fees)).toBe(50);
+    });
+
+    it("does not add an 'All Barns' per-night fee to a barn that already has its own named fee", () => {
+        // Robert's case: Barn A has its own $75/night fee; a separate $300 "All
+        // Barns" flat fee exists too. Barn A must be priced from its own fee
+        // alone — the All-Barns fee is the default for barns with none.
+        const fees = [
+            { id: 'f1', appliesTo: 'all', amount: 300, unitType: 'flat' },
+            { id: 'f2', appliesTo: ['barnA'], amount: 75, unitType: 'per_night' },
+        ];
+        expect(nightlyRateForBarn('barnA', fees)).toBe(75);
+        expect(flatRateForBarn('barnA', fees)).toBe(0);
+        // Barn B has no fee of its own, so it falls back to the All-Barns flat.
+        expect(nightlyRateForBarn('barnB', fees)).toBe(0);
+        expect(flatRateForBarn('barnB', fees)).toBe(300);
     });
 });
 

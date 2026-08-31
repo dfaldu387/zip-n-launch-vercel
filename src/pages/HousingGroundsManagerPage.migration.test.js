@@ -6,10 +6,13 @@ import { nightlyRateForBarn } from '@/lib/extraStallFees';
 // when an old show is first opened under the new fee model. A prior version
 // checked only "is some per-night fee scoped to this barn" and skipped adding
 // anything once ANY fee covered it — so a barn that already had an all-barns
-// per-night fee stacked on top of its own (higher) price lost that price
-// entirely: the migration added nothing, and the barn silently dropped to the
-// all-barns fee's amount. These tests pin the fix: top up the GAP between the
-// barn's old price and what the existing fees already derive for it.
+// per-night fee on top of its own (higher) price lost that price entirely: the
+// migration added nothing, and the barn silently dropped to the all-barns
+// fee's amount. These tests pin the fix: when the All-Barns default doesn't
+// already reach the barn's old price, create a fee for the barn's FULL old
+// price — a barn-specific fee excludes the All-Barns default rather than
+// stacking with it (see barnHasOwnFee in extraStallFees.js), so a partial
+// top-up would under-price the barn.
 describe('migrateBarnPricesToFees', () => {
     it('adds nothing when a barn had no price', () => {
         const barns = [{ id: 'a', name: 'Barn A', pricePerNight: 0 }];
