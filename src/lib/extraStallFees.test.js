@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
     buildExtraStallFeeItems, buildBarnStallItems, stallsByBarnFromSelection,
     feeScope, feeAppliesToBarn, nightlyRateForBarn, flatRateForBarn, scopeLabelForFee, ALL_BARNS,
+    groupBarnsForBooking, allocatePooledStalls, ALL_BARNS_GROUP_ID,
 } from './extraStallFees';
 
 const CIRCUIT = { id: 'f1', name: 'Circuit Fee', appliesTo: 'all', amount: 200, unitType: 'per_stall' };
@@ -261,6 +262,70 @@ describe('scopeLabelForFee', () => {
         // sentinel — it won't automatically cover a barn added later. The label must not
         // imply otherwise, or an organizer would wrongly assume a new barn is already covered.
         expect(scopeLabelForFee({ appliesTo: ['a', 'b', 'c'] }, barns)).toBe('3 barns');
+    });
+});
+
+describe('groupBarnsForBooking (Task 2: pooled "All Barns")', () => {
+    const barnA = { id: 'barnA', name: 'Barn A', total: 60, taken: 7, stallSize: '10x10' };
+    const barnB = { id: 'barnB', name: 'Barn B', total: 40, taken: 6, stallSize: '10x10' };
+    const fees = [
+        { id: 'f1', appliesTo: 'all', amount: 300, unitType: 'flat' },
+        { id: 'f2', appliesTo: ['barnA'], amount: 75, unitType: 'per_night' },
+    ];
+
+    it("pools a barn with no fee of its own into one combined 'All Barns' row", () => {
+        const { individual, pooledGroup } = groupBarnsForBooking([barnA, barnB], fees);
+        expect(individual).toEqual([barnA]);
+        expect(pooledGroup.id).toBe(ALL_BARNS_GROUP_ID);
+        expect(pooledGroup.name).toBe('All Barns');
+        // Only Barn B pools here — Barn A has its own fee and stays individual —
+        // so the combined total is Barn B's own 40, not 100.
+        expect(pooledGroup.total).toBe(40);
+        expect(pooledGroup.taken).toBe(6);
+        expect(pooledGroup.pricePerNight).toBe(0); // the all-barns fee here is Flat, not per-night
+    });
+
+    it("adds two pooled barns' availability together — Robert: \"these are not 40 anymore, it becomes 100\"", () => {
+        const barnC = { id: 'barnC', name: 'Barn C', total: 60, taken: 0, stallSize: '10x10' };
+        const allBarnsOnly = [fees[0]]; // no barn has its own fee — both barnA and barnC pool
+        const { individual, pooledGroup } = groupBarnsForBooking([barnA, barnC], allBarnsOnly);
+        expect(individual).toEqual([]);
+        expect(pooledGroup.total).toBe(120); // 60 + 60
+        expect(pooledGroup.taken).toBe(7);
+    });
+
+    it('keeps barns separate (no pooled group) when there is no priced All-Barns fee', () => {
+        const { individual, pooledGroup } = groupBarnsForBooking([barnA, barnB], [fees[1]]); // only Barn A's own fee
+        expect(pooledGroup).toBeNull();
+        expect(individual).toEqual([barnA, barnB]);
+    });
+
+    it('keeps barns separate when every barn already has its own fee', () => {
+        const bothOwn = [fees[1], { id: 'f3', appliesTo: ['barnB'], amount: 200, unitType: 'flat' }];
+        const { individual, pooledGroup } = groupBarnsForBooking([barnA, barnB], bothOwn);
+        expect(pooledGroup).toBeNull();
+        expect(individual).toEqual([barnA, barnB]);
+    });
+});
+
+describe('allocatePooledStalls', () => {
+    const members = [
+        { id: 'barnB', total: 40, taken: 6 }, // 34 available
+        { id: 'barnC', total: 10, taken: 10 }, // 0 available
+    ];
+
+    it('fills each member barn in turn up to its own remaining capacity', () => {
+        expect(allocatePooledStalls(members, 5)).toEqual({ barnB: 5 });
+    });
+
+    it('spills into the next member once the first is full', () => {
+        const full = [{ id: 'barnB', total: 2, taken: 0 }, { id: 'barnC', total: 10, taken: 0 }];
+        expect(allocatePooledStalls(full, 5)).toEqual({ barnB: 2, barnC: 3 });
+    });
+
+    it('returns an empty allocation for zero or negative quantity', () => {
+        expect(allocatePooledStalls(members, 0)).toEqual({});
+        expect(allocatePooledStalls(members, -3)).toEqual({});
     });
 });
 

@@ -12,6 +12,7 @@
 // internal booking prices the base stall / RV / supply lines only.
 
 import { buildExtraStallFeeItems, buildBarnStallItems, stallsByBarnFromSelection } from './extraStallFees';
+import { buildRvAreaItems, rvsByAreaFromSelection } from './extraRvFees';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -47,29 +48,14 @@ export function buildBookingItems(inventory, selection, nights, { horseCount = 0
     items.push(...extras.items);
     subtotal += extras.subtotal;
 
-    for (const rv of inventory?.rvAreas || []) {
-        const qty = selection?.rvs?.[rv.id] || 0;
-        if (qty > 0) {
-            const pricingModel = rv.pricingModel || 'nightly';
-            const isFlat = pricingModel === 'flat';
-            const unitPrice = isFlat ? (rv.flatRate || 0) : (rv.pricePerNight || 0);
-            const amount = isFlat ? qty * unitPrice : qty * unitPrice * n;
-            subtotal += amount;
-            items.push({
-                type: 'rv',
-                refId: rv.id,
-                name: `${rv.name} (RV) × ${qty}`,
-                detail: isFlat
-                    ? `${money(unitPrice)} flat × ${qty}`
-                    : `${money(unitPrice)}/night × ${n} night${n !== 1 ? 's' : ''} × ${qty}`,
-                qty,
-                nights: n,
-                unitPrice,
-                amount,
-                pricingModel,
-            });
-        }
-    }
+    const rvAreas = buildRvAreaItems({
+        rvAreas: inventory?.rvAreas || [],
+        rvsByArea: rvsByAreaFromSelection(selection),
+        extraRvFees: inventory?.extraRvFees || [],
+        nights: n,
+    });
+    items.push(...rvAreas.items);
+    subtotal += rvAreas.subtotal;
 
     for (const supply of inventory?.supplies || []) {
         const key = supply.id || supply.name;

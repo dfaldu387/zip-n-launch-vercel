@@ -52,6 +52,7 @@ import {
     bookedInRow, bookedInCol,
 } from '@/lib/barnGrid';
 import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee, barnPerStallTotal as computeBarnPerStallTotal, barnPerStallCost as computeBarnPerStallCost } from '@/lib/extraStallFees';
+import { ALL_RV_AREAS, nightlyRateForRvArea, flatRateForRvArea, nightlyCostForRvArea, flatCostForRvArea, scopeLabelForRvFee } from '@/lib/extraRvFees';
 
 // ── Constants ──
 
@@ -275,6 +276,40 @@ const BarnScopePicker = ({ value, barns, onChange, disabled }) => {
                     <label key={b.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
                         <Checkbox checked={!isAll && scope.includes(b.id)} onCheckedChange={() => toggleBarn(b.id)} />
                         {b.name}
+                    </label>
+                ))}
+            </PopoverContent>
+        </Popover>
+    );
+};
+
+// Tick any combination of RV areas a fee applies to — mirrors BarnScopePicker.
+const RvScopePicker = ({ value, rvAreas, onChange, disabled }) => {
+    const scope = feeScope({ appliesTo: value });
+    const isAll = scope === ALL_RV_AREAS;
+    const toggleArea = (rvId) => {
+        const current = isAll ? [] : scope;
+        const next = current.includes(rvId) ? current.filter(id => id !== rvId) : [...current, rvId];
+        onChange(next.length === 0 ? ALL_RV_AREAS : next);
+    };
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <Button type="button" variant="outline" size="sm" disabled={disabled} className="h-8 w-full justify-between text-xs font-normal">
+                    <span className="truncate">{scopeLabelForRvFee({ appliesTo: value }, rvAreas)}</span>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-56 p-2" align="start">
+                <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
+                    <Checkbox checked={isAll} onCheckedChange={(checked) => onChange(checked ? ALL_RV_AREAS : rvAreas.map(r => r.id))} />
+                    All RV areas (facility)
+                </label>
+                <div className="my-1 border-t" />
+                {rvAreas.map(r => (
+                    <label key={r.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
+                        <Checkbox checked={!isAll && scope.includes(r.id)} onCheckedChange={() => toggleArea(r.id)} />
+                        {r.name}
                     </label>
                 ))}
             </PopoverContent>
@@ -1350,7 +1385,6 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 
 const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
-    const pricingModel = rvArea.pricingModel || 'nightly';
     // Inventory and fees lock independently: locking the area in the Inventory tab
     // must not freeze its price in the Fees tab, and vice-versa.
     const lockField = variant === 'inventory' ? 'locked' : 'feeLocked';
@@ -1475,85 +1509,10 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
             {expanded && variant === 'fees' && (
                 <CardContent className="pt-2">
                   <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
-                    {/* Pricing Model drives the Price label right next to it — they always line up. */}
+                    <p className="text-xs text-muted-foreground">
+                        Pricing for this area now lives in the RV Fees list below — add a fee and pick this area under "Applies to".
+                    </p>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <div className="space-y-1">
-                            <Label className="text-xs">Pricing Model</Label>
-                            <Select value={pricingModel} onValueChange={(val) => onUpdate('pricingModel', val)}>
-                                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    {RV_PRICING_MODELS.map(m => (
-                                        <SelectItem key={m.id} value={m.id} className="text-xs">{m.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">
-                                {pricingModel === 'flat' ? 'Flat Rate ($)' : 'Price / Night ($)'}
-                            </Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={pricingModel === 'flat' ? (rvArea.flatRate || '') : (rvArea.pricePerNight || '')}
-                                onChange={(e) => onUpdate(
-                                    pricingModel === 'flat' ? 'flatRate' : 'pricePerNight',
-                                    parseFloat(e.target.value) || 0
-                                )}
-                                className="h-8 text-xs"
-                                placeholder="$0"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">
-                                {pricingModel === 'flat' ? 'Cost, flat ($)' : 'Cost / Night ($)'}
-                            </Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={pricingModel === 'flat' ? (rvArea.costFlat || '') : (rvArea.costPerNight || '')}
-                                onChange={(e) => onUpdate(
-                                    pricingModel === 'flat' ? 'costFlat' : 'costPerNight',
-                                    parseFloat(e.target.value) || 0
-                                )}
-                                className="h-8 text-xs"
-                                placeholder="$0"
-                                title="What this costs you — used to show profit."
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Payment Timing</Label>
-                            <Select value={rvArea.paymentTiming || 'pre_entry'} onValueChange={(val) => onUpdate('paymentTiming', val)}>
-                                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    {FEE_TIMING_OPTIONS.map(o => (
-                                        <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Due Date</Label>
-                            <Input
-                                type="date"
-                                value={rvArea.dueDate || ''}
-                                onChange={(e) => onUpdate('dueDate', e.target.value)}
-                                className="h-8 text-xs"
-                            />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <div className="space-y-1">
-                            <Label className="text-xs">Late Fee ($)</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={rvArea.lateFee || ''}
-                                onChange={(e) => onUpdate('lateFee', parseFloat(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                                placeholder="$0"
-                            />
-                        </div>
                         <div className="space-y-1">
                             <Label className="text-xs">Max RV Length (ft)</Label>
                             <Input
@@ -1563,28 +1522,6 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
                                 onChange={(e) => onUpdate('maxLength', parseInt(e.target.value) || 0)}
                                 className="h-8 text-xs"
                                 placeholder="0 = no limit"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Early Arrival Fee / Day ($)</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={rvArea.earlyArrivalFeePerDay || ''}
-                                onChange={(e) => onUpdate('earlyArrivalFeePerDay', parseFloat(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                                placeholder="$0"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Late Departure Fee / Day ($)</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={rvArea.lateDepartureFeePerDay || ''}
-                                onChange={(e) => onUpdate('lateDepartureFeePerDay', parseFloat(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                                placeholder="$0"
                             />
                         </div>
                     </div>
@@ -2559,6 +2496,34 @@ export const migrateBarnPricesToFees = (barnList, feeList) => {
     return migrated;
 };
 
+// Same migration as migrateBarnPricesToFees, for RV areas moving from a price
+// typed directly on the area (old pricingModel/pricePerNight/flatRate fields)
+// to the new RV Fees list. An area priced Flat migrates its flatRate; Per
+// Night migrates its pricePerNight — whichever pricingModel it was on.
+export const migrateRvPricesToFees = (rvList, feeList) => {
+    const migrated = [...feeList];
+    for (const rv of rvList) {
+        const isFlat = (rv.pricingModel || 'nightly') === 'flat';
+        const oldPrice = Number(isFlat ? rv.flatRate : rv.pricePerNight) || 0;
+        if (oldPrice <= 0) continue;
+        const derivedSoFar = isFlat ? flatRateForRvArea(rv.id, feeList) : nightlyRateForRvArea(rv.id, feeList);
+        if (derivedSoFar >= oldPrice) continue; // an All-RV-Areas default fee already reaches (or exceeds) the old price
+        migrated.push({
+            id: uuidv4(),
+            name: rv.feeLabel || rv.name,
+            appliesTo: [rv.id],
+            amount: oldPrice,
+            cost: Number(isFlat ? rv.costFlat : rv.costPerNight) || 0,
+            unitType: isFlat ? 'flat' : 'per_night',
+            paymentTiming: rv.paymentTiming || 'pre_entry',
+            dueDate: rv.dueDate || '',
+            lateFee: rv.lateFee || 0,
+            feeLocked: !!rv.feeLocked,
+        });
+    }
+    return migrated;
+};
+
 // A single Stall Fee row — collapsible like an RvAreaCard fee row, so a long
 // list of fees (circuit fee, per-barn rates, late fees...) can be tidied away.
 const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
@@ -2655,6 +2620,102 @@ const ExtraStallFeeRow = ({ fee, barns, onUpdateField, onRemove }) => {
     );
 };
 
+// RV fee row — mirrors ExtraStallFeeRow, but only Flat / Per Night unit types
+// (Robert: "per night or flat fee, entire stay, those would be the two options").
+const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
+    const [expanded, setExpanded] = useState(true);
+    return (
+        <div className={cn('rounded-lg border border-l-4 border-l-cyan-500 bg-muted/20 p-3 space-y-2', fee.feeLocked && 'opacity-70')}>
+            <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        title={expanded ? 'Minimize fee' : 'Open fee'}
+                        onClick={() => setExpanded(!expanded)}
+                    >
+                        {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                    </Button>
+                    <Input
+                        value={fee.name || ''}
+                        onChange={(e) => onUpdateField('name', e.target.value)}
+                        disabled={fee.feeLocked}
+                        placeholder="Fee name (e.g. RV Circuit Fee)"
+                        className="h-7 text-sm font-medium border-none shadow-none px-0 focus-visible:ring-0 max-w-[16rem] bg-transparent"
+                    />
+                    <Badge variant="outline" className="text-[10px] font-normal shrink-0">{scopeLabelForRvFee(fee, rvAreas)}</Badge>
+                    {fee.feeLocked && <Lock className="h-3 w-3 text-amber-600 shrink-0" />}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                    <SectionLockToggle
+                        locked={!!fee.feeLocked}
+                        onToggle={() => onUpdateField('feeLocked', !fee.feeLocked)}
+                    />
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-destructive hover:bg-destructive/10"
+                        disabled={fee.feeLocked}
+                        title="Delete this fee"
+                        onClick={onRemove}
+                    >
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                </div>
+            </div>
+            {expanded && (
+                <fieldset disabled={fee.feeLocked} className="block">
+                    <FeeDetailsFields
+                        item={fee}
+                        onUpdate={onUpdateField}
+                        unitDefault="per_night"
+                        showHeader={false}
+                        unitOptions={['flat', 'per_night']}
+                        leadingCols={3}
+                        leading={(
+                            <>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Applies to</Label>
+                                    <RvScopePicker
+                                        value={fee.appliesTo}
+                                        rvAreas={rvAreas}
+                                        disabled={fee.feeLocked}
+                                        onChange={(val) => onUpdateField('appliesTo', val)}
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Amount ($)</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        value={fee.amount || ''}
+                                        onChange={(e) => onUpdateField('amount', parseFloat(e.target.value) || 0)}
+                                        className="h-8 text-xs"
+                                        placeholder="$0"
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Cost / Expense ($)</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        value={fee.cost || ''}
+                                        onChange={(e) => onUpdateField('cost', parseFloat(e.target.value) || 0)}
+                                        className="h-8 text-xs"
+                                        placeholder="$0"
+                                        title="What this costs you, same unit as Amount — used to show profit."
+                                    />
+                                </div>
+                            </>
+                        )}
+                    />
+                </fieldset>
+            )}
+        </div>
+    );
+};
+
 // ── Main Dashboard ──
 
 const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer }) => {
@@ -2713,7 +2774,36 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             return changed ? next : prev;
         });
     }, [extraStallFees]);
-    const [rvAreas, setRvAreas] = useState(() => pd.stallingService?.rvAreas || []);
+    // RV fees: same model as stall fees — an RV area's own rate is DERIVED from
+    // whichever RV fees (Flat and/or Per-Night) are scoped to it (see the sync
+    // effect below), never typed on the area itself. Computed once, up front,
+    // alongside `rvAreas` for the same reason as extraStallFees/barns above.
+    const [extraRvFees, setExtraRvFees] = useState(() => migrateRvPricesToFees(
+        pd.stallingService?.rvAreas || [],
+        pd.stallingService?.extraRvFees || []
+    ));
+    const [rvAreas, setRvAreas] = useState(() => {
+        const initialRvAreas = pd.stallingService?.rvAreas || [];
+        const fees = migrateRvPricesToFees(initialRvAreas, pd.stallingService?.extraRvFees || []);
+        return initialRvAreas.map(r => ({ ...r, pricePerNight: nightlyRateForRvArea(r.id, fees) }));
+    });
+
+    // Keep each RV area's pricePerNight equal to the sum of its Per-Night RV
+    // fees as fees are edited — mirrors the barn sync effect above.
+    const rvPriceSyncFirstRun = useRef(true);
+    useEffect(() => {
+        if (rvPriceSyncFirstRun.current) { rvPriceSyncFirstRun.current = false; return; }
+        setRvAreas(prev => {
+            let changed = false;
+            const next = prev.map(r => {
+                const rate = nightlyRateForRvArea(r.id, extraRvFees);
+                if (rate === (r.pricePerNight || 0)) return r;
+                changed = true;
+                return { ...r, pricePerNight: rate };
+            });
+            return changed ? next : prev;
+        });
+    }, [extraRvFees]);
     // Support Spaces are no longer offered (removed from UI). We still carry any
     // previously-saved data through so it isn't lost, but it's never edited here.
     const supportSpaces = pd.stallingService?.supportSpaces || [];
@@ -2760,11 +2850,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         bulkAdjustManualFees('stall', delta);
     };
     const bulkAdjustRvFees = (delta) => {
-        setRvAreas(prev => prev.map(r => {
-            if (r.feeLocked) return r;
-            const field = r.pricingModel === 'flat' ? 'flatRate' : 'pricePerNight';
-            return { ...r, [field]: Math.max(0, (Number(r[field]) || 0) + delta) };
-        }));
+        setExtraRvFees(prev => prev.map(f => f.feeLocked ? f : { ...f, amount: Math.max(0, (Number(f.amount) || 0) + delta) }));
         bulkAdjustManualFees('rv', delta);
     };
     const bulkAdjustSupplyFees = (delta) => {
@@ -2927,6 +3013,24 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setExtraStallFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
     const removeExtraStallFee = (id) =>
         setExtraStallFees(prev => prev.filter(f => f.id !== id));
+
+    // ── RV fees (same model as stall fees, just Flat / Per Night only) ──
+    const addExtraRvFee = () => setExtraRvFees(prev => [...prev, {
+        id: uuidv4(),
+        name: '',
+        appliesTo: ALL_RV_AREAS,
+        amount: 0,
+        cost: 0,
+        unitType: 'per_night',
+        paymentTiming: 'pre_entry',
+        dueDate: '',
+        lateFee: 0,
+        feeLocked: false,
+    }]);
+    const updateExtraRvFee = (id, field, value) =>
+        setExtraRvFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
+    const removeExtraRvFee = (id) =>
+        setExtraRvFees(prev => prev.filter(f => f.id !== id));
 
     // Duplicate a barn (layout, box types, image, fee details) right below it,
     // with fresh ids and bookings cleared — quick way to make West Barn → Barn B.
@@ -3315,12 +3419,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // Sold count for one supply — match by id first, fall back to name (older bookings).
     const soldForSupply = (s) => (suppliesSold[s.id] || 0) + (s.id !== s.name ? (suppliesSold[s.name] || 0) : 0);
 
-    // RV areas can be priced per-night or as one flat rate for the whole stay.
-    // These keep every revenue table honest no matter which model is picked.
-    const rvIsFlat = (r) => r.pricingModel === 'flat';
-    const rvUnitPrice = (r) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0));
-    const rvPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.flatRate || 0) : (r.pricePerNight || 0) * nights);
-    const rvCostPerSpotTotal = (r, nights) => (rvIsFlat(r) ? (r.costFlat || 0) : (r.costPerNight || 0) * nights);
+    // RV areas work the same way as barns now — the price isn't typed directly
+    // on the area, it's whichever RV fees (Flat and/or Per-Night) are scoped to
+    // it in the RV Fees list, added together.
+    const rvFlatTotal = (r) => flatRateForRvArea(r.id, extraRvFees);
+    const rvNightlyRate = (r) => nightlyRateForRvArea(r.id, extraRvFees);
+    const rvIsFlat = (r) => rvFlatTotal(r) > 0;
+    const rvUnitPrice = (r) => (rvNightlyRate(r) > 0 ? rvNightlyRate(r) : rvFlatTotal(r));
+    const rvPerSpotTotal = (r, nights) => rvNightlyRate(r) * Math.max(1, Number(nights) || 1) + rvFlatTotal(r);
+    const rvCostPerSpotTotal = (r, nights) => nightlyCostForRvArea(r.id, extraRvFees) * Math.max(1, Number(nights) || 1) + flatCostForRvArea(r.id, extraRvFees);
 
     // Barns work the same way, but the price isn't typed directly on the barn —
     // it's whichever stall fees (Flat and/or Per-Night) are scoped to it in the
@@ -3488,9 +3595,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             const rs = rvTypeStats.get(rvTypeKey(area));
                             if (rs && isActive) { rs.occupied += Number(it.qty) || 0; rs.revenue += itAmt; }
                             if (isActive) {
-                                const isFlat = rvIsFlat(area);
-                                const unitCost = isFlat ? (Number(area.costFlat) || 0) : (Number(area.costPerNight) || 0) * nights;
-                                realizedCost += (Number(it.qty) || 0) * unitCost;
+                                realizedCost += (Number(it.qty) || 0) * rvCostPerSpotTotal(area, nights);
                             }
                         }
                     }
@@ -3576,13 +3681,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             bySupplyItem: [...supplyStats.values()],
             facilityFeeRevenue,
         };
-    }, [bookings, barns, extraStallFees, rvAreas, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
+    }, [bookings, barns, extraStallFees, rvAreas, extraRvFees, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
+        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
+    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
     const handleSave = () => persist();
 
@@ -3596,7 +3701,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, extraStallFees, rvAreas, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
+    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
 
     // KPI row at the top of the dashboard — the cards shown change with whichever
     // section is picked in the dropdown, so each section highlights numbers that
@@ -4004,26 +4109,46 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 )}
                             </div>
 
-                            {/* RV & Camping Fees */}
+                            {/* RV & Camping Fees — same model as Stall Fees: pick which RV areas
+                                each fee applies to (one, several, or all); an area with no fee
+                                of its own falls back to "All RV areas" instead of stacking. */}
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <Car className="h-4 w-4 text-cyan-600" />
                                         <h4 className="text-sm font-semibold">RV & Camping Fees</h4>
-                                        <Badge variant="outline" className="text-xs">{rvAreas.length + manualFeesByCategory('rv').length}</Badge>
+                                        <Badge variant="outline" className="text-xs">{extraRvFees.length + manualFeesByCategory('rv').length}</Badge>
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         <BulkAdjustControl label="RV" onApply={bulkAdjustRvFees} />
-                                        <Button onClick={addRvArea} variant="outline" size="sm" className="h-7 text-xs">
-                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add RV Fee
+                                        <Button onClick={addExtraRvFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={rvAreas.length === 0}>
+                                            <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
                                         </Button>
                                     </div>
                                 </div>
-                                <p className="text-xs text-muted-foreground -mt-1">RV hookups (full / partial / dry), trailer parking, camping spots.</p>
+                                <p className="text-xs text-muted-foreground -mt-1">
+                                    Flat fee (entire stay) or per-night rate — pick which RV areas each fee applies to. Charged on <strong>new</strong> bookings; bookings already taken keep their original price.
+                                </p>
                                 {rvAreas.length === 0 && manualFeesByCategory('rv').length === 0 ? (
-                                    <p className="text-xs text-muted-foreground italic">No RV/camping areas yet — click "Add RV Fee" to start.</p>
+                                    <p className="text-xs text-muted-foreground italic">Add an RV area first in the Inventory tab, then come back here to set its fee.</p>
                                 ) : (
-                                    <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        {extraRvFees.length === 0 ? (
+                                            <p className="text-xs text-muted-foreground italic">None yet — click "Add Fee" for an area's rate, or a fee covering several areas.</p>
+                                        ) : extraRvFees.map(fee => (
+                                            <ExtraRvFeeRow
+                                                key={fee.id}
+                                                fee={fee}
+                                                rvAreas={rvAreas}
+                                                onUpdateField={(field, value) => updateExtraRvFee(fee.id, field, value)}
+                                                onRemove={() => removeExtraRvFee(fee.id)}
+                                            />
+                                        ))}
+                                        {manualFeesByCategory('rv').map(f => renderManualFee(f, ['flat', 'per_night', 'custom']))}
+                                    </div>
+                                )}
+                                {rvAreas.length > 0 && (
+                                    <div className="space-y-4 pt-2">
                                         {rvAreas.map(rv => (
                                             <RvAreaCard
                                                 key={rv.id}
@@ -4033,7 +4158,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 onRemove={() => removeRvArea(rv.id)}
                                             />
                                         ))}
-                                        {manualFeesByCategory('rv').map(f => renderManualFee(f, ['flat', 'per_night', 'custom']))}
                                     </div>
                                 )}
                             </div>
@@ -4962,10 +5086,11 @@ function feeCategory(f) {
     return null;
 }
 
-function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], supplies = [] }) {
+function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], extraRvFees = [], supplies = [] }) {
     // Scope note carried onto the Fee Structure page so "Circuit Fee" reads as
     // facility-wide there too, without needing the Housing tab open.
     const scopeNote = (fee) => `Applies to ${scopeLabelForFee(fee, barns)}`;
+    const scopeNoteRv = (fee) => `Applies to ${scopeLabelForRvFee(fee, rvAreas)}`;
     const make = (sourceType, item, { name, amount, unitDefault }) => ({
         id: `housing-${item.id}`,
         source: 'housing',
@@ -4989,10 +5114,11 @@ function buildHousingFees({ barns = [], extraStallFees = [], rvAreas = [], suppl
             ...make('stall_extra', f, { name: f.name || 'Stall Fee', amount: f.amount, unitDefault: 'per_stall' }),
             notes: [f.notes, scopeNote(f)].filter(Boolean).join(' — '),
         })),
-        ...rvAreas.map(r => make('rv', r, {
-            name: r.feeLabel || r.name,
-            amount: r.pricingModel === 'flat' ? r.flatRate : r.pricePerNight,
-            unitDefault: r.pricingModel === 'flat' ? 'flat' : 'per_night',
+        // An RV area's own rate is just one of these fees (unitType 'per_night'
+        // or 'flat', scoped to that area) — same model as stall fees above.
+        ...extraRvFees.map(f => ({
+            ...make('rv_extra', f, { name: f.name || 'RV Fee', amount: f.amount, unitDefault: 'per_night' }),
+            notes: [f.notes, scopeNoteRv(f)].filter(Boolean).join(' — '),
         })),
         ...supplies.map(s => make('supply', s, { name: s.name, amount: s.price, unitDefault: s.unit === 'bale' ? 'per_bale' : 'per_bag' })),
     ];
@@ -5248,7 +5374,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, extraStallFees, rvAreas, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
@@ -5256,7 +5382,7 @@ const HousingGroundsManagerPage = () => {
             // edited copy from the dashboard when provided (two-way sync), else fall
             // back to whatever is on the record. Housing-sourced fees are regenerated.
             const manualFees = editedManualFees || (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
-            const housingFees = buildHousingFees({ barns, extraStallFees, rvAreas, supplies });
+            const housingFees = buildHousingFees({ barns, extraStallFees, rvAreas, extraRvFees, supplies });
             const effectiveStatus = publishStatus || selectedShow.project_data?.stallingService?.publishStatus || 'draft';
             const stamped = stampModuleStatusOnSave({
                 ...selectedShow.project_data,
@@ -5264,6 +5390,7 @@ const HousingGroundsManagerPage = () => {
                     ...selectedShow.project_data?.stallingService,
                     barns, rvAreas, supportSpaces, supplies, bookings,
                     extraStallFees: extraStallFees ?? selectedShow.project_data?.stallingService?.extraStallFees ?? [],
+                    extraRvFees: extraRvFees ?? selectedShow.project_data?.stallingService?.extraRvFees ?? [],
                     publishStatus: effectiveStatus,
                     // Keep prior values when an auto-save payload omits them.
                     moveInDate: moveInDate ?? selectedShow.project_data?.stallingService?.moveInDate ?? '',

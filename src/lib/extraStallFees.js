@@ -336,3 +336,73 @@ export function stallsByBarnFromSelection(selection) {
     }
     return out;
 }
+
+/**
+ * Synthetic barn id for the "All Barns" pooled selection row — never a real
+ * barn, so it never collides with an actual barn id.
+ */
+export const ALL_BARNS_GROUP_ID = '__all_barns__';
+
+/**
+ * Group barns for the exhibitor-facing selection UI (Robert's "RV and Camping
+ * Fee Logic" video, generalizing the barn version): a barn with its own named
+ * fee keeps its own row; barns relying on the "All Barns" default combine into
+ * ONE pooled row with their availability added together — "these are not 40
+ * anymore, it becomes 100."
+ *
+ * Returns `pooledGroup: null` when there's no priced "All Barns" fee to pool
+ * under, so a barn with no fee at all just keeps showing on its own instead of
+ * being mislabeled "All Barns" for $0.
+ *
+ * @param {Array} barns           Inventory barns ({ id, name, total, taken, stallSize })
+ * @param {Array} extraStallFees  Fees from stallingService.extraStallFees
+ * @returns {{ individual: Array, pooledGroup: object|null }}
+ */
+export function groupBarnsForBooking(barns = [], extraStallFees = []) {
+    const hasPricedAllBarnsFee = (extraStallFees || []).some(
+        fee => feeScope(fee) === ALL_BARNS && (Number(fee.amount) || 0) > 0
+    );
+
+    const individual = [];
+    const pooled = [];
+    for (const barn of barns) {
+        (barnHasOwnFee(barn.id, extraStallFees) ? individual : pooled).push(barn);
+    }
+
+    if (!hasPricedAllBarnsFee || pooled.length === 0) {
+        return { individual: [...individual, ...pooled], pooledGroup: null };
+    }
+
+    const totalStalls = pooled.reduce((s, b) => s + (Number(b.total) || 0), 0);
+    const taken = pooled.reduce((s, b) => s + (Number(b.taken) || 0), 0);
+    const pooledGroup = {
+        id: ALL_BARNS_GROUP_ID,
+        name: 'All Barns',
+        total: totalStalls,
+        taken,
+        stallSize: pooled[0]?.stallSize,
+        pricePerNight: nightlyRateForBarn(ALL_BARNS_GROUP_ID, extraStallFees),
+        members: pooled,
+    };
+
+    return { individual, pooledGroup };
+}
+
+/**
+ * Split a quantity requested against the pooled "All Barns" row back into real
+ * per-barn counts, filling each member barn's own remaining capacity in turn.
+ * Purely a UI-layer allocation — booking/pricing code never sees the pooled id,
+ * only the real barn ids this returns.
+ */
+export function allocatePooledStalls(members, qty) {
+    let remaining = Math.max(0, Number(qty) || 0);
+    const out = {};
+    for (const member of members) {
+        if (remaining <= 0) break;
+        const available = Math.max((Number(member.total) || 0) - (Number(member.taken) || 0), 0);
+        const take = Math.min(available, remaining);
+        if (take > 0) out[member.id] = take;
+        remaining -= take;
+    }
+    return out;
+}

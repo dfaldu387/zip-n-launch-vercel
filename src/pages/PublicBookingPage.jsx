@@ -21,7 +21,14 @@ import { useToast } from '@/components/ui/use-toast';
 const Divider = () => <div className="h-px bg-border my-2" />;
 import { supabase } from '@/lib/supabaseClient';
 import { startStallCheckout } from '@/lib/housingCheckout';
-import { buildExtraStallFeeItems, buildBarnStallItems, flatRateForBarn, stallsByBarnFromSelection } from '@/lib/extraStallFees';
+import {
+    buildExtraStallFeeItems, buildBarnStallItems, flatRateForBarn, stallsByBarnFromSelection,
+    groupBarnsForBooking, allocatePooledStalls, ALL_BARNS_GROUP_ID,
+} from '@/lib/extraStallFees';
+import {
+    buildRvAreaItems, flatRateForRvArea, rvsByAreaFromSelection,
+    groupRvAreasForBooking, allocatePooledRvSpots, ALL_RV_GROUP_ID,
+} from '@/lib/extraRvFees';
 import { nightsInRange } from '@/lib/stallNights';
 
 // ───────────────────────── Helpers ─────────────────────────
@@ -85,8 +92,24 @@ const QtyStepper = ({ value, onChange, max, min = 0 }) => (
 // ───────────────────────── Step 1: Select Items ─────────────────────────
 
 const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) => {
-    const { barns, rvAreas, supportSpaces, supplies, extraStallFees } = inventory;
+    const { barns, rvAreas, supportSpaces, supplies, extraStallFees, extraRvFees } = inventory;
     const showNights = useMemo(() => nightsInRange(bookWindow?.start, bookWindow?.end), [bookWindow?.start, bookWindow?.end]);
+
+    // Barns with no fee of their own combine into one "All Barns" row with
+    // combined availability — see groupBarnsForBooking. Booking/pricing code
+    // still only ever sees real barn ids; this is a display-layer grouping.
+    const { individual: individualBarns, pooledGroup } = useMemo(
+        () => groupBarnsForBooking(barns, extraStallFees),
+        [barns, extraStallFees]
+    );
+    const displayBarns = pooledGroup ? [...individualBarns, pooledGroup] : individualBarns;
+
+    // Same pooling for RV areas — "if we did all our V-areas, this becomes 20".
+    const { individual: individualRvAreas, pooledGroup: pooledRvGroup } = useMemo(
+        () => groupRvAreasForBooking(rvAreas, extraRvFees),
+        [rvAreas, extraRvFees]
+    );
+    const displayRvAreas = pooledRvGroup ? [...individualRvAreas, pooledRvGroup] : individualRvAreas;
 
     const updateQty = (key, qty) => {
         setSelection(prev => ({ ...prev, [key]: qty }));
@@ -112,6 +135,18 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
         }));
     };
 
+    // Same night picker as barns, for an RV area priced Per Night — "the same
+    // exact logic applies to a dropdown" per Robert's RV video.
+    const toggleRvNight = (rvId, date) => {
+        setSelection(prev => {
+            const current = prev.rvNights?.[rvId] || showNights;
+            const next = current.includes(date)
+                ? current.filter(d => d !== date)
+                : [...current, date].sort();
+            return { ...prev, rvNights: { ...(prev.rvNights || {}), [rvId]: next } };
+        });
+    };
+
     return (
         <div className="space-y-6">
             {/* Stalls */}
@@ -124,12 +159,16 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                         <CardDescription>Select how many of each stall type you need.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                        {barns.map(barn => {
+                        {displayBarns.map(barn => {
                             // total already excludes aisle/room/empty/blocked boxes.
                             const totalStalls = Number(barn.total) || 0;
                             const available = Math.max(totalStalls - (Number(barn.taken) || 0), 0);
                             const soldOut = totalStalls > 0 && available === 0;
-                            const qty = selection.stalls?.[barn.id] || 0;
+                            // The pooled "All Barns" row's qty is the sum across whichever
+                            // real member barns currently hold its stalls.
+                            const qty = barn.members
+                                ? barn.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]) || 0), 0)
+                                : (selection.stalls?.[barn.id] || 0);
                             const flatRate = flatRateForBarn(barn.id, extraStallFees);
                             const hasNightly = (Number(barn.pricePerNight) || 0) > 0;
                             const isFlat = flatRate > 0;
@@ -141,6 +180,11 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                             // Only barns priced Per Night need "which nights" — a Flat fee
                             // charges the same no matter how many nights are ticked.
                             const showNightPicker = qty > 0 && hasNightly && showNights.length > 1;
+                            // A barn can override the show's move-in/move-out window; falls
+                            // back to it when the barn uses the default (Robert: "people know
+                            // exactly what they're booking").
+                            const barnStart = barn.moveInDate || bookWindow?.start;
+                            const barnEnd = barn.moveOutDate || bookWindow?.end;
                             return (
                                 <div key={barn.id} className="p-3 border rounded-lg space-y-3">
                                     <div className="flex items-center justify-between">
@@ -151,14 +195,25 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                                 {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
                                                 {barn.stallSize && ` · ${barn.stallSize}`}
                                             </p>
+                                            {barnStart && barnEnd && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    {format(parseISO(barnStart), 'MMM d')} – {format(parseISO(barnEnd), 'MMM d, yyyy')}
+                                                </p>
+                                            )}
                                         </div>
                                         <QtyStepper
                                             value={qty}
                                             max={available}
-                                            onChange={(v) => setSelection(prev => ({
-                                                ...prev,
-                                                stalls: { ...(prev.stalls || {}), [barn.id]: v },
-                                            }))}
+                                            onChange={(v) => setSelection(prev => {
+                                                if (barn.members) {
+                                                    // Re-split the pooled quantity across real member
+                                                    // barns, filling each one's own remaining capacity.
+                                                    const stalls = { ...(prev.stalls || {}) };
+                                                    for (const m of barn.members) delete stalls[m.id];
+                                                    return { ...prev, stalls: { ...stalls, ...allocatePooledStalls(barn.members, v) } };
+                                                }
+                                                return { ...prev, stalls: { ...(prev.stalls || {}), [barn.id]: v } };
+                                            })}
                                         />
                                     </div>
                                     {showNightPicker && (
@@ -205,18 +260,28 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                         <CardDescription>Camp on-site during the show.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                        {rvAreas.map(rv => {
+                        {displayRvAreas.map(rv => {
                             const total = Number(rv.total) || 0;
                             const available = Math.max(total - (Number(rv.taken) || 0), 0);
                             const soldOut = total > 0 && available === 0;
-                            const qty = selection.rvs?.[rv.id] || 0;
-                            const pricingModel = rv.pricingModel || 'nightly';
-                            const isFlatRate = pricingModel === 'flat';
-                            const priceLabel = isFlatRate
-                                ? `${money(rv.flatRate)} flat`
-                                : `${money(rv.pricePerNight)}/night`;
+                            // The pooled "All RV Areas" row's qty is the sum across whichever
+                            // real member areas currently hold its spots.
+                            const qty = rv.members
+                                ? rv.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]) || 0), 0)
+                                : (selection.rvs?.[rv.id] || 0);
+                            const flatRate = flatRateForRvArea(rv.id, extraRvFees);
+                            const hasNightly = (Number(rv.pricePerNight) || 0) > 0;
+                            const isFlatRate = flatRate > 0;
+                            const priceParts = [];
+                            if (hasNightly) priceParts.push(`${money(rv.pricePerNight)}/night`);
+                            if (isFlatRate) priceParts.push(`${money(flatRate)} flat`);
+                            const priceLabel = priceParts.length > 0 ? priceParts.join(' + ') : money(0);
                             const userLen = Number(selection.rvOptions?.[rv.id]?.length || 0);
                             const lengthExceeded = rv.maxLength > 0 && userLen > 0 && userLen > rv.maxLength;
+                            const selectedRvNights = selection.rvNights?.[rv.id] || showNights;
+                            // Only Per Night RV areas need "which nights" — Flat charges the
+                            // same no matter how many nights are ticked.
+                            const showRvNightPicker = qty > 0 && hasNightly && showNights.length > 1;
                             return (
                                 <div key={rv.id} className={`p-3 border rounded-lg space-y-2 ${rv.isOverflow ? 'border-amber-400 bg-amber-50/50 dark:bg-amber-900/10' : ''}`}>
                                     <div className="flex items-center justify-between">
@@ -228,30 +293,65 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                                 )}
                                             </p>
                                             <p className="text-xs text-muted-foreground">
-                                                {priceLabel} · {soldOut ? 'Sold out' : `${available} of ${total} available`} ·{' '}
-                                                {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}
+                                                {priceLabel} · {soldOut ? 'Sold out' : `${available} of ${total} available`}
+                                                {!rv.members && <> · {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}</>}
                                                 {rv.maxLength > 0 && <> · Max {rv.maxLength}ft</>}
                                             </p>
-                                            <div className="flex gap-1 mt-1 flex-wrap">
-                                                {rv.hasWater && <Badge variant="secondary" className="text-xs">Water</Badge>}
-                                                {rv.hasSewer && <Badge variant="secondary" className="text-xs">Sewer</Badge>}
-                                                {rv.hasWifi && <Badge variant="secondary" className="text-xs">Wi-Fi</Badge>}
-                                                {(rv.earlyArrivalFeePerDay > 0 || rv.lateDepartureFeePerDay > 0) && (
-                                                    <Badge variant="outline" className="text-[10px]">
-                                                        Early/late {money(rv.earlyArrivalFeePerDay || rv.lateDepartureFeePerDay)}/day
-                                                    </Badge>
-                                                )}
-                                            </div>
+                                            {bookWindow?.start && bookWindow?.end && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    {format(parseISO(bookWindow.start), 'MMM d')} – {format(parseISO(bookWindow.end), 'MMM d, yyyy')}
+                                                </p>
+                                            )}
+                                            {!rv.members && (
+                                                <div className="flex gap-1 mt-1 flex-wrap">
+                                                    {rv.hasWater && <Badge variant="secondary" className="text-xs">Water</Badge>}
+                                                    {rv.hasSewer && <Badge variant="secondary" className="text-xs">Sewer</Badge>}
+                                                    {rv.hasWifi && <Badge variant="secondary" className="text-xs">Wi-Fi</Badge>}
+                                                </div>
+                                            )}
                                         </div>
                                         <QtyStepper
                                             value={qty}
                                             max={available}
-                                            onChange={(v) => setSelection(prev => ({
-                                                ...prev,
-                                                rvs: { ...(prev.rvs || {}), [rv.id]: v },
-                                            }))}
+                                            onChange={(v) => setSelection(prev => {
+                                                if (rv.members) {
+                                                    // Re-split the pooled quantity across real member
+                                                    // areas, filling each one's own remaining capacity.
+                                                    const rvs = { ...(prev.rvs || {}) };
+                                                    for (const m of rv.members) delete rvs[m.id];
+                                                    return { ...prev, rvs: { ...rvs, ...allocatePooledRvSpots(rv.members, v) } };
+                                                }
+                                                return { ...prev, rvs: { ...(prev.rvs || {}), [rv.id]: v } };
+                                            })}
                                         />
                                     </div>
+                                    {showRvNightPicker && (
+                                        <div className="pt-2 border-t">
+                                            <p className="text-xs text-muted-foreground mb-1.5">Which nights do you need {qty} spot{qty !== 1 ? 's' : ''} in {rv.name}?</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {showNights.map(date => {
+                                                    const checked = selectedRvNights.includes(date);
+                                                    return (
+                                                        <button
+                                                            key={date}
+                                                            type="button"
+                                                            onClick={() => toggleRvNight(rv.id, date)}
+                                                            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${checked
+                                                                ? 'bg-primary text-primary-foreground border-primary'
+                                                                : 'bg-background text-muted-foreground border-input hover:bg-muted'}`}
+                                                        >
+                                                            {format(parseISO(date), 'MMM d')}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground mt-1.5">
+                                                {selectedRvNights.length === 0
+                                                    ? 'Select at least one night.'
+                                                    : `${qty} spot${qty !== 1 ? 's' : ''} × ${selectedRvNights.length} night${selectedRvNights.length !== 1 ? 's' : ''} = ${money(qty * selectedRvNights.length * (rv.pricePerNight || 0))}`}
+                                            </p>
+                                        </div>
+                                    )}
                                     {qty > 0 && (
                                         <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                                             <div>
@@ -787,6 +887,7 @@ const PublicBookingPage = () => {
             supplies: inv.supplies || [],
             // Circuit / flat fees that aren't tied to one barn (see public_show_inventory).
             extraStallFees: inv.extraStallFees || [],
+            extraRvFees: inv.extraRvFees || [],
         };
     }, [show]);
 
@@ -829,10 +930,20 @@ const PublicBookingPage = () => {
         // A barn priced Per Night can be booked for fewer nights than the full
         // stay (task 4's night picker) — only barns the exhibitor has actually
         // touched carry an override; everything else still uses the global
-        // `nights` from the arrival/departure dates below.
+        // `nights` from the arrival/departure dates below. A night pick made
+        // against the pooled "All Barns" row is stored under the synthetic
+        // group id, so it's expanded back onto whichever real barns absorbed
+        // the pooled quantity (see groupBarnsForBooking / allocatePooledStalls).
+        const { pooledGroup } = groupBarnsForBooking(inventory.barns, inventory.extraStallFees);
         const nightsByBarn = {};
-        for (const [barnId, dates] of Object.entries(selection.barnNights || {})) {
-            nightsByBarn[barnId] = dates.length;
+        for (const [key, dates] of Object.entries(selection.barnNights || {})) {
+            if (key === ALL_BARNS_GROUP_ID && pooledGroup) {
+                for (const memberId of Object.keys(stallsByBarn)) {
+                    if (pooledGroup.members.some(m => m.id === memberId)) nightsByBarn[memberId] = dates.length;
+                }
+            } else {
+                nightsByBarn[key] = dates.length;
+            }
         }
         const barnStalls = buildBarnStallItems({
             barns: inventory.barns,
@@ -841,6 +952,16 @@ const PublicBookingPage = () => {
             nights,
             nightsByBarn,
         });
+        // Display only: a member of the pooled "All Barns" group shows as "All
+        // Barns" to the exhibitor, matching the Select Items row they actually
+        // picked. `refId` is left pointing at the REAL barn — stall
+        // auto-assignment (stallAssignment.js) and admin analytics key off it
+        // to know which physical barn to place the stall in.
+        for (const item of barnStalls.items) {
+            if (pooledGroup?.members.some(m => m.id === item.refId)) {
+                item.name = `All Barns × ${item.qty}`;
+            }
+        }
         items.push(...barnStalls.items);
         subtotal += barnStalls.subtotal;
 
@@ -860,74 +981,38 @@ const PublicBookingPage = () => {
         items.push(...extras.items);
         subtotal += extras.subtotal;
 
-        // Days outside the show window count toward early-arrival / late-departure fees
-        let earlyDays = 0;
-        let lateDays = 0;
-        try {
-            if (showWindow.start && details.arrivalDate) {
-                const e = differenceInCalendarDays(parseISO(showWindow.start), parseISO(details.arrivalDate));
-                if (e > 0) earlyDays = e;
-            }
-            if (showWindow.end && details.departureDate) {
-                const l = differenceInCalendarDays(parseISO(details.departureDate), parseISO(showWindow.end));
-                if (l > 0) lateDays = l;
-            }
-        } catch { /* date parse issue — skip fees */ }
-
-        for (const rv of inventory.rvAreas) {
-            const qty = selection.rvs?.[rv.id] || 0;
-            if (qty > 0) {
-                const pricingModel = rv.pricingModel || 'nightly';
-                const isFlat = pricingModel === 'flat';
-                const baseUnitPrice = isFlat ? (rv.flatRate || 0) : (rv.pricePerNight || 0);
-                const baseAmount = isFlat ? qty * baseUnitPrice : qty * baseUnitPrice * nights;
-                const baseDetail = isFlat
-                    ? `${money(baseUnitPrice)} flat × ${qty}`
-                    : `${money(baseUnitPrice)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${qty}`;
-                subtotal += baseAmount;
-                items.push({
-                    type: 'rv',
-                    refId: rv.id,
-                    name: `${rv.name} (RV) × ${qty}`,
-                    detail: baseDetail,
-                    qty,
-                    nights,
-                    unitPrice: baseUnitPrice,
-                    amount: baseAmount,
-                    options: selection.rvOptions?.[rv.id] || {},
-                    pricingModel,
-                });
-
-                // Early-arrival fee
-                if (earlyDays > 0 && (rv.earlyArrivalFeePerDay || 0) > 0) {
-                    const fee = qty * earlyDays * rv.earlyArrivalFeePerDay;
-                    subtotal += fee;
-                    items.push({
-                        type: 'rv_fee',
-                        refId: rv.id,
-                        name: `${rv.name} · Early arrival fee`,
-                        detail: `${earlyDays} day${earlyDays !== 1 ? 's' : ''} early × ${money(rv.earlyArrivalFeePerDay)} × ${qty}`,
-                        qty,
-                        unitPrice: rv.earlyArrivalFeePerDay,
-                        amount: fee,
-                    });
+        const rvsByArea = rvsByAreaFromSelection(selection);
+        // Same per-area night picker as barns — see the barn nightsByBarn block
+        // above for why the pooled key gets expanded onto real member areas.
+        const { pooledGroup: pooledRvGroup } = groupRvAreasForBooking(inventory.rvAreas, inventory.extraRvFees);
+        const nightsByArea = {};
+        for (const [key, dates] of Object.entries(selection.rvNights || {})) {
+            if (key === ALL_RV_GROUP_ID && pooledRvGroup) {
+                for (const memberId of Object.keys(rvsByArea)) {
+                    if (pooledRvGroup.members.some(m => m.id === memberId)) nightsByArea[memberId] = dates.length;
                 }
-                // Late-departure fee
-                if (lateDays > 0 && (rv.lateDepartureFeePerDay || 0) > 0) {
-                    const fee = qty * lateDays * rv.lateDepartureFeePerDay;
-                    subtotal += fee;
-                    items.push({
-                        type: 'rv_fee',
-                        refId: rv.id,
-                        name: `${rv.name} · Late departure fee`,
-                        detail: `${lateDays} day${lateDays !== 1 ? 's' : ''} late × ${money(rv.lateDepartureFeePerDay)} × ${qty}`,
-                        qty,
-                        unitPrice: rv.lateDepartureFeePerDay,
-                        amount: fee,
-                    });
-                }
+            } else {
+                nightsByArea[key] = dates.length;
             }
         }
+        const rvAreaItems = buildRvAreaItems({
+            rvAreas: inventory.rvAreas,
+            rvsByArea,
+            extraRvFees: inventory.extraRvFees,
+            nights,
+            nightsByArea,
+        });
+        for (const item of rvAreaItems.items) {
+            item.options = selection.rvOptions?.[item.refId] || {};
+            // Display only: a member of the pooled "All RV Areas" group shows as
+            // that, matching the Select Items row actually picked — `refId` is
+            // left pointing at the REAL area for assignment/analytics.
+            if (pooledRvGroup?.members.some(m => m.id === item.refId)) {
+                item.name = `All RV Areas × ${item.qty}`;
+            }
+        }
+        items.push(...rvAreaItems.items);
+        subtotal += rvAreaItems.subtotal;
 
         for (const space of inventory.supportSpaces) {
             const qty = selection.support?.[space.id] || 0;
@@ -996,10 +1081,36 @@ const PublicBookingPage = () => {
                 });
                 return false;
             }
+            const { pooledGroup } = groupBarnsForBooking(inventory.barns, inventory.extraStallFees);
+            const pooledQty = pooledGroup
+                ? pooledGroup.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]) || 0), 0)
+                : 0;
+            if (pooledQty > 0 && (selection.barnNights?.[ALL_BARNS_GROUP_ID]?.length === 0)) {
+                toast({ title: 'Select at least one night', description: 'Pick which nights you need All Barns for.', variant: 'destructive' });
+                return false;
+            }
             for (const barn of inventory.barns) {
+                if (pooledGroup?.members.some(m => m.id === barn.id)) continue; // validated above as the pooled row
                 const qty = selection.stalls?.[barn.id] || 0;
                 if (qty > 0 && (selection.barnNights?.[barn.id]?.length === 0)) {
                     toast({ title: 'Select at least one night', description: `Pick which nights you need ${barn.name} for.`, variant: 'destructive' });
+                    return false;
+                }
+            }
+            const { pooledGroup: pooledRvGroup } = groupRvAreasForBooking(inventory.rvAreas, inventory.extraRvFees);
+            const pooledRvQty = pooledRvGroup
+                ? pooledRvGroup.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]) || 0), 0)
+                : 0;
+            if (pooledRvQty > 0 && (selection.rvNights?.[ALL_RV_GROUP_ID]?.length === 0)) {
+                toast({ title: 'Select at least one night', description: 'Pick which nights you need All RV Areas for.', variant: 'destructive' });
+                return false;
+            }
+            for (const rv of inventory.rvAreas) {
+                if (pooledRvGroup?.members.some(m => m.id === rv.id)) continue; // validated above as the pooled row
+                const qty = selection.rvs?.[rv.id] || 0;
+                const isFlat = flatRateForRvArea(rv.id, inventory.extraRvFees) > 0;
+                if (!isFlat && qty > 0 && (selection.rvNights?.[rv.id]?.length === 0)) {
+                    toast({ title: 'Select at least one night', description: `Pick which nights you need ${rv.name} for.`, variant: 'destructive' });
                     return false;
                 }
             }
