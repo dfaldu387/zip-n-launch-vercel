@@ -44,6 +44,7 @@ import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooki
 import { unassignBookingRvSpots } from '@/lib/rvAssignment';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { sendStallInvoice } from '@/lib/housingCheckout';
+import { nightsInRange } from '@/lib/stallNights';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
     numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS,
@@ -445,6 +446,9 @@ const PUBLISH_STATUSES = [
 
 // ── Helpers ──
 
+// Fallback only — used before an organizer has set Move-In/Move-Out dates.
+// Once those are set, nights should come from them, not the show's date span
+// (Robert: the calculator was pulling the horse show's dates, not move-in/move-out).
 function getShowNights(pd) {
     if (!pd?.startDate) return 0;
     const start = new Date(pd.startDate);
@@ -2721,7 +2725,6 @@ const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
 const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
-    const showNights = getShowNights(pd);
     const [activeSection, setActiveSection] = useState('inventory');
 
     // Stall Fee Calculator "What-If" mode — a scratch estimator, never saved. Lets
@@ -2820,6 +2823,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const [moveInDate, setMoveInDate] = useState(() => pd.stallingService?.moveInDate || '');
     const [moveOutDate, setMoveOutDate] = useState(() => pd.stallingService?.moveOutDate || '');
     const [datesLocked, setDatesLocked] = useState(() => pd.stallingService?.datesLocked || false);
+
+    // Nights for pricing (Stall Fee Calculator, Pricing & Revenue Summary): use the
+    // Move-In/Move-Out window once it's set. Falls back to the show's date span only
+    // before an organizer has entered Move-In/Move-Out.
+    const showNights = useMemo(() => {
+        const fromMoveDates = nightsInRange(moveInDate, moveOutDate).length;
+        return fromMoveDates > 0 ? fromMoveDates : getShowNights(pd);
+    }, [moveInDate, moveOutDate, pd]);
 
     // Billing mode for the whole show — how stalls are sold online:
     //   'invoice_after' — admin confirms, then an invoice is generated for payment (default)
@@ -3428,6 +3439,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const rvUnitPrice = (r) => (rvNightlyRate(r) > 0 ? rvNightlyRate(r) : rvFlatTotal(r));
     const rvPerSpotTotal = (r, nights) => rvNightlyRate(r) * Math.max(1, Number(nights) || 1) + rvFlatTotal(r);
     const rvCostPerSpotTotal = (r, nights) => nightlyCostForRvArea(r.id, extraRvFees) * Math.max(1, Number(nights) || 1) + flatCostForRvArea(r.id, extraRvFees);
+    // Same shape as the RV price shown in the tables, but what it costs — mirrors barnCostLabel.
+    const rvCostLabel = (r) => {
+        const nightlyCost = nightlyCostForRvArea(r.id, extraRvFees);
+        const flatCost = flatCostForRvArea(r.id, extraRvFees);
+        return nightlyCost > 0 ? `$${nightlyCost.toFixed(0)}/night` : `$${flatCost.toFixed(0)} flat`;
+    };
 
     // Barns work the same way, but the price isn't typed directly on the barn —
     // it's whichever stall fees (Flat and/or Per-Night) are scoped to it in the
@@ -3445,12 +3462,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         if (barnIsFlat(barn)) parts.push(`$${barnFlatTotal(barn).toFixed(0)} flat`);
         return parts.length > 0 ? parts.join(' + ') : '$0';
     };
-    const barnUnitLabel = (barn) => {
-        const nightly = barnHasNightly(barn);
-        const flat = barnIsFlat(barn);
-        if (nightly && flat) return 'Mixed';
-        if (flat) return 'Flat';
-        return 'Per Night';
+    // Same shape as barnPriceLabel, but what it COSTS the facility — shown next
+    // to Price so an organizer can see margin at a glance (Robert: "it costs to
+    // show $100... estimated profit is this much").
+    const barnCostLabel = (barn) => {
+        const nightlyCost = nightlyCostForBarn(barn.id, extraStallFees);
+        const flatCost = flatCostForBarn(barn.id, extraStallFees);
+        const parts = [];
+        if (nightlyCost > 0) parts.push(`$${nightlyCost.toFixed(0)}/night`);
+        if (flatCost > 0) parts.push(`$${flatCost.toFixed(0)} flat`);
+        return parts.length > 0 ? parts.join(' + ') : '$0';
     };
     // A Flat fee fully reflected in a barn's row shouldn't also appear in the
     // separate "Extra Stall Fees" list below — that would double-count it.
@@ -4464,7 +4485,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <thead>
                                         <tr className="text-xs text-muted-foreground uppercase">
                                             <th className="text-left px-2 py-1 font-medium">Barn / Area</th>
-                                            <th className="text-right px-2 py-1 font-medium">Price / Night</th>
+                                            <th className="text-right px-2 py-1 font-medium">Price</th>
+                                            <th className="text-right px-2 py-1 font-medium">Cost</th>
                                             <th className="text-center px-2 py-1 font-medium">Nights</th>
                                             <th className="text-right px-2 py-1 font-medium">Per Stall Total</th>
                                             <th className="text-center px-2 py-1 font-medium">{whatIfMode ? 'Est. Sold' : 'Stalls'}</th>
@@ -4474,7 +4496,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </thead>
                                     <tbody>
                                         {barns.map(barn => {
-                                            const isFlat = barnIsFlat(barn);
                                             const qty = whatIfMode ? whatIfQtyFor(barn.id, barn.stallCount || 0) : (barn.stallCount || 0);
                                             const perStall = barnPerStallTotal(barn, showNights);
                                             const maxRev = perStall * qty;
@@ -4482,8 +4503,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             const maxProfit = (perStall - costPerStall) * qty;
                                             return (
                                                 <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                                    <td className="px-2 py-1.5 font-medium">{barn.name}{isFlat && <span className="text-xs text-emerald-600"> · flat</span>}</td>
+                                                    <td className="px-2 py-1.5 font-medium">{barn.name}</td>
                                                     <td className="px-2 py-1.5 text-right">{barnPriceLabel(barn)}</td>
+                                                    <td className="px-2 py-1.5 text-right text-muted-foreground">{barnCostLabel(barn)}</td>
                                                     <td className="px-2 py-1.5 text-center">{barnHasNightly(barn) ? showNights : '—'}</td>
                                                     <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">
@@ -4511,8 +4533,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             const maxProfit = (perSpot - costPerSpot) * qty;
                                             return (
                                                 <tr key={rv.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                                    <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV{isFlat ? ' · flat' : ''})</span></td>
+                                                    <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV)</span></td>
                                                     <td className="px-2 py-1.5 text-right">${rvUnitPrice(rv).toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-right text-muted-foreground">{rvCostLabel(rv)}</td>
                                                     <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
                                                     <td className="px-2 py-1.5 text-right font-semibold">${perSpot.toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">
@@ -4534,7 +4557,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </tbody>
                                     <tfoot>
                                         <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
-                                            <td className="px-2 py-1.5" colSpan={4}>Total</td>
+                                            <td className="px-2 py-1.5" colSpan={5}>Total</td>
                                             <td className="px-2 py-1.5 text-center">
                                                 {whatIfMode
                                                     ? barns.reduce((s, b) => s + whatIfQtyFor(b.id, b.stallCount || 0), 0)
@@ -4608,8 +4631,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <th className="text-left px-3 py-2 font-medium">Area</th>
                                                         <th className="text-center px-3 py-2 font-medium">Type</th>
                                                         <th className="text-center px-3 py-2 font-medium">Count</th>
-                                                        <th className="text-right px-3 py-2 font-medium">Price/Night</th>
-                                                        <th className="text-center px-3 py-2 font-medium">Unit</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Price</th>
+                                                        <th className="text-right px-3 py-2 font-medium">Cost</th>
                                                         <th className="text-center px-3 py-2 font-medium">Booked</th>
                                                         <th className="text-right px-3 py-2 font-medium">Max Revenue ({showNights || 3} nights)</th>
                                                         <th className="text-right px-3 py-2 font-medium">Max Profit</th>
@@ -4618,17 +4641,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 <tbody>
                                                     {barns.map(barn => {
                                                         const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
-                                                        const isFlat = barnIsFlat(barn);
                                                         const bookedCount = bookedStallsForBarn(barn);
                                                         const maxRev = (barn.stallCount || 0) * barnPerStallTotal(barn, showNights || 3);
                                                         const maxProfit = (barn.stallCount || 0) * (barnPerStallTotal(barn, showNights || 3) - barnCostPerStallTotal(barn, showNights || 3));
                                                         return (
                                                             <tr key={barn.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{barn.name}{isFlat && <span className="text-xs text-emerald-600"> · flat</span>}</td>
+                                                                <td className="px-3 py-2 font-medium">{barn.name}</td>
                                                                 <td className="px-3 py-2 text-center text-muted-foreground">{typeInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{barn.stallCount || 0}</td>
                                                                 <td className="px-3 py-2 text-right">{barnPriceLabel(barn)}</td>
-                                                                <td className="px-3 py-2 text-center text-muted-foreground">{barnUnitLabel(barn)}</td>
+                                                                <td className="px-3 py-2 text-right text-muted-foreground">{barnCostLabel(barn)}</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant={bookedCount > 0 ? 'default' : 'outline'} className="text-xs">
                                                                         {bookedCount}
@@ -4641,17 +4663,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                     })}
                                                     {rvAreas.map(rv => {
                                                         const hookupInfo = RV_HOOKUP_TYPES.find(t => t.id === rv.hookupType) || RV_HOOKUP_TYPES[0];
-                                                        const isFlat = rvIsFlat(rv);
                                                         const rvBooked = bookedSpotsForRvArea(rv);
                                                         const maxRev = (rv.spotCount || 0) * rvPerSpotTotal(rv, showNights || 3);
                                                         const maxProfit = (rv.spotCount || 0) * (rvPerSpotTotal(rv, showNights || 3) - rvCostPerSpotTotal(rv, showNights || 3));
                                                         return (
                                                             <tr key={rv.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{rv.name}{isFlat && <span className="text-xs text-cyan-600"> · flat</span>}</td>
+                                                                <td className="px-3 py-2 font-medium">{rv.name}</td>
                                                                 <td className="px-3 py-2 text-center text-cyan-600">{hookupInfo.name}</td>
                                                                 <td className="px-3 py-2 text-center">{rv.spotCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">${rvUnitPrice(rv).toFixed(2)}{isFlat ? ' flat' : ''}</td>
-                                                                <td className="px-3 py-2 text-center text-muted-foreground">{isFlat ? 'Flat' : 'Per Night'}</td>
+                                                                <td className="px-3 py-2 text-right">${rvUnitPrice(rv).toFixed(2)}</td>
+                                                                <td className="px-3 py-2 text-right text-muted-foreground">{rvCostLabel(rv)}</td>
                                                                 <td className="px-3 py-2 text-center">
                                                                     <Badge variant={rvBooked > 0 ? 'default' : 'outline'} className="text-xs">{rvBooked}</Badge>
                                                                 </td>
