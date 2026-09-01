@@ -212,6 +212,24 @@ const SectionCard = ({ icon: Icon, title, link, items }) => {
   );
 };
 
+/* ── Section Admin scopes ── */
+// Mirrors the module keys on ShowWorkspacePage's tool cards, so a Section
+// Admin's `sections` list lines up with the tools they're meant to be scoped to.
+const SHOW_SECTIONS = [
+  { key: 'editWizard', title: 'Edit Show Wizard' },
+  { key: 'showStructure', title: 'Show Structure & Expenses' },
+  { key: 'feeStructure', title: 'Fee Structure & Sponsors' },
+  { key: 'contracts', title: 'Contract Management' },
+  { key: 'patternBook', title: 'Pattern Book' },
+  { key: 'budgeting', title: 'Employee Budgeting Tool' },
+  { key: 'employeeScheduling', title: 'Employee / Arena Scheduling' },
+  { key: 'equipment', title: 'Equipment Management' },
+  { key: 'results', title: 'Results Entry' },
+  { key: 'awards', title: 'Awards Management' },
+  { key: 'financials', title: 'Financials & Analytics' },
+  { key: 'housing', title: 'Housing & Grounds Manager' },
+];
+
 /* ── Page ── */
 
 const HorseShowManagerPage = () => {
@@ -262,7 +280,13 @@ const HorseShowManagerPage = () => {
   const handleOpenManageAccess = async (e, show) => {
     e.stopPropagation();
     setManageAccessShow(show);
-    setPendingAdmins(Array.isArray(show.admins) ? show.admins : []);
+    // Normalize older entries (saved before role/sections existed) to Full Admin —
+    // that was the only kind of access this dialog granted at the time.
+    setPendingAdmins(
+      Array.isArray(show.admins)
+        ? show.admins.map(a => ({ role: 'full_admin', sections: [], ...a }))
+        : []
+    );
     setUserSearchQuery('');
 
     // Load all users (only the first time)
@@ -294,12 +318,31 @@ const HorseShowManagerPage = () => {
         full_name: userToAdd.full_name,
         added_at: new Date().toISOString(),
         added_by: user.id,
+        // 'full_admin' (everything) or 'section_admin' (scoped to `sections` below).
+        // Picking which is Robert's next step — everyone added today still gets
+        // full_admin, same as before this field existed.
+        role: 'full_admin',
+        sections: [],
       },
     ]);
   };
 
   const handleRemoveAdmin = (userId) => {
     setPendingAdmins(prev => prev.filter(a => a.user_id !== userId));
+  };
+
+  const handleSetAdminRole = (userId, role) => {
+    setPendingAdmins(prev => prev.map(a => (
+      a.user_id === userId ? { ...a, role, sections: role === 'full_admin' ? [] : a.sections } : a
+    )));
+  };
+
+  const handleToggleAdminSection = (userId, sectionKey) => {
+    setPendingAdmins(prev => prev.map(a => {
+      if (a.user_id !== userId) return a;
+      const has = (a.sections || []).includes(sectionKey);
+      return { ...a, sections: has ? a.sections.filter(s => s !== sectionKey) : [...(a.sections || []), sectionKey] };
+    }));
   };
 
   const handleSaveAdmins = async () => {
@@ -618,23 +661,82 @@ const HorseShowManagerPage = () => {
                     No show managers yet. Add users below to share access.
                   </p>
                 ) : (
-                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                     {pendingAdmins.map((a) => (
-                      <div key={a.user_id} className="flex items-center justify-between gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">{a.full_name || '(no name)'}</p>
-                          <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
-                            <Mail className="h-3 w-3" /> {a.email}
-                          </p>
+                      <div key={a.user_id} className="px-3 py-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{a.full_name || '(no name)'}</p>
+                            <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                              <Mail className="h-3 w-3" /> {a.email}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveAdmin(a.user_id)}
+                            className="p-1 rounded text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                            title="Remove show manager"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveAdmin(a.user_id)}
-                          className="p-1 rounded text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
-                          title="Remove show manager"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
+
+                        {/* Role toggle — Full Admin (everything) or Section Admin (scoped below) */}
+                        <div className="flex items-center gap-1 mt-2">
+                          <button
+                            type="button"
+                            onClick={() => handleSetAdminRole(a.user_id, 'full_admin')}
+                            className={cn(
+                              'text-[11px] px-2 py-1 rounded-full border transition-colors',
+                              (a.role || 'full_admin') === 'full_admin'
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-white dark:bg-transparent text-muted-foreground border-blue-200 dark:border-blue-800'
+                            )}
+                          >
+                            Full Admin
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetAdminRole(a.user_id, 'section_admin')}
+                            className={cn(
+                              'text-[11px] px-2 py-1 rounded-full border transition-colors',
+                              a.role === 'section_admin'
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-white dark:bg-transparent text-muted-foreground border-blue-200 dark:border-blue-800'
+                            )}
+                          >
+                            Section Admin
+                          </button>
+                        </div>
+
+                        {/* Section picker — only shown for Section Admins */}
+                        {a.role === 'section_admin' && (
+                          <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-blue-100 dark:border-blue-900">
+                            {SHOW_SECTIONS.map(sec => {
+                              const checked = (a.sections || []).includes(sec.key);
+                              return (
+                                <button
+                                  key={sec.key}
+                                  type="button"
+                                  onClick={() => handleToggleAdminSection(a.user_id, sec.key)}
+                                  className={cn(
+                                    'text-[11px] px-2 py-1 rounded-full border transition-colors',
+                                    checked
+                                      ? 'bg-emerald-600 text-white border-emerald-600'
+                                      : 'bg-white dark:bg-transparent text-muted-foreground border-muted-foreground/30'
+                                  )}
+                                >
+                                  {sec.title}
+                                </button>
+                              );
+                            })}
+                            {(a.sections || []).length === 0 && (
+                              <p className="text-[11px] text-amber-600 w-full mt-1">
+                                Pick at least one section, or they won't be able to access anything.
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

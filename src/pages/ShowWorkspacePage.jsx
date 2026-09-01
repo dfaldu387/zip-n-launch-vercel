@@ -435,6 +435,35 @@ const ShowWorkspacePage = () => {
     })),
   }));
 
+  // A Section Admin only sees the tool cards they've been scoped to in Manage
+  // Access — everything else is hidden outright (not shown locked), per
+  // Robert's ask. The owner and Full Admins are unaffected. Groups left with
+  // no visible items are dropped so an empty "Employee Management" heading
+  // doesn't show for nothing.
+  const isOwner = show?.user_id === user?.id;
+  const myAdminEntry = (Array.isArray(show?.admins) ? show.admins : []).find(a => a.user_id === user?.id);
+  const isSectionOnlyAdmin = !isOwner && myAdminEntry?.role === 'section_admin';
+  const mySections = myAdminEntry?.sections || [];
+  const visibleModules = isSectionOnlyAdmin
+    ? modulesWithStatus
+        .map(section => ({ ...section, items: section.items.filter(item => mySections.includes(item.key)) }))
+        .filter(section => section.items.length > 0)
+    : modulesWithStatus;
+
+  // "Who manages what" — Robert's ask: note at the bottom which section, if
+  // any, has been handed off to a Section Admin (see Manage Access on the
+  // Horse Show Manager list page). Only lists sections that actually have
+  // someone assigned, so an unused show doesn't show a wall of "nobody."
+  const sectionAdmins = Array.isArray(show?.admins) ? show.admins.filter(a => a.role === 'section_admin') : [];
+  const sectionAssignments = modules
+    .flatMap(s => s.items)
+    .map(item => ({
+      key: item.key,
+      title: item.title,
+      people: sectionAdmins.filter(a => (a.sections || []).includes(item.key)),
+    }))
+    .filter(entry => entry.people.length > 0);
+
   return (
     <>
       <Helmet>
@@ -499,6 +528,9 @@ const ShowWorkspacePage = () => {
                   )}
                 </div>
               </div>
+              {/* Whole-show controls (lock, packet PDF, edit wizard) — a Section
+                  Admin only gets their scoped tool cards below, not these. */}
+              {!isSectionOnlyAdmin && (
               <div className="flex items-center gap-2 flex-wrap lg:shrink-0">
                 {/* Show Lock/Unlock Toggle */}
                 {isShowLocked ? (
@@ -568,6 +600,7 @@ const ShowWorkspacePage = () => {
                   Edit Show
                 </Button>
               </div>
+              )}
             </div>
           </motion.div>
 
@@ -640,7 +673,7 @@ const ShowWorkspacePage = () => {
           )}
 
           {/* Module sections */}
-          {modulesWithStatus.map((section, sIdx) => (
+          {visibleModules.map((section, sIdx) => (
             <motion.div
               key={section.section}
               initial={{ opacity: 0, y: 15 }}
@@ -656,6 +689,34 @@ const ShowWorkspacePage = () => {
               </div>
             </motion.div>
           ))}
+
+          {/* Who manages what — only shown once at least one section has been
+              handed off to a Section Admin via Manage Access. */}
+          {sectionAssignments.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 + visibleModules.length * 0.08 }}
+              className="mb-8"
+            >
+              <h2 className="text-lg font-bold text-foreground mb-4 flex items-center gap-2">
+                <Users className="h-5 w-5 text-muted-foreground" />
+                Section Admins
+              </h2>
+              <Card>
+                <CardContent className="p-4 space-y-1">
+                  {sectionAssignments.map(({ key, title, people }) => (
+                    <div key={key} className="flex items-center justify-between gap-3 py-1.5 border-b last:border-0 border-border/60">
+                      <span className="text-sm font-medium text-foreground">{title}</span>
+                      <span className="text-sm text-muted-foreground">
+                        {people.map(p => p.full_name || p.email).join(', ')}
+                      </span>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
         </main>
       </div>
 
