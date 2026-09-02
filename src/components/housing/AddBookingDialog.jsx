@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { ShoppingCart, Plus, Minus, Loader2, Home, Car, Package } from 'lucide-react';
+import { ShoppingCart, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,48 +10,61 @@ import {
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/components/ui/use-toast';
-import { buildBookingItems } from '@/lib/bookingItems';
+import { buildBookingItems, selectionFromBookingItems } from '@/lib/bookingItems';
+import BookingItemsFields from './BookingItemsFields';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
-// Small quantity stepper (matches the public booking page behaviour).
-const QtyStepper = ({ value, onChange, max, min = 0 }) => (
-    <div className="flex items-center gap-2">
-        <Button type="button" variant="outline" size="icon" className="h-8 w-8"
-            disabled={value <= min} onClick={() => onChange(Math.max(min, value - 1))}>
-            <Minus className="h-3.5 w-3.5" />
-        </Button>
-        <span className="w-8 text-center text-sm font-semibold tabular-nums">{value}</span>
-        <Button type="button" variant="outline" size="icon" className="h-8 w-8"
-            disabled={max != null && value >= max} onClick={() => onChange(Math.min(max ?? Infinity, value + 1))}>
-            <Plus className="h-3.5 w-3.5" />
-        </Button>
-    </div>
-);
-
-// Organizer-side "New Booking" form. Builds the SAME booking shape as an online
-// booking (items[] + totalAmount) so Manage Stalls, Smart Auto-Assign, Booked
-// counts, occupancy and revenue all work with it automatically.
-const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onAdd }) => {
-    const { barns = [], rvAreas = [], supplies = [], extraStallFees = [] } = inventory || {};
+// Organizer-side "New Booking" / "Edit Booking" form. Builds the SAME booking
+// shape as an online booking (items[] + totalAmount) so Manage Stalls, Smart
+// Auto-Assign, Booked counts, occupancy and revenue all work with it
+// automatically — and offers the identical Flat Fee / Nightly Fee choice as
+// the public booking page (see BookingItemsFields).
+//
+// Two modes, picked by whether `booking` is passed:
+//  - Create (no `booking`): renders its own "Add Booking" trigger button and
+//    manages its own open state. Calls `onAdd(newBooking)`.
+//  - Edit (`booking` passed): fully controlled via `open`/`onOpenChange` (no
+//    trigger button of its own — the caller opens it, e.g. from a pencil
+//    icon), pre-fills every field/selection from the booking, and calls
+//    `onSave(bookingId, patch)` instead of `onAdd`.
+const AddBookingDialog = ({
+    inventory, suppliesSold = {}, defaultNights = 1, onAdd,
+    booking = null, open: openProp, onOpenChange, onSave,
+}) => {
+    const isEditMode = !!booking;
+    const { barns = [], rvAreas = [], supplies = [], extraStallFees = [], extraRvFees = [] } = inventory || {};
     const { toast } = useToast();
-    const [open, setOpen] = useState(false);
+    const [internalOpen, setInternalOpen] = useState(false);
+    const open = isEditMode ? !!openProp : internalOpen;
+    const setOpen = (o) => { if (isEditMode) onOpenChange?.(o); else setInternalOpen(o); };
     const [isSaving, setIsSaving] = useState(false);
 
-    const [details, setDetails] = useState({
+    const blankDetails = () => ({
         exhibitorName: '', email: '', phone: '',
         trainerName: '', trainerEmail: '', trainerPhone: '',
         horses: '', status: 'pending',
     });
-    const [nights, setNights] = useState(Math.max(1, defaultNights || 1));
-    const [selection, setSelection] = useState({ stalls: {}, rvs: {}, supplies: {} });
+    // Edit mode is remounted fresh each time it opens (the caller only
+    // renders it while there's a booking to edit), so lazy-initializing from
+    // `booking` here is enough — no need to re-sync on prop changes.
+    const [details, setDetails] = useState(() => isEditMode ? {
+        exhibitorName: booking.exhibitorName || '',
+        email: booking.email || '',
+        phone: booking.phone || '',
+        trainerName: booking.trainerName || '',
+        trainerEmail: booking.trainerEmail || '',
+        trainerPhone: booking.trainerPhone || '',
+        horses: (booking.horseNames && booking.horseNames.length ? booking.horseNames : (booking.horseName ? [booking.horseName] : [])).join(', '),
+        status: booking.status || 'pending',
+    } : blankDetails());
+    const [nights, setNights] = useState(Math.max(1, (isEditMode ? booking.nights : defaultNights) || 1));
+    const [selection, setSelection] = useState(() => isEditMode
+        ? selectionFromBookingItems(booking.items || [])
+        : { stalls: {}, rvs: {}, supplies: {} });
 
     const reset = () => {
-        setDetails({
-            exhibitorName: '', email: '', phone: '',
-            trainerName: '', trainerEmail: '', trainerPhone: '',
-            horses: '', status: 'pending',
-        });
+        setDetails(blankDetails());
         setNights(Math.max(1, defaultNights || 1));
         setSelection({ stalls: {}, rvs: {}, supplies: {} });
     };
@@ -61,11 +74,19 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
     const horseCount = details.horses.split(',').map(h => h.trim()).filter(Boolean).length;
 
     const { items, subtotal } = useMemo(
-        () => buildBookingItems({ barns, rvAreas, supplies, extraStallFees }, selection, nights, { horseCount }),
-        [barns, rvAreas, supplies, extraStallFees, selection, nights, horseCount]
+        () => buildBookingItems({ barns, rvAreas, supplies, extraStallFees, extraRvFees }, selection, nights, { horseCount }),
+        [barns, rvAreas, supplies, extraStallFees, extraRvFees, selection, nights, horseCount]
     );
 
-    const setQty = (group, id, v) => setSelection(prev => ({ ...prev, [group]: { ...prev[group], [id]: v } }));
+    const setSupplyQty = (id, v) => setSelection(prev => ({ ...prev, supplies: { ...prev.supplies, [id]: v } }));
+
+    // Flat Fee and Nightly Fee are two separate purchases, never both at once
+    // for the same barn/area (same "radio option" rule as the public booking
+    // page) — picking a qty on one option clears the other.
+    const setOptionQty = (group, id, kind, v) => setSelection(prev => ({
+        ...prev,
+        [group]: { ...prev[group], [id]: v > 0 ? { [kind]: v } : {} },
+    }));
 
     const handleSubmit = async () => {
         if (!details.exhibitorName.trim()) {
@@ -77,36 +98,56 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
             return;
         }
         const horseList = (details.horses || '').split(',').map(s => s.trim()).filter(Boolean);
-        const booking = {
-            id: uuidv4(),
-            exhibitorName: details.exhibitorName.trim(),
-            email: details.email.trim(),
-            phone: details.phone.trim(),
-            trainerName: details.trainerName.trim(),
-            trainerEmail: details.trainerEmail.trim(),
-            trainerPhone: details.trainerPhone.trim(),
-            horseName: horseList[0] || '',
-            horseNames: horseList,
-            horseCount: horseList.length,
-            nights,
-            items,
-            amount: subtotal,
-            totalAmount: subtotal,
-            stallId: '',
-            status: details.status,
-            paymentStatus: 'unpaid',
-            notes: '',
-            source: 'manual',
-            createdAt: new Date().toISOString(),
-        };
         setIsSaving(true);
         try {
-            await onAdd(booking);
-            toast({ title: 'Booking added', description: `${booking.exhibitorName} · ${money(subtotal)}` });
-            reset();
+            if (isEditMode) {
+                await onSave(booking.id, {
+                    exhibitorName: details.exhibitorName.trim(),
+                    email: details.email.trim(),
+                    phone: details.phone.trim(),
+                    trainerName: details.trainerName.trim(),
+                    trainerEmail: details.trainerEmail.trim(),
+                    trainerPhone: details.trainerPhone.trim(),
+                    horseName: horseList[0] || '',
+                    horseNames: horseList,
+                    horseCount: horseList.length,
+                    nights,
+                    items,
+                    amount: subtotal,
+                    totalAmount: subtotal,
+                    status: details.status,
+                });
+                toast({ title: 'Booking updated', description: `${details.exhibitorName.trim()} · ${money(subtotal)}` });
+            } else {
+                const newBooking = {
+                    id: uuidv4(),
+                    exhibitorName: details.exhibitorName.trim(),
+                    email: details.email.trim(),
+                    phone: details.phone.trim(),
+                    trainerName: details.trainerName.trim(),
+                    trainerEmail: details.trainerEmail.trim(),
+                    trainerPhone: details.trainerPhone.trim(),
+                    horseName: horseList[0] || '',
+                    horseNames: horseList,
+                    horseCount: horseList.length,
+                    nights,
+                    items,
+                    amount: subtotal,
+                    totalAmount: subtotal,
+                    stallId: '',
+                    status: details.status,
+                    paymentStatus: 'unpaid',
+                    notes: '',
+                    source: 'manual',
+                    createdAt: new Date().toISOString(),
+                };
+                await onAdd(newBooking);
+                toast({ title: 'Booking added', description: `${newBooking.exhibitorName} · ${money(subtotal)}` });
+                reset();
+            }
             setOpen(false);
         } catch (e) {
-            toast({ title: 'Could not add booking', description: e.message, variant: 'destructive' });
+            toast({ title: isEditMode ? 'Could not save booking' : 'Could not add booking', description: e.message, variant: 'destructive' });
         } finally {
             setIsSaving(false);
         }
@@ -114,16 +155,20 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
 
     return (
         <>
-            <Button variant="outline" onClick={() => setOpen(true)}>
-                <ShoppingCart className="h-4 w-4 mr-2" /> Add Booking
-            </Button>
+            {!isEditMode && (
+                <Button variant="outline" onClick={() => setOpen(true)}>
+                    <ShoppingCart className="h-4 w-4 mr-2" /> Add Booking
+                </Button>
+            )}
 
-            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
+            <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o && !isEditMode) reset(); }}>
                 <DialogContent className="max-w-2xl">
                     <DialogHeader>
-                        <DialogTitle>New Booking</DialogTitle>
+                        <DialogTitle>{isEditMode ? 'Edit Booking' : 'New Booking'}</DialogTitle>
                         <DialogDescription>
-                            Enter a booking on behalf of an exhibitor. Only the name is required.
+                            {isEditMode
+                                ? 'Change contact details, stalls, RV spots, or supplies for this booking.'
+                                : 'Enter a booking on behalf of an exhibitor. Only the name is required.'}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -198,85 +243,24 @@ const AddBookingDialog = ({ inventory, suppliesSold = {}, defaultNights = 1, onA
                                 </div>
                             </div>
 
-                            {/* Stalls */}
-                            {barns.length > 0 && (
-                                <div className="space-y-2">
-                                    <p className="text-xs font-semibold flex items-center gap-1.5 text-primary uppercase">
-                                        <Home className="h-3.5 w-3.5" /> Stalls
-                                    </p>
-                                    {barns.map(barn => {
-                                        const total = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length;
-                                        const booked = (barn.stalls || []).filter(s => s.bookingId && (s.type || 'stall') === 'stall').length;
-                                        const free = Math.max(total - booked, 0);
-                                        return (
-                                            <div key={barn.id} className="flex items-center justify-between border rounded-md p-2">
-                                                <div className="text-sm">
-                                                    <span className="font-medium">{barn.name}</span>
-                                                    <span className="text-xs text-muted-foreground"> · {money(barn.pricePerNight)}/night · {free} free</span>
-                                                </div>
-                                                <QtyStepper value={selection.stalls[barn.id] || 0} max={free}
-                                                    onChange={(v) => setQty('stalls', barn.id, v)} />
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            {/* RV */}
-                            {rvAreas.length > 0 && (
-                                <div className="space-y-2">
-                                    <p className="text-xs font-semibold flex items-center gap-1.5 text-cyan-600 uppercase">
-                                        <Car className="h-3.5 w-3.5" /> RV Spots
-                                    </p>
-                                    {rvAreas.map(rv => {
-                                        const isFlat = (rv.pricingModel || 'nightly') === 'flat';
-                                        const price = isFlat ? (rv.flatRate || 0) : (rv.pricePerNight || 0);
-                                        return (
-                                            <div key={rv.id} className="flex items-center justify-between border rounded-md p-2">
-                                                <div className="text-sm">
-                                                    <span className="font-medium">{rv.name}</span>
-                                                    <span className="text-xs text-muted-foreground"> · {money(price)}{isFlat ? ' flat' : '/night'} · {rv.spotCount || 0} spots</span>
-                                                </div>
-                                                <QtyStepper value={selection.rvs[rv.id] || 0} max={rv.spotCount || undefined}
-                                                    onChange={(v) => setQty('rvs', rv.id, v)} />
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            {/* Supplies */}
-                            {supplies.length > 0 && (
-                                <div className="space-y-2">
-                                    <p className="text-xs font-semibold flex items-center gap-1.5 text-amber-600 uppercase">
-                                        <Package className="h-3.5 w-3.5" /> Supplies
-                                    </p>
-                                    {supplies.map(item => {
-                                        const key = item.id || item.name;
-                                        const limited = item.stockQty > 0;
-                                        const remaining = limited ? Math.max(item.stockQty - (suppliesSold[key] || 0), 0) : undefined;
-                                        return (
-                                            <div key={key} className="flex items-center justify-between border rounded-md p-2">
-                                                <div className="text-sm">
-                                                    <span className="font-medium">{item.name}</span>
-                                                    <span className="text-xs text-muted-foreground"> · {money(item.price)} per {item.unit || 'unit'}{limited ? ` · ${remaining} left` : ''}</span>
-                                                </div>
-                                                <QtyStepper value={selection.supplies[key] || 0} max={remaining}
-                                                    onChange={(v) => setQty('supplies', key, v)} />
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                            <BookingItemsFields
+                                inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
+                                suppliesSold={suppliesSold}
+                                selection={selection}
+                                setOptionQty={setOptionQty}
+                                setSupplyQty={setSupplyQty}
+                            />
                         </div>
                     </ScrollArea>
 
                     <DialogFooter className="flex-col sm:flex-row items-stretch sm:items-center sm:justify-between gap-2">
                         <div className="text-sm font-semibold">Total: {money(subtotal)}</div>
                         <div className="flex gap-2">
-                            <Button variant="outline" onClick={() => { setOpen(false); reset(); }} disabled={isSaving}>Cancel</Button>
+                            <Button variant="outline" onClick={() => setOpen(false)} disabled={isSaving}>Cancel</Button>
                             <Button onClick={handleSubmit} disabled={isSaving}>
-                                {isSaving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Adding…</> : `Add Booking · ${money(subtotal)}`}
+                                {isSaving
+                                    ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {isEditMode ? 'Saving…' : 'Adding…'}</>
+                                    : `${isEditMode ? 'Save Booking' : 'Add Booking'} · ${money(subtotal)}`}
                             </Button>
                         </div>
                     </DialogFooter>

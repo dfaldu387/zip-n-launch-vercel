@@ -327,14 +327,92 @@ export function buildBarnStallItems({ barns = [], stallsByBarn = {}, extraStallF
     return { items, subtotal };
 }
 
-/** Stall counts per barn from a booking selection ({ stalls: { barnId: qty } }). */
+/**
+ * Stall counts per barn from a booking selection ({ stalls: { barnId: qty } }).
+ * A barn's entry may also be the split-option shape written by the "Flat Fee /
+ * Nightly Fee" selection UI ({ flat: qty, night: qty } — see
+ * buildBarnStallOptionItems) — this sums both so callers that just need "how
+ * many stalls total in this barn" (fee scoping, availability) don't have to
+ * know which shape they were handed.
+ */
 export function stallsByBarnFromSelection(selection) {
     const out = {};
-    for (const [barnId, qty] of Object.entries(selection?.stalls || {})) {
-        const q = Number(qty) || 0;
+    for (const [barnId, val] of Object.entries(selection?.stalls || {})) {
+        const q = typeof val === 'object' && val !== null
+            ? (Number(val.flat) || 0) + (Number(val.night) || 0)
+            : (Number(val) || 0);
         if (q > 0) out[barnId] = q;
     }
     return out;
+}
+
+/**
+ * Build up to TWO purchasable line items per barn — a Flat Fee option and a
+ * Nightly Fee option — instead of one combined price. Robert: "people either
+ * buy the flat fee for all nights, or they're buying a night or two for the
+ * barn... those are separate. Not $525, they're $300 or they're $225." Unlike
+ * buildBarnStallItems (which still adds nightly×nights + flat for callers not
+ * yet migrated to the split UI), this never combines the two rates — each
+ * option is its own line item with its own qty and its own price.
+ *
+ * @param {object} args
+ * @param {Array}  args.barns           Inventory barns ({ id, name, pricePerNight })
+ * @param {object} args.stallSelection  { [barnId]: { flat: qty, night: qty } }
+ * @param {Array}  args.extraStallFees  Fees from stallingService.extraStallFees
+ * @param {number} [args.nights]        Nights of the stay (min 1) — default for
+ *                                      any barn not listed in `nightsByBarn`
+ * @param {object} [args.nightsByBarn]  { [barnId]: nightCount } — per-barn night picker
+ * @param {string} [args.itemType]      Line item `type` — 'stall' for barns, 'rv' for RV areas
+ * @returns {{items: Array, subtotal: number}}
+ */
+export function buildBarnStallOptionItems({ barns = [], stallSelection = {}, extraStallFees = [], nights = 1, nightsByBarn = {}, itemType = 'stall' }) {
+    const items = [];
+    let subtotal = 0;
+    const fallbackNights = Math.max(1, Number(nights) || 1);
+
+    for (const barn of barns) {
+        const sel = stallSelection[barn.id] || {};
+        const flatQty = Number(sel.flat) || 0;
+        const nightQty = Number(sel.night) || 0;
+        if (flatQty <= 0 && nightQty <= 0) continue;
+
+        const n = nightsByBarn[barn.id] != null ? Math.max(1, Number(nightsByBarn[barn.id]) || 1) : fallbackNights;
+        const nightlyRate = Number(barn.pricePerNight) || 0;
+        const flatRate = flatRateForBarn(barn.id, extraStallFees);
+
+        if (flatQty > 0) {
+            const amount = flatQty * flatRate;
+            subtotal += amount;
+            items.push({
+                type: itemType,
+                refId: barn.id,
+                feeType: 'flat',
+                name: `${barn.name} – Flat Fee × ${flatQty}`,
+                detail: `${money(flatRate)} flat × ${flatQty}`,
+                qty: flatQty,
+                nights: null,
+                unitPrice: flatRate,
+                amount,
+            });
+        }
+        if (nightQty > 0) {
+            const amount = nightQty * nightlyRate * n;
+            subtotal += amount;
+            items.push({
+                type: itemType,
+                refId: barn.id,
+                feeType: 'per_night',
+                name: `${barn.name} – Nightly Fee × ${nightQty}`,
+                detail: `${money(nightlyRate)}/night × ${n} night${n !== 1 ? 's' : ''} × ${nightQty}`,
+                qty: nightQty,
+                nights: n,
+                unitPrice: nightlyRate,
+                amount,
+            });
+        }
+    }
+
+    return { items, subtotal };
 }
 
 /**

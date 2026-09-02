@@ -14,7 +14,7 @@
 import {
     feeScope, feeAppliesToBarn, barnHasOwnFee,
     nightlyRateForBarn, flatRateForBarn, nightlyCostForBarn, flatCostForBarn,
-    ALL_BARNS, allocatePooledStalls,
+    ALL_BARNS, allocatePooledStalls, buildBarnStallOptionItems,
 } from './extraStallFees';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -135,12 +135,43 @@ export function groupRvAreasForBooking(rvAreas = [], extraRvFees = []) {
     return { individual, pooledGroup };
 }
 
-/** Spot counts per RV area from a booking selection ({ rvs: { rvAreaId: qty } }). */
+/**
+ * Spot counts per RV area from a booking selection ({ rvs: { rvAreaId: qty } }).
+ * Also sums the split Flat/Nightly option shape ({ flat: qty, night: qty } —
+ * see buildRvAreaOptionItems) — mirrors stallsByBarnFromSelection.
+ */
 export function rvsByAreaFromSelection(selection) {
     const out = {};
-    for (const [rvAreaId, qty] of Object.entries(selection?.rvs || {})) {
-        const q = Number(qty) || 0;
+    for (const [rvAreaId, val] of Object.entries(selection?.rvs || {})) {
+        const q = typeof val === 'object' && val !== null
+            ? (Number(val.flat) || 0) + (Number(val.night) || 0)
+            : (Number(val) || 0);
         if (q > 0) out[rvAreaId] = q;
     }
     return out;
+}
+
+/**
+ * RV-area equivalent of buildBarnStallOptionItems — up to TWO purchasable
+ * line items per area (Flat Fee, Nightly Fee), never combined into one
+ * charge. Same split rule as barns ("the same exact logic applies" per
+ * Robert's RV video).
+ *
+ * @param {object} args
+ * @param {Array}  args.rvAreas      Inventory RV areas ({ id, name, pricePerNight })
+ * @param {object} args.rvSelection  { [rvAreaId]: { flat: qty, night: qty } }
+ * @param {Array}  args.extraRvFees  Fees from stallingService.extraRvFees
+ * @param {number} [args.nights]     Nights of the stay (min 1)
+ * @param {object} [args.nightsByArea] { [rvAreaId]: nightCount }
+ * @returns {{items: Array, subtotal: number}}
+ */
+export function buildRvAreaOptionItems({ rvAreas = [], rvSelection = {}, extraRvFees = [], nights = 1, nightsByArea = {} }) {
+    return buildBarnStallOptionItems({
+        barns: rvAreas,
+        stallSelection: rvSelection,
+        extraStallFees: extraRvFees,
+        nights,
+        nightsByBarn: nightsByArea,
+        itemType: 'rv',
+    });
 }

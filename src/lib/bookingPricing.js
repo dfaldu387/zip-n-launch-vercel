@@ -42,6 +42,16 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
     }
     const nightsFor = (barnId) => nightsByBarn.get(barnId) ?? nights;
 
+    // Which fee option was actually purchased for a barn, when the order was
+    // built by the Flat Fee / Nightly Fee split selector (see
+    // buildBarnStallOptionItems) — 'flat' | 'per_night'. Older bookings never
+    // stored this, so a barn absent here falls back to the pre-split "mixed"
+    // behavior below exactly as before.
+    const feeTypeByBarn = new Map();
+    for (const it of stallItems) {
+        if (it.refId != null && it.feeType) feeTypeByBarn.set(it.refId, it.feeType);
+    }
+
     const byBarn = new Map();
     for (const s of used) {
         if (!byBarn.has(s.barnId)) byBarn.set(s.barnId, []);
@@ -53,20 +63,32 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         const barnNights = nightsFor(barnId);
         const nightlyRate = group[0]?.pricePerNight ?? 0;
         const flatRate = flatRateForBarn(barnId, extraStallFees);
+        const feeType = feeTypeByBarn.get(barnId);
         // Mixed = a barn with BOTH a per-night rate and a flat add-on (e.g. an
         // "all barns" installation fee sitting on top of a per-night stall
         // rate). That can't be expressed as a single night-based unit price,
         // so it's billed as one combined per-stall figure instead — same as
-        // a pure-flat barn, just with both parts folded in.
-        const isMixed = nightlyRate > 0 && flatRate > 0;
-        const perStallUnit = nightlyRate * barnNights + flatRate;
+        // a pure-flat barn, just with both parts folded in. Only applies to
+        // legacy items with no recorded feeType; a split-selector item is
+        // billed at exactly the option it was bought under.
+        const isMixed = !feeType && nightlyRate > 0 && flatRate > 0;
+        const billFlat = feeType === 'flat' || (!feeType && !isMixed && flatRate > 0);
+        const perStallUnit = feeType === 'per_night' ? nightlyRate * barnNights
+            : feeType === 'flat' ? flatRate
+                : nightlyRate * barnNights + flatRate;
         const total = count * perStallUnit;
         const barnName = group[0]?.barnName || group[0]?.name || barnId;
         const numbers = group.map(s => s.number || s.stallNumber).filter(Boolean);
 
         const parts = [];
-        if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
-        if (flatRate > 0) parts.push(`${fmtMoney(flatRate)} flat`);
+        if (feeType === 'flat') {
+            parts.push(`${fmtMoney(flatRate)} flat`);
+        } else if (feeType === 'per_night') {
+            parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
+        } else {
+            if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
+            if (flatRate > 0) parts.push(`${fmtMoney(flatRate)} flat`);
+        }
 
         let description = `${barnName} × ${count}`;
         if (numbers.length > 0) description += `\nAssigned: ${numbers.join(', ')}`;
@@ -74,8 +96,8 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
 
         rows.push({
             description,
-            qty: (flatRate > 0 || isMixed) ? count : count * barnNights,
-            unitPrice: isMixed ? perStallUnit : (flatRate > 0 ? flatRate : nightlyRate),
+            qty: (billFlat || isMixed) ? count : count * barnNights,
+            unitPrice: isMixed ? perStallUnit : (billFlat ? flatRate : nightlyRate),
             total,
         });
     }
@@ -94,13 +116,23 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         const barnNights = nightsFor(it.refId);
         const nightlyRate = Number(it.unitPrice) || 0;
         const flatRate = flatRateForBarn(it.refId, extraStallFees);
-        const isMixed = nightlyRate > 0 && flatRate > 0;
-        const perStallUnit = nightlyRate * barnNights + flatRate;
+        const feeType = it.feeType;
+        const isMixed = !feeType && nightlyRate > 0 && flatRate > 0;
+        const billFlat = feeType === 'flat' || (!feeType && !isMixed && flatRate > 0);
+        const perStallUnit = feeType === 'per_night' ? nightlyRate * barnNights
+            : feeType === 'flat' ? flatRate
+                : nightlyRate * barnNights + flatRate;
         const total = take * perStallUnit;
 
         const parts = [];
-        if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
-        if (flatRate > 0) parts.push(`${fmtMoney(flatRate)} flat`);
+        if (feeType === 'flat') {
+            parts.push(`${fmtMoney(flatRate)} flat`);
+        } else if (feeType === 'per_night') {
+            parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
+        } else {
+            if (nightlyRate > 0) parts.push(`${fmtMoney(nightlyRate)}/night × ${barnNights} night${barnNights !== 1 ? 's' : ''}`);
+            if (flatRate > 0) parts.push(`${fmtMoney(flatRate)} flat`);
+        }
 
         let description = it.name || 'Stalls';
         description += `\n${take} stall${take !== 1 ? 's' : ''} not yet assigned`;
@@ -108,8 +140,8 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
 
         rows.push({
             description,
-            qty: (flatRate > 0 || isMixed) ? take : take * barnNights,
-            unitPrice: isMixed ? perStallUnit : (flatRate > 0 ? flatRate : nightlyRate),
+            qty: (billFlat || isMixed) ? take : take * barnNights,
+            unitPrice: isMixed ? perStallUnit : (billFlat ? flatRate : nightlyRate),
             total,
         });
     }

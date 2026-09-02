@@ -1720,7 +1720,10 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
 
 // ── Booking Row ──
 
-const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall, onUpdateStallCount }) => {
+const BookingRow = ({
+    booking, barns, rvAreas = [], supplies = [], suppliesSold = {}, extraStallFees, extraRvFees = [],
+    onUpdate, onRemove, onManageStalls, onStatusChange, onAssignStall, onSaveItems,
+}) => {
     // Bookings stay LOCKED by default so a stray click can't change or delete
     // them. Editing is an explicit, two-step action: press Edit → change fields →
     // Save (or Cancel to discard). Deleting is also two-step: press ✕ → confirm.
@@ -1731,6 +1734,9 @@ const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onMana
     // While editing we buffer changes locally and only commit them on Save, so
     // nothing is adjusted until the admin confirms.
     const [draft, setDraft] = useState(null);
+    // Full items dialog — same Flat Fee / Nightly Fee cards as Add Booking,
+    // for changing which barn/RV area/supplies this booking has.
+    const [editingItems, setEditingItems] = useState(false);
 
     const stallOptions = useMemo(() => {
         const options = [];
@@ -1754,7 +1760,6 @@ const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onMana
             trainerName: booking.trainerName || '',
             nights: booking.nights || 0,
             status: booking.status || 'pending',
-            stallCount: requestedStalls,
             paymentStatus: booking.paymentStatus || 'unpaid',
             paidAmount,
         });
@@ -1777,9 +1782,6 @@ const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onMana
         if (draft.status !== (booking.status || 'pending')) {
             onUpdate('status', draft.status);
             onStatusChange?.(booking.id, draft.status); // immediate save to DB
-        }
-        if ((draft.stallCount ?? requestedStalls) !== requestedStalls) {
-            onUpdateStallCount?.(draft.stallCount ?? requestedStalls);
         }
         if (draft.paymentStatus !== (booking.paymentStatus || 'unpaid')) onUpdate('paymentStatus', draft.paymentStatus);
         if (Number(draft.paidAmount || 0) !== paidAmount) onUpdate('paidAmount', Number(draft.paidAmount || 0));
@@ -2002,47 +2004,19 @@ const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onMana
             </div>
           </div>
 
-          {/* Edit-mode sub-bar — change how many stalls this booking is booked for.
-              This is the quota that caps stall assignment; raising it here is what
-              lets the admin add stalls (and later invoice the difference). */}
+          {/* Edit-mode sub-bar. Stalls / RV spots / supplies are changed through
+              the same Flat Fee / Nightly Fee dialog as Add Booking — see
+              "Edit Stalls / RV / Supplies" below — not edited inline here. */}
           {isEditing && (
             <div className="border-t px-3 py-2.5 bg-amber-50/60 dark:bg-amber-900/10 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
                 <div className="flex items-center gap-2">
-                    <span className="font-medium">Stalls booked</span>
-                    <div className="flex items-center gap-1">
-                        <Button
-                            type="button" variant="outline" size="icon" className="h-6 w-6"
-                            disabled={(draft.stallCount ?? 0) <= assignedStalls.length}
-                            onClick={() => setDraftField('stallCount', Math.max(assignedStalls.length, (draft.stallCount ?? 0) - 1))}
-                            title={assignedStalls.length ? `Can't go below ${assignedStalls.length} already-assigned` : 'Decrease'}
-                        >
-                            <Minus className="h-3 w-3" />
-                        </Button>
-                        <Input
-                            type="number"
-                            min={assignedStalls.length}
-                            value={draft.stallCount ?? 0}
-                            onChange={(e) => setDraftField('stallCount', Math.max(assignedStalls.length, parseInt(e.target.value, 10) || 0))}
-                            className="h-6 w-16 text-xs text-center"
-                        />
-                        <Button
-                            type="button" variant="outline" size="icon" className="h-6 w-6"
-                            onClick={() => setDraftField('stallCount', (draft.stallCount ?? 0) + 1)}
-                            title="Increase"
-                        >
-                            <Plus className="h-3 w-3" />
-                        </Button>
-                    </div>
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => setEditingItems(true)}>
+                        <ShoppingCart className="h-3.5 w-3.5 mr-1.5" /> Edit Stalls / RV / Supplies
+                    </Button>
+                    <span className="text-muted-foreground">
+                        {requestedStalls} stall{requestedStalls !== 1 ? 's' : ''} booked · {assignedStalls.length} assigned
+                    </span>
                 </div>
-                <span className="text-muted-foreground">
-                    {assignedStalls.length} assigned
-                    {(draft.stallCount ?? 0) > requestedStalls && (
-                        <span className="text-amber-600 font-medium"> · +{(draft.stallCount ?? 0) - requestedStalls} added (was {requestedStalls})</span>
-                    )}
-                    {(draft.stallCount ?? 0) < requestedStalls && (
-                        <span className="text-amber-600 font-medium"> · {requestedStalls - (draft.stallCount ?? 0)} removed (was {requestedStalls})</span>
-                    )}
-                </span>
 
                 {/* Payment — mark how much has been paid; the balance is what to invoice. */}
                 <div className="flex items-center gap-2 border-l pl-4">
@@ -2164,6 +2138,20 @@ const BookingRow = ({ booking, barns, extraStallFees, onUpdate, onRemove, onMana
                 confirmText="Delete booking"
                 cancelText="Keep booking"
             />
+
+            {/* Same Flat Fee / Nightly Fee dialog as Add Booking, pre-filled from
+                this booking — lets the admin change barn, RV area, or which
+                pricing option a stall/spot was booked under. */}
+            {editingItems && (
+                <AddBookingDialog
+                    inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
+                    suppliesSold={suppliesSold}
+                    booking={booking}
+                    open={editingItems}
+                    onOpenChange={setEditingItems}
+                    onSave={async (bookingId, patch) => { await onSaveItems?.(patch); }}
+                />
+            )}
         </div>
     );
 };
@@ -3211,6 +3199,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
     };
 
+    // Commit a whole patch from the Edit Booking dialog (contact fields, nights,
+    // and a freshly-rebuilt items[]/amount/totalAmount — see AddBookingDialog's
+    // edit mode). Status gets the same explicit DB save + stall-release side
+    // effect a plain status change does (see changeBookingStatus below).
+    const saveBookingEdit = async (bookingId, patch) => {
+        const current = bookings.find(b => b.id === bookingId);
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...patch } : b));
+        if (patch.status && current && patch.status !== (current.status || 'pending')) {
+            await changeBookingStatus(bookingId, patch.status);
+        }
+    };
+
     // Status changes are saved by the page above, which also releases the stalls of a
     // cancelled booking. This dashboard keeps its own copy of barns and bookings (it
     // only remounts when a different show is picked), so both are refreshed from what
@@ -3221,59 +3221,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
         if (result?.barns) setBarns(result.barns);
         if (result?.bookings) setBookings(result.bookings);
-    };
-
-    // Change how many stalls a booking is booked for (its quota). The quota lives on
-    // the stall line-items' qty, so we rewrite those items to hit the new total and
-    // recompute the booking amount. This is what lifts the assignment cap — and the
-    // gap between "booked" and "already paid for" is what later drives invoicing.
-    const updateBookingStallCount = (bookingId, newTotalRaw) => {
-        const newTotal = Math.max(0, parseInt(newTotalRaw, 10) || 0);
-        const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
-        setBookings(prev => prev.map(b => {
-            if (b.id !== bookingId) return b;
-            const items = [...(b.items || [])];
-            const nights = Math.max(1, Number(b.nights) || 1);
-            const stallIdxs = items.reduce((acc, it, i) => { if (it.type === 'stall') acc.push(i); return acc; }, []);
-            const rebuild = (it, qty) => {
-                const barn = barns.find(x => x.id === it.refId);
-                const unitPrice = it.unitPrice != null ? it.unitPrice : (barn?.pricePerNight || 0);
-                return {
-                    ...it, qty, unitPrice, nights,
-                    amount: qty * unitPrice * nights,
-                    name: barn ? `${barn.name} × ${qty}` : String(it.name || 'Stalls').replace(/×\s*\d+/, `× ${qty}`),
-                    detail: `${money(unitPrice)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${qty}`,
-                };
-            };
-            if (stallIdxs.length === 0) {
-                // No stall line yet — attach one to the booking's assigned barn, else the first barn.
-                if (newTotal <= 0) return b;
-                const assigned = getAssignedStallsForBooking(b, barns);
-                const barn = (assigned[0] && barns.find(x => x.id === assigned[0].barnId)) || barns[0];
-                if (!barn) return b; // nothing to attach to
-                const unitPrice = barn.pricePerNight || 0;
-                items.push({
-                    type: 'stall', refId: barn.id, qty: newTotal, nights, unitPrice,
-                    amount: newTotal * unitPrice * nights,
-                    name: `${barn.name} × ${newTotal}`,
-                    detail: `${money(unitPrice)}/night × ${nights} night${nights !== 1 ? 's' : ''} × ${newTotal}`,
-                });
-            } else if (stallIdxs.length === 1) {
-                const idx = stallIdxs[0];
-                if (newTotal <= 0) items.splice(idx, 1);
-                else items[idx] = rebuild(items[idx], newTotal);
-            } else {
-                // Multi-barn booking — apply the change to the last stall line, keeping the others.
-                const current = stallIdxs.reduce((s, i) => s + (Number(items[i].qty) || 0), 0);
-                const lastIdx = stallIdxs[stallIdxs.length - 1];
-                const others = current - (Number(items[lastIdx].qty) || 0);
-                const newLast = Math.max(0, newTotal - others);
-                if (newLast <= 0) items.splice(lastIdx, 1);
-                else items[lastIdx] = rebuild(items[lastIdx], newLast);
-            }
-            const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
-            return { ...b, items, amount: totalAmount, totalAmount };
-        }));
     };
 
     const removeBooking = async (bookingId) => {
@@ -3436,15 +3383,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const rvFlatTotal = (r) => flatRateForRvArea(r.id, extraRvFees);
     const rvNightlyRate = (r) => nightlyRateForRvArea(r.id, extraRvFees);
     const rvIsFlat = (r) => rvFlatTotal(r) > 0;
-    const rvUnitPrice = (r) => (rvNightlyRate(r) > 0 ? rvNightlyRate(r) : rvFlatTotal(r));
     const rvPerSpotTotal = (r, nights) => rvNightlyRate(r) * Math.max(1, Number(nights) || 1) + rvFlatTotal(r);
     const rvCostPerSpotTotal = (r, nights) => nightlyCostForRvArea(r.id, extraRvFees) * Math.max(1, Number(nights) || 1) + flatCostForRvArea(r.id, extraRvFees);
-    // Same shape as the RV price shown in the tables, but what it costs — mirrors barnCostLabel.
-    const rvCostLabel = (r) => {
-        const nightlyCost = nightlyCostForRvArea(r.id, extraRvFees);
-        const flatCost = flatCostForRvArea(r.id, extraRvFees);
-        return nightlyCost > 0 ? `$${nightlyCost.toFixed(0)}/night` : `$${flatCost.toFixed(0)} flat`;
-    };
 
     // Barns work the same way, but the price isn't typed directly on the barn —
     // it's whichever stall fees (Flat and/or Per-Night) are scoped to it in the
@@ -3455,24 +3395,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const barnIsFlat = (barn) => barnFlatTotal(barn) > 0;
     const barnPerStallTotal = (barn, nights) => computeBarnPerStallTotal(barn.id, extraStallFees, nights);
     const barnCostPerStallTotal = (barn, nights) => computeBarnPerStallCost(barn.id, extraStallFees, nights);
-    // "$150/night", "$25 flat", or "$150/night + $25 flat" when a barn carries both.
-    const barnPriceLabel = (barn) => {
-        const parts = [];
-        if (barnHasNightly(barn)) parts.push(`$${(barn.pricePerNight || 0).toFixed(0)}/night`);
-        if (barnIsFlat(barn)) parts.push(`$${barnFlatTotal(barn).toFixed(0)} flat`);
-        return parts.length > 0 ? parts.join(' + ') : '$0';
-    };
-    // Same shape as barnPriceLabel, but what it COSTS the facility — shown next
-    // to Price so an organizer can see margin at a glance (Robert: "it costs to
-    // show $100... estimated profit is this much").
-    const barnCostLabel = (barn) => {
-        const nightlyCost = nightlyCostForBarn(barn.id, extraStallFees);
-        const flatCost = flatCostForBarn(barn.id, extraStallFees);
-        const parts = [];
-        if (nightlyCost > 0) parts.push(`$${nightlyCost.toFixed(0)}/night`);
-        if (flatCost > 0) parts.push(`$${flatCost.toFixed(0)} flat`);
-        return parts.length > 0 ? parts.join(' + ') : '$0';
-    };
     // A Flat fee fully reflected in a barn's row shouldn't also appear in the
     // separate "Extra Stall Fees" list below — that would double-count it.
     // Only fold it out of that list once it actually lands on a real barn (an
@@ -3483,6 +3405,81 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         return scope === ALL_BARNS ? barns.length > 0 : scope.some(id => barns.some(b => b.id === id));
     };
     const isExtraFee = (f) => (f.unitType || 'per_stall') !== 'per_night' && !flatFeeMergedIntoBarnRow(f);
+
+    // Stall Fee Calculator rows — Robert: Flat Fee and Nightly Fee are two
+    // separate purchases, never one combined price ("people either buy the
+    // flat fee for all nights, or they're buying a night or two — those are
+    // separate"). So a barn/RV area that carries both gets TWO rows here, one
+    // per fee type, each with its own price/cost/total — not one row that
+    // adds them together.
+    const pricingRows = (() => {
+        const rows = [];
+        for (const barn of barns) {
+            const capacity = barn.stallCount || 0;
+            const nightly = barnHasNightly(barn);
+            const flat = barnIsFlat(barn);
+            if (nightly) {
+                const perUnit = nightlyRateForBarn(barn.id, extraStallFees) * showNights;
+                const costPerUnit = nightlyCostForBarn(barn.id, extraStallFees) * showNights;
+                rows.push({
+                    key: `${barn.id}::night`, name: barn.name, tag: null,
+                    priceLabel: `$${(barn.pricePerNight || 0).toFixed(0)}/night`,
+                    costLabel: `$${nightlyCostForBarn(barn.id, extraStallFees).toFixed(0)}/night`,
+                    nightsLabel: showNights, perUnit, costPerUnit, capacity,
+                });
+            }
+            if (flat) {
+                const perUnit = barnFlatTotal(barn);
+                const costPerUnit = flatCostForBarn(barn.id, extraStallFees);
+                rows.push({
+                    key: `${barn.id}::flat`, name: barn.name, tag: null,
+                    priceLabel: `$${perUnit.toFixed(0)} flat`,
+                    costLabel: `$${costPerUnit.toFixed(0)} flat`,
+                    nightsLabel: '—', perUnit, costPerUnit, capacity,
+                });
+            }
+            if (!nightly && !flat) {
+                rows.push({
+                    key: `${barn.id}::none`, name: barn.name, tag: null,
+                    priceLabel: '$0', costLabel: '$0', nightsLabel: '—',
+                    perUnit: 0, costPerUnit: 0, capacity,
+                });
+            }
+        }
+        for (const rv of rvAreas) {
+            const capacity = rv.spotCount || 0;
+            const nightly = nightlyRateForRvArea(rv.id, extraRvFees) > 0;
+            const flat = rvIsFlat(rv);
+            if (nightly) {
+                const perUnit = nightlyRateForRvArea(rv.id, extraRvFees) * showNights;
+                const costPerUnit = nightlyCostForRvArea(rv.id, extraRvFees) * showNights;
+                rows.push({
+                    key: `${rv.id}::night`, name: rv.name, tag: '(RV)',
+                    priceLabel: `$${nightlyRateForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
+                    costLabel: `$${nightlyCostForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
+                    nightsLabel: showNights, perUnit, costPerUnit, capacity,
+                });
+            }
+            if (flat) {
+                const perUnit = rvFlatTotal(rv);
+                const costPerUnit = flatCostForRvArea(rv.id, extraRvFees);
+                rows.push({
+                    key: `${rv.id}::flat`, name: rv.name, tag: '(RV)',
+                    priceLabel: `$${perUnit.toFixed(0)} flat`,
+                    costLabel: `$${costPerUnit.toFixed(0)} flat`,
+                    nightsLabel: '—', perUnit, costPerUnit, capacity,
+                });
+            }
+            if (!nightly && !flat) {
+                rows.push({
+                    key: `${rv.id}::none`, name: rv.name, tag: '(RV)',
+                    priceLabel: '$0', costLabel: '$0', nightsLabel: '—',
+                    perUnit: 0, costPerUnit: 0, capacity,
+                });
+            }
+        }
+        return rows;
+    })();
 
     // "Booked" counts for the Pricing Summary — reservations that aren't cancelled,
     // measured in physical spaces. Stalls use the modern stall→booking pin
@@ -4229,7 +4226,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 <TabsContent value="bookings" className="space-y-4 mt-4">
                     <div className="flex items-center gap-3 flex-wrap">
                         <AddBookingDialog
-                            inventory={{ barns, rvAreas, supplies, extraStallFees }}
+                            inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
                             suppliesSold={suppliesSold}
                             defaultNights={showNights}
                             onAdd={addBooking}
@@ -4276,12 +4273,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <BookingRow
                                             booking={booking}
                                             barns={barns}
+                                            rvAreas={rvAreas}
+                                            supplies={supplies}
+                                            suppliesSold={suppliesSold}
                                             extraStallFees={extraStallFees}
+                                            extraRvFees={extraRvFees}
                                             onUpdate={(field, value) => updateBooking(booking.id, field, value)}
                                             onRemove={() => removeBooking(booking.id)}
                                             onStatusChange={changeBookingStatus}
                                             onAssignStall={(stallId) => assignSingleStall(booking, stallId)}
-                                            onUpdateStallCount={(n) => updateBookingStallCount(booking.id, n)}
+                                            onSaveItems={(patch) => saveBookingEdit(booking.id, patch)}
                                         />
                                     </div>
                                     {(() => {
@@ -4495,59 +4496,29 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {barns.map(barn => {
-                                            const qty = whatIfMode ? whatIfQtyFor(barn.id, barn.stallCount || 0) : (barn.stallCount || 0);
-                                            const perStall = barnPerStallTotal(barn, showNights);
-                                            const maxRev = perStall * qty;
-                                            const costPerStall = barnCostPerStallTotal(barn, showNights);
-                                            const maxProfit = (perStall - costPerStall) * qty;
+                                        {pricingRows.map(row => {
+                                            const qty = whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity;
+                                            const maxRev = row.perUnit * qty;
+                                            const maxProfit = (row.perUnit - row.costPerUnit) * qty;
                                             return (
-                                                <tr key={barn.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                                    <td className="px-2 py-1.5 font-medium">{barn.name}</td>
-                                                    <td className="px-2 py-1.5 text-right">{barnPriceLabel(barn)}</td>
-                                                    <td className="px-2 py-1.5 text-right text-muted-foreground">{barnCostLabel(barn)}</td>
-                                                    <td className="px-2 py-1.5 text-center">{barnHasNightly(barn) ? showNights : '—'}</td>
-                                                    <td className="px-2 py-1.5 text-right font-semibold">${perStall.toFixed(0)}</td>
-                                                    <td className="px-2 py-1.5 text-center">
-                                                        {whatIfMode ? (
-                                                            <Input
-                                                                type="number"
-                                                                min={0}
-                                                                value={whatIfCounts[barn.id] ?? (barn.stallCount || 0)}
-                                                                onChange={(e) => setWhatIfQty(barn.id, e.target.value)}
-                                                                className="h-7 text-xs w-16 mx-auto text-center"
-                                                            />
-                                                        ) : (barn.stallCount || 0)}
+                                                <tr key={row.key} className="border-t border-indigo-100 dark:border-indigo-800/50">
+                                                    <td className="px-2 py-1.5 font-medium">
+                                                        {row.name} {row.tag && <span className="text-xs text-cyan-600">{row.tag}</span>}
                                                     </td>
-                                                    <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
-                                                    <td className="px-2 py-1.5 text-right font-bold text-emerald-700 dark:text-emerald-400">${maxProfit.toLocaleString()}</td>
-                                                </tr>
-                                            );
-                                        })}
-                                        {rvAreas.map(rv => {
-                                            const isFlat = rvIsFlat(rv);
-                                            const qty = whatIfMode ? whatIfQtyFor(rv.id, rv.spotCount || 0) : (rv.spotCount || 0);
-                                            const perSpot = rvPerSpotTotal(rv, showNights);
-                                            const maxRev = perSpot * qty;
-                                            const costPerSpot = rvCostPerSpotTotal(rv, showNights);
-                                            const maxProfit = (perSpot - costPerSpot) * qty;
-                                            return (
-                                                <tr key={rv.id} className="border-t border-indigo-100 dark:border-indigo-800/50">
-                                                    <td className="px-2 py-1.5 font-medium">{rv.name} <span className="text-xs text-cyan-600">(RV)</span></td>
-                                                    <td className="px-2 py-1.5 text-right">${rvUnitPrice(rv).toFixed(0)}</td>
-                                                    <td className="px-2 py-1.5 text-right text-muted-foreground">{rvCostLabel(rv)}</td>
-                                                    <td className="px-2 py-1.5 text-center">{isFlat ? '—' : showNights}</td>
-                                                    <td className="px-2 py-1.5 text-right font-semibold">${perSpot.toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-right">{row.priceLabel}</td>
+                                                    <td className="px-2 py-1.5 text-right text-muted-foreground">{row.costLabel}</td>
+                                                    <td className="px-2 py-1.5 text-center">{row.nightsLabel}</td>
+                                                    <td className="px-2 py-1.5 text-right font-semibold">${row.perUnit.toFixed(0)}</td>
                                                     <td className="px-2 py-1.5 text-center">
                                                         {whatIfMode ? (
                                                             <Input
                                                                 type="number"
                                                                 min={0}
-                                                                value={whatIfCounts[rv.id] ?? (rv.spotCount || 0)}
-                                                                onChange={(e) => setWhatIfQty(rv.id, e.target.value)}
+                                                                value={whatIfCounts[row.key] ?? row.capacity}
+                                                                onChange={(e) => setWhatIfQty(row.key, e.target.value)}
                                                                 className="h-7 text-xs w-16 mx-auto text-center"
                                                             />
-                                                        ) : (rv.spotCount || 0)}
+                                                        ) : row.capacity}
                                                     </td>
                                                     <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
                                                     <td className="px-2 py-1.5 text-right font-bold text-emerald-700 dark:text-emerald-400">${maxProfit.toLocaleString()}</td>
@@ -4560,21 +4531,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             <td className="px-2 py-1.5" colSpan={5}>Total</td>
                                             <td className="px-2 py-1.5 text-center">
                                                 {whatIfMode
-                                                    ? barns.reduce((s, b) => s + whatIfQtyFor(b.id, b.stallCount || 0), 0)
-                                                        + rvAreas.reduce((s, r) => s + whatIfQtyFor(r.id, r.spotCount || 0), 0)
+                                                    ? pricingRows.reduce((s, row) => s + whatIfQtyFor(row.key, row.capacity), 0)
                                                     : totalUnits}
                                             </td>
                                             <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
-                                                ${(
-                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * barnPerStallTotal(b, showNights), 0)
-                                                    + rvAreas.reduce((sum, r) => sum + (whatIfMode ? whatIfQtyFor(r.id, r.spotCount || 0) : (r.spotCount || 0)) * rvPerSpotTotal(r, showNights), 0)
-                                                ).toLocaleString()}
+                                                ${pricingRows.reduce((sum, row) => sum + (whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity) * row.perUnit, 0).toLocaleString()}
                                             </td>
                                             <td className="px-2 py-1.5 text-right text-emerald-700 dark:text-emerald-400">
-                                                ${(
-                                                    barns.reduce((sum, b) => sum + (whatIfMode ? whatIfQtyFor(b.id, b.stallCount || 0) : (b.stallCount || 0)) * (barnPerStallTotal(b, showNights) - barnCostPerStallTotal(b, showNights)), 0)
-                                                    + rvAreas.reduce((sum, r) => sum + (whatIfMode ? whatIfQtyFor(r.id, r.spotCount || 0) : (r.spotCount || 0)) * (rvPerSpotTotal(r, showNights) - rvCostPerSpotTotal(r, showNights)), 0)
-                                                ).toLocaleString()}
+                                                ${pricingRows.reduce((sum, row) => sum + (whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity) * (row.perUnit - row.costPerUnit), 0).toLocaleString()}
                                             </td>
                                         </tr>
                                     </tfoot>
@@ -4639,47 +4603,97 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {barns.map(barn => {
+                                                    {barns.flatMap(barn => {
                                                         const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
                                                         const bookedCount = bookedStallsForBarn(barn);
-                                                        const maxRev = (barn.stallCount || 0) * barnPerStallTotal(barn, showNights || 3);
-                                                        const maxProfit = (barn.stallCount || 0) * (barnPerStallTotal(barn, showNights || 3) - barnCostPerStallTotal(barn, showNights || 3));
-                                                        return (
-                                                            <tr key={barn.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{barn.name}</td>
-                                                                <td className="px-3 py-2 text-center text-muted-foreground">{typeInfo.name}</td>
-                                                                <td className="px-3 py-2 text-center">{barn.stallCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">{barnPriceLabel(barn)}</td>
-                                                                <td className="px-3 py-2 text-right text-muted-foreground">{barnCostLabel(barn)}</td>
-                                                                <td className="px-3 py-2 text-center">
-                                                                    <Badge variant={bookedCount > 0 ? 'default' : 'outline'} className="text-xs">
-                                                                        {bookedCount}
-                                                                    </Badge>
-                                                                </td>
-                                                                <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
-                                                                <td className="px-3 py-2 text-right font-semibold text-emerald-600">${maxProfit.toLocaleString()}</td>
-                                                            </tr>
-                                                        );
+                                                        const capacity = barn.stallCount || 0;
+                                                        const variants = [];
+                                                        if (barnHasNightly(barn)) {
+                                                            variants.push({
+                                                                key: `${barn.id}::night`,
+                                                                priceLabel: `$${(barn.pricePerNight || 0).toFixed(0)}/night`,
+                                                                costLabel: `$${nightlyCostForBarn(barn.id, extraStallFees).toFixed(0)}/night`,
+                                                                perUnit: nightlyRateForBarn(barn.id, extraStallFees) * (showNights || 3),
+                                                                costPerUnit: nightlyCostForBarn(barn.id, extraStallFees) * (showNights || 3),
+                                                            });
+                                                        }
+                                                        if (barnIsFlat(barn)) {
+                                                            variants.push({
+                                                                key: `${barn.id}::flat`,
+                                                                priceLabel: `$${barnFlatTotal(barn).toFixed(0)} flat`,
+                                                                costLabel: `$${flatCostForBarn(barn.id, extraStallFees).toFixed(0)} flat`,
+                                                                perUnit: barnFlatTotal(barn),
+                                                                costPerUnit: flatCostForBarn(barn.id, extraStallFees),
+                                                            });
+                                                        }
+                                                        if (variants.length === 0) {
+                                                            variants.push({ key: `${barn.id}::none`, priceLabel: '$0', costLabel: '$0', perUnit: 0, costPerUnit: 0 });
+                                                        }
+                                                        return variants.map(v => {
+                                                            const maxRev = capacity * v.perUnit;
+                                                            const maxProfit = capacity * (v.perUnit - v.costPerUnit);
+                                                            return (
+                                                                <tr key={v.key} className="border-b last:border-0">
+                                                                    <td className="px-3 py-2 font-medium">{barn.name}</td>
+                                                                    <td className="px-3 py-2 text-center text-muted-foreground">{typeInfo.name}</td>
+                                                                    <td className="px-3 py-2 text-center">{capacity}</td>
+                                                                    <td className="px-3 py-2 text-right">{v.priceLabel}</td>
+                                                                    <td className="px-3 py-2 text-right text-muted-foreground">{v.costLabel}</td>
+                                                                    <td className="px-3 py-2 text-center">
+                                                                        <Badge variant={bookedCount > 0 ? 'default' : 'outline'} className="text-xs">
+                                                                            {bookedCount}
+                                                                        </Badge>
+                                                                    </td>
+                                                                    <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
+                                                                    <td className="px-3 py-2 text-right font-semibold text-emerald-600">${maxProfit.toLocaleString()}</td>
+                                                                </tr>
+                                                            );
+                                                        });
                                                     })}
-                                                    {rvAreas.map(rv => {
+                                                    {rvAreas.flatMap(rv => {
                                                         const hookupInfo = RV_HOOKUP_TYPES.find(t => t.id === rv.hookupType) || RV_HOOKUP_TYPES[0];
                                                         const rvBooked = bookedSpotsForRvArea(rv);
-                                                        const maxRev = (rv.spotCount || 0) * rvPerSpotTotal(rv, showNights || 3);
-                                                        const maxProfit = (rv.spotCount || 0) * (rvPerSpotTotal(rv, showNights || 3) - rvCostPerSpotTotal(rv, showNights || 3));
-                                                        return (
-                                                            <tr key={rv.id} className="border-b last:border-0">
-                                                                <td className="px-3 py-2 font-medium">{rv.name}</td>
-                                                                <td className="px-3 py-2 text-center text-cyan-600">{hookupInfo.name}</td>
-                                                                <td className="px-3 py-2 text-center">{rv.spotCount || 0}</td>
-                                                                <td className="px-3 py-2 text-right">${rvUnitPrice(rv).toFixed(2)}</td>
-                                                                <td className="px-3 py-2 text-right text-muted-foreground">{rvCostLabel(rv)}</td>
-                                                                <td className="px-3 py-2 text-center">
-                                                                    <Badge variant={rvBooked > 0 ? 'default' : 'outline'} className="text-xs">{rvBooked}</Badge>
-                                                                </td>
-                                                                <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
-                                                                <td className="px-3 py-2 text-right font-semibold text-emerald-600">${maxProfit.toLocaleString()}</td>
-                                                            </tr>
-                                                        );
+                                                        const capacity = rv.spotCount || 0;
+                                                        const variants = [];
+                                                        if (nightlyRateForRvArea(rv.id, extraRvFees) > 0) {
+                                                            variants.push({
+                                                                key: `${rv.id}::night`,
+                                                                priceLabel: `$${nightlyRateForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
+                                                                costLabel: `$${nightlyCostForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
+                                                                perUnit: nightlyRateForRvArea(rv.id, extraRvFees) * (showNights || 3),
+                                                                costPerUnit: nightlyCostForRvArea(rv.id, extraRvFees) * (showNights || 3),
+                                                            });
+                                                        }
+                                                        if (rvIsFlat(rv)) {
+                                                            variants.push({
+                                                                key: `${rv.id}::flat`,
+                                                                priceLabel: `$${rvFlatTotal(rv).toFixed(0)} flat`,
+                                                                costLabel: `$${flatCostForRvArea(rv.id, extraRvFees).toFixed(0)} flat`,
+                                                                perUnit: rvFlatTotal(rv),
+                                                                costPerUnit: flatCostForRvArea(rv.id, extraRvFees),
+                                                            });
+                                                        }
+                                                        if (variants.length === 0) {
+                                                            variants.push({ key: `${rv.id}::none`, priceLabel: '$0', costLabel: '$0', perUnit: 0, costPerUnit: 0 });
+                                                        }
+                                                        return variants.map(v => {
+                                                            const maxRev = capacity * v.perUnit;
+                                                            const maxProfit = capacity * (v.perUnit - v.costPerUnit);
+                                                            return (
+                                                                <tr key={v.key} className="border-b last:border-0">
+                                                                    <td className="px-3 py-2 font-medium">{rv.name}</td>
+                                                                    <td className="px-3 py-2 text-center text-cyan-600">{hookupInfo.name}</td>
+                                                                    <td className="px-3 py-2 text-center">{capacity}</td>
+                                                                    <td className="px-3 py-2 text-right">{v.priceLabel}</td>
+                                                                    <td className="px-3 py-2 text-right text-muted-foreground">{v.costLabel}</td>
+                                                                    <td className="px-3 py-2 text-center">
+                                                                        <Badge variant={rvBooked > 0 ? 'default' : 'outline'} className="text-xs">{rvBooked}</Badge>
+                                                                    </td>
+                                                                    <td className="px-3 py-2 text-right font-semibold">${maxRev.toLocaleString()}</td>
+                                                                    <td className="px-3 py-2 text-right font-semibold text-emerald-600">${maxProfit.toLocaleString()}</td>
+                                                                </tr>
+                                                            );
+                                                        });
                                                     })}
                                                 </tbody>
                                                 <tfoot>

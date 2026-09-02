@@ -22,11 +22,11 @@ const Divider = () => <div className="h-px bg-border my-2" />;
 import { supabase } from '@/lib/supabaseClient';
 import { startStallCheckout } from '@/lib/housingCheckout';
 import {
-    buildExtraStallFeeItems, buildBarnStallItems, flatRateForBarn, stallsByBarnFromSelection,
+    buildExtraStallFeeItems, buildBarnStallOptionItems, flatRateForBarn, stallsByBarnFromSelection,
     groupBarnsForBooking, allocatePooledStalls, ALL_BARNS_GROUP_ID,
 } from '@/lib/extraStallFees';
 import {
-    buildRvAreaItems, flatRateForRvArea, rvsByAreaFromSelection,
+    buildRvAreaOptionItems, flatRateForRvArea, rvsByAreaFromSelection,
     groupRvAreasForBooking, allocatePooledRvSpots, ALL_RV_GROUP_ID,
 } from '@/lib/extraRvFees';
 import { nightsInRange } from '@/lib/stallNights';
@@ -166,83 +166,122 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                             const soldOut = totalStalls > 0 && available === 0;
                             // The pooled "All Barns" row's qty is the sum across whichever
                             // real member barns currently hold its stalls.
-                            const qty = barn.members
-                                ? barn.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]) || 0), 0)
-                                : (selection.stalls?.[barn.id] || 0);
+                            const flatQty = barn.members
+                                ? barn.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]?.flat) || 0), 0)
+                                : (Number(selection.stalls?.[barn.id]?.flat) || 0);
+                            const nightQty = barn.members
+                                ? barn.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]?.night) || 0), 0)
+                                : (Number(selection.stalls?.[barn.id]?.night) || 0);
                             const flatRate = flatRateForBarn(barn.id, extraStallFees);
-                            const hasNightly = (Number(barn.pricePerNight) || 0) > 0;
-                            const isFlat = flatRate > 0;
-                            const priceParts = [];
-                            if (hasNightly) priceParts.push(`${money(barn.pricePerNight)}/night`);
-                            if (isFlat) priceParts.push(`${money(flatRate)} flat`);
-                            const priceLabel = priceParts.length > 0 ? priceParts.join(' + ') : money(0);
+                            const nightlyRate = Number(barn.pricePerNight) || 0;
+                            const hasNightly = nightlyRate > 0;
+                            const hasFlat = flatRate > 0;
                             const selectedNights = selection.barnNights?.[barn.id] || showNights;
                             // Only barns priced Per Night need "which nights" — a Flat fee
                             // charges the same no matter how many nights are ticked.
-                            const showNightPicker = qty > 0 && hasNightly && showNights.length > 1;
+                            const showNightPicker = nightQty > 0 && hasNightly && showNights.length > 1;
                             // A barn can override the show's move-in/move-out window; falls
                             // back to it when the barn uses the default (Robert: "people know
                             // exactly what they're booking").
                             const barnStart = barn.moveInDate || bookWindow?.start;
                             const barnEnd = barn.moveOutDate || bookWindow?.end;
+
+                            // Flat Fee and Nightly Fee are two separate purchases, never both
+                            // at once for the same barn (Robert: "people either buy the flat
+                            // fee for all nights, or they're buying a night or two — those are
+                            // separate," shown as radio options in his mockup). Picking a qty
+                            // on one option clears the other for this barn.
+                            const updateOptionQty = (kind, v) => setSelection(prev => {
+                                const stalls = { ...(prev.stalls || {}) };
+                                if (barn.members) {
+                                    for (const m of barn.members) delete stalls[m.id];
+                                    if (v > 0) Object.assign(stalls, Object.fromEntries(
+                                        Object.entries(allocatePooledStalls(barn.members, v)).map(([id, q]) => [id, { [kind]: q }])
+                                    ));
+                                } else {
+                                    stalls[barn.id] = v > 0 ? { [kind]: v } : {};
+                                }
+                                return { ...prev, stalls };
+                            });
+
                             return (
                                 <div key={barn.id} className="p-3 border rounded-lg space-y-3">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1">
-                                            <p className="font-semibold text-sm">{barn.name}</p>
+                                    <div>
+                                        <p className="font-semibold text-sm">{barn.name}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
+                                            {barn.stallSize && ` · ${barn.stallSize}`}
+                                        </p>
+                                        {barnStart && barnEnd && (
                                             <p className="text-xs text-muted-foreground">
-                                                {priceLabel} ·{' '}
-                                                {soldOut ? 'Sold out' : `${available} of ${totalStalls} available`}
-                                                {barn.stallSize && ` · ${barn.stallSize}`}
+                                                {format(parseISO(barnStart), 'MMM d')} – {format(parseISO(barnEnd), 'MMM d, yyyy')}
                                             </p>
-                                            {barnStart && barnEnd && (
-                                                <p className="text-xs text-muted-foreground">
-                                                    {format(parseISO(barnStart), 'MMM d')} – {format(parseISO(barnEnd), 'MMM d, yyyy')}
-                                                </p>
-                                            )}
-                                        </div>
-                                        <QtyStepper
-                                            value={qty}
-                                            max={available}
-                                            onChange={(v) => setSelection(prev => {
-                                                if (barn.members) {
-                                                    // Re-split the pooled quantity across real member
-                                                    // barns, filling each one's own remaining capacity.
-                                                    const stalls = { ...(prev.stalls || {}) };
-                                                    for (const m of barn.members) delete stalls[m.id];
-                                                    return { ...prev, stalls: { ...stalls, ...allocatePooledStalls(barn.members, v) } };
-                                                }
-                                                return { ...prev, stalls: { ...(prev.stalls || {}), [barn.id]: v } };
-                                            })}
-                                        />
+                                        )}
                                     </div>
-                                    {showNightPicker && (
-                                        <div className="pt-2 border-t">
-                                            <p className="text-xs text-muted-foreground mb-1.5">Which nights do you need {qty} stall{qty !== 1 ? 's' : ''} in {barn.name}?</p>
-                                            <div className="flex flex-wrap gap-1.5">
-                                                {showNights.map(date => {
-                                                    const checked = selectedNights.includes(date);
-                                                    return (
-                                                        <button
-                                                            key={date}
-                                                            type="button"
-                                                            onClick={() => toggleBarnNight(barn.id, date)}
-                                                            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${checked
-                                                                ? 'bg-primary text-primary-foreground border-primary'
-                                                                : 'bg-background text-muted-foreground border-input hover:bg-muted'}`}
-                                                        >
-                                                            {format(parseISO(date), 'MMM d')}
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                            <p className="text-xs text-muted-foreground mt-1.5">
-                                                {selectedNights.length === 0
-                                                    ? 'Select at least one night.'
-                                                    : `${qty} stall${qty !== 1 ? 's' : ''} × ${selectedNights.length} night${selectedNights.length !== 1 ? 's' : ''} = ${money(qty * selectedNights.length * (barn.pricePerNight || 0) + qty * flatRate)}`}
-                                            </p>
-                                        </div>
+                                    {!hasFlat && !hasNightly && (
+                                        <p className="text-xs text-muted-foreground">Not priced yet.</p>
                                     )}
+                                    <div className="grid sm:grid-cols-2 gap-2">
+                                        {hasFlat && (
+                                            <div className="p-2.5 border rounded-md space-y-2">
+                                                <Badge variant="secondary" className="text-[10px]">Flat Fee Option</Badge>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="text-sm font-medium">{barn.name} – Flat Fee</p>
+                                                        <p className="text-xs text-muted-foreground">{money(flatRate)} flat · {available} of {totalStalls} available</p>
+                                                    </div>
+                                                    <QtyStepper
+                                                        value={flatQty}
+                                                        max={available}
+                                                        onChange={(v) => updateOptionQty('flat', v)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {hasNightly && (
+                                            <div className="p-2.5 border rounded-md space-y-2">
+                                                <Badge variant="secondary" className="text-[10px]">Nightly Fee Option</Badge>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="text-sm font-medium">{barn.name} – Nightly Fee</p>
+                                                        <p className="text-xs text-muted-foreground">{money(nightlyRate)}/night · {available} of {totalStalls} available</p>
+                                                    </div>
+                                                    <QtyStepper
+                                                        value={nightQty}
+                                                        max={available}
+                                                        onChange={(v) => updateOptionQty('night', v)}
+                                                    />
+                                                </div>
+                                                {showNightPicker && (
+                                                    <div className="pt-2 border-t">
+                                                        <p className="text-xs text-muted-foreground mb-1.5">Which nights do you need {nightQty} stall{nightQty !== 1 ? 's' : ''} in {barn.name}?</p>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {showNights.map(date => {
+                                                                const checked = selectedNights.includes(date);
+                                                                return (
+                                                                    <button
+                                                                        key={date}
+                                                                        type="button"
+                                                                        onClick={() => toggleBarnNight(barn.id, date)}
+                                                                        className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${checked
+                                                                            ? 'bg-primary text-primary-foreground border-primary'
+                                                                            : 'bg-background text-muted-foreground border-input hover:bg-muted'}`}
+                                                                    >
+                                                                        {format(parseISO(date), 'MMM d')}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <p className="text-xs text-muted-foreground mt-1.5">
+                                                            {selectedNights.length === 0
+                                                                ? 'Select at least one night.'
+                                                                : `${nightQty} stall${nightQty !== 1 ? 's' : ''} × ${selectedNights.length} night${selectedNights.length !== 1 ? 's' : ''} = ${money(nightQty * selectedNights.length * nightlyRate)}`}
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             );
                         })}
@@ -266,92 +305,131 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                             const soldOut = total > 0 && available === 0;
                             // The pooled "All RV Areas" row's qty is the sum across whichever
                             // real member areas currently hold its spots.
-                            const qty = rv.members
-                                ? rv.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]) || 0), 0)
-                                : (selection.rvs?.[rv.id] || 0);
+                            const flatQty = rv.members
+                                ? rv.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]?.flat) || 0), 0)
+                                : (Number(selection.rvs?.[rv.id]?.flat) || 0);
+                            const nightQty = rv.members
+                                ? rv.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]?.night) || 0), 0)
+                                : (Number(selection.rvs?.[rv.id]?.night) || 0);
+                            const qty = flatQty + nightQty;
                             const flatRate = flatRateForRvArea(rv.id, extraRvFees);
-                            const hasNightly = (Number(rv.pricePerNight) || 0) > 0;
-                            const isFlatRate = flatRate > 0;
-                            const priceParts = [];
-                            if (hasNightly) priceParts.push(`${money(rv.pricePerNight)}/night`);
-                            if (isFlatRate) priceParts.push(`${money(flatRate)} flat`);
-                            const priceLabel = priceParts.length > 0 ? priceParts.join(' + ') : money(0);
+                            const nightlyRate = Number(rv.pricePerNight) || 0;
+                            const hasNightly = nightlyRate > 0;
+                            const hasFlat = flatRate > 0;
                             const userLen = Number(selection.rvOptions?.[rv.id]?.length || 0);
                             const lengthExceeded = rv.maxLength > 0 && userLen > 0 && userLen > rv.maxLength;
                             const selectedRvNights = selection.rvNights?.[rv.id] || showNights;
                             // Only Per Night RV areas need "which nights" — Flat charges the
                             // same no matter how many nights are ticked.
-                            const showRvNightPicker = qty > 0 && hasNightly && showNights.length > 1;
+                            const showRvNightPicker = nightQty > 0 && hasNightly && showNights.length > 1;
+
+                            // Flat Fee and Nightly Fee are two separate purchases, never both
+                            // at once for the same area — same "radio option" split rule as
+                            // barns. Picking a qty on one option clears the other.
+                            const updateRvOptionQty = (kind, v) => setSelection(prev => {
+                                const rvs = { ...(prev.rvs || {}) };
+                                if (rv.members) {
+                                    for (const m of rv.members) delete rvs[m.id];
+                                    if (v > 0) Object.assign(rvs, Object.fromEntries(
+                                        Object.entries(allocatePooledRvSpots(rv.members, v)).map(([id, q]) => [id, { [kind]: q }])
+                                    ));
+                                } else {
+                                    rvs[rv.id] = v > 0 ? { [kind]: v } : {};
+                                }
+                                return { ...prev, rvs };
+                            });
+
                             return (
                                 <div key={rv.id} className={`p-3 border rounded-lg space-y-2 ${rv.isOverflow ? 'border-amber-400 bg-amber-50/50 dark:bg-amber-900/10' : ''}`}>
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1">
-                                            <p className="font-semibold text-sm flex items-center gap-2">
-                                                {rv.name}
-                                                {rv.isOverflow && (
-                                                    <Badge className="bg-amber-500 text-white text-[10px]">Overflow</Badge>
-                                                )}
-                                            </p>
+                                    <div>
+                                        <p className="font-semibold text-sm flex items-center gap-2">
+                                            {rv.name}
+                                            {rv.isOverflow && (
+                                                <Badge className="bg-amber-500 text-white text-[10px]">Overflow</Badge>
+                                            )}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                            {soldOut ? 'Sold out' : `${available} of ${total} available`}
+                                            {!rv.members && <> · {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}</>}
+                                            {rv.maxLength > 0 && <> · Max {rv.maxLength}ft</>}
+                                        </p>
+                                        {bookWindow?.start && bookWindow?.end && (
                                             <p className="text-xs text-muted-foreground">
-                                                {priceLabel} · {soldOut ? 'Sold out' : `${available} of ${total} available`}
-                                                {!rv.members && <> · {HOOKUP_LABELS[rv.hookupType] || rv.hookupType} · {POWER_LABELS[rv.powerType] || rv.powerType}</>}
-                                                {rv.maxLength > 0 && <> · Max {rv.maxLength}ft</>}
+                                                {format(parseISO(bookWindow.start), 'MMM d')} – {format(parseISO(bookWindow.end), 'MMM d, yyyy')}
                                             </p>
-                                            {bookWindow?.start && bookWindow?.end && (
-                                                <p className="text-xs text-muted-foreground">
-                                                    {format(parseISO(bookWindow.start), 'MMM d')} – {format(parseISO(bookWindow.end), 'MMM d, yyyy')}
-                                                </p>
-                                            )}
-                                            {!rv.members && (
-                                                <div className="flex gap-1 mt-1 flex-wrap">
-                                                    {rv.hasWater && <Badge variant="secondary" className="text-xs">Water</Badge>}
-                                                    {rv.hasSewer && <Badge variant="secondary" className="text-xs">Sewer</Badge>}
-                                                    {rv.hasWifi && <Badge variant="secondary" className="text-xs">Wi-Fi</Badge>}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <QtyStepper
-                                            value={qty}
-                                            max={available}
-                                            onChange={(v) => setSelection(prev => {
-                                                if (rv.members) {
-                                                    // Re-split the pooled quantity across real member
-                                                    // areas, filling each one's own remaining capacity.
-                                                    const rvs = { ...(prev.rvs || {}) };
-                                                    for (const m of rv.members) delete rvs[m.id];
-                                                    return { ...prev, rvs: { ...rvs, ...allocatePooledRvSpots(rv.members, v) } };
-                                                }
-                                                return { ...prev, rvs: { ...(prev.rvs || {}), [rv.id]: v } };
-                                            })}
-                                        />
-                                    </div>
-                                    {showRvNightPicker && (
-                                        <div className="pt-2 border-t">
-                                            <p className="text-xs text-muted-foreground mb-1.5">Which nights do you need {qty} spot{qty !== 1 ? 's' : ''} in {rv.name}?</p>
-                                            <div className="flex flex-wrap gap-1.5">
-                                                {showNights.map(date => {
-                                                    const checked = selectedRvNights.includes(date);
-                                                    return (
-                                                        <button
-                                                            key={date}
-                                                            type="button"
-                                                            onClick={() => toggleRvNight(rv.id, date)}
-                                                            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${checked
-                                                                ? 'bg-primary text-primary-foreground border-primary'
-                                                                : 'bg-background text-muted-foreground border-input hover:bg-muted'}`}
-                                                        >
-                                                            {format(parseISO(date), 'MMM d')}
-                                                        </button>
-                                                    );
-                                                })}
+                                        )}
+                                        {!rv.members && (
+                                            <div className="flex gap-1 mt-1 flex-wrap">
+                                                {rv.hasWater && <Badge variant="secondary" className="text-xs">Water</Badge>}
+                                                {rv.hasSewer && <Badge variant="secondary" className="text-xs">Sewer</Badge>}
+                                                {rv.hasWifi && <Badge variant="secondary" className="text-xs">Wi-Fi</Badge>}
                                             </div>
-                                            <p className="text-xs text-muted-foreground mt-1.5">
-                                                {selectedRvNights.length === 0
-                                                    ? 'Select at least one night.'
-                                                    : `${qty} spot${qty !== 1 ? 's' : ''} × ${selectedRvNights.length} night${selectedRvNights.length !== 1 ? 's' : ''} = ${money(qty * selectedRvNights.length * (rv.pricePerNight || 0))}`}
-                                            </p>
-                                        </div>
+                                        )}
+                                    </div>
+                                    {!hasFlat && !hasNightly && (
+                                        <p className="text-xs text-muted-foreground">Not priced yet.</p>
                                     )}
+                                    <div className="grid sm:grid-cols-2 gap-2">
+                                        {hasFlat && (
+                                            <div className="p-2.5 border rounded-md space-y-2">
+                                                <Badge variant="secondary" className="text-[10px]">Flat Fee Option</Badge>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="text-sm font-medium">{rv.name} – Flat Fee</p>
+                                                        <p className="text-xs text-muted-foreground">{money(flatRate)} flat · {available} of {total} available</p>
+                                                    </div>
+                                                    <QtyStepper
+                                                        value={flatQty}
+                                                        max={available}
+                                                        onChange={(v) => updateRvOptionQty('flat', v)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {hasNightly && (
+                                            <div className="p-2.5 border rounded-md space-y-2">
+                                                <Badge variant="secondary" className="text-[10px]">Nightly Fee Option</Badge>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <p className="text-sm font-medium">{rv.name} – Nightly Fee</p>
+                                                        <p className="text-xs text-muted-foreground">{money(nightlyRate)}/night · {available} of {total} available</p>
+                                                    </div>
+                                                    <QtyStepper
+                                                        value={nightQty}
+                                                        max={available}
+                                                        onChange={(v) => updateRvOptionQty('night', v)}
+                                                    />
+                                                </div>
+                                                {showRvNightPicker && (
+                                                    <div className="pt-2 border-t">
+                                                        <p className="text-xs text-muted-foreground mb-1.5">Which nights do you need {nightQty} spot{nightQty !== 1 ? 's' : ''} in {rv.name}?</p>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {showNights.map(date => {
+                                                                const checked = selectedRvNights.includes(date);
+                                                                return (
+                                                                    <button
+                                                                        key={date}
+                                                                        type="button"
+                                                                        onClick={() => toggleRvNight(rv.id, date)}
+                                                                        className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${checked
+                                                                            ? 'bg-primary text-primary-foreground border-primary'
+                                                                            : 'bg-background text-muted-foreground border-input hover:bg-muted'}`}
+                                                                    >
+                                                                        {format(parseISO(date), 'MMM d')}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <p className="text-xs text-muted-foreground mt-1.5">
+                                                            {selectedRvNights.length === 0
+                                                                ? 'Select at least one night.'
+                                                                : `${nightQty} spot${nightQty !== 1 ? 's' : ''} × ${selectedRvNights.length} night${selectedRvNights.length !== 1 ? 's' : ''} = ${money(nightQty * selectedRvNights.length * nightlyRate)}`}
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                     {qty > 0 && (
                                         <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                                             <div>
@@ -945,9 +1023,9 @@ const PublicBookingPage = () => {
                 nightsByBarn[key] = dates.length;
             }
         }
-        const barnStalls = buildBarnStallItems({
+        const barnStalls = buildBarnStallOptionItems({
             barns: inventory.barns,
-            stallsByBarn,
+            stallSelection: selection.stalls || {},
             extraStallFees: inventory.extraStallFees,
             nights,
             nightsByBarn,
@@ -959,7 +1037,7 @@ const PublicBookingPage = () => {
         // to know which physical barn to place the stall in.
         for (const item of barnStalls.items) {
             if (pooledGroup?.members.some(m => m.id === item.refId)) {
-                item.name = `All Barns × ${item.qty}`;
+                item.name = `All Barns – ${item.feeType === 'flat' ? 'Flat Fee' : 'Nightly Fee'} × ${item.qty}`;
             }
         }
         items.push(...barnStalls.items);
@@ -970,7 +1048,7 @@ const PublicBookingPage = () => {
         // the stall lines. Per-Night fees are excluded — they're already folded
         // into barn.pricePerNight above. Flat fees are excluded too — a barn with
         // one is charged its flat rate directly in the stall line above (see
-        // buildBarnStallItems), so charging either again here would double-bill.
+        // buildBarnStallOptionItems), so charging either again here would double-bill.
         const extras = buildExtraStallFeeItems({
             extraStallFees: inventory.extraStallFees,
             stallsByBarn,
@@ -995,9 +1073,9 @@ const PublicBookingPage = () => {
                 nightsByArea[key] = dates.length;
             }
         }
-        const rvAreaItems = buildRvAreaItems({
+        const rvAreaItems = buildRvAreaOptionItems({
             rvAreas: inventory.rvAreas,
-            rvsByArea,
+            rvSelection: selection.rvs || {},
             extraRvFees: inventory.extraRvFees,
             nights,
             nightsByArea,
@@ -1008,7 +1086,7 @@ const PublicBookingPage = () => {
             // that, matching the Select Items row actually picked — `refId` is
             // left pointing at the REAL area for assignment/analytics.
             if (pooledRvGroup?.members.some(m => m.id === item.refId)) {
-                item.name = `All RV Areas × ${item.qty}`;
+                item.name = `All RV Areas – ${item.feeType === 'flat' ? 'Flat Fee' : 'Nightly Fee'} × ${item.qty}`;
             }
         }
         items.push(...rvAreaItems.items);
@@ -1057,8 +1135,9 @@ const PublicBookingPage = () => {
 
     // Any selected RV area where the customer's length exceeds the maxLength?
     const lengthViolation = useMemo(() => {
+        const rvsByArea = rvsByAreaFromSelection(selection);
         for (const rv of inventory.rvAreas) {
-            const qty = selection.rvs?.[rv.id] || 0;
+            const qty = rvsByArea[rv.id] || 0;
             const len = Number(selection.rvOptions?.[rv.id]?.length || 0);
             if (qty > 0 && rv.maxLength > 0 && len > 0 && len > rv.maxLength) {
                 return { rvName: rv.name, len, max: rv.maxLength };
@@ -1081,35 +1160,36 @@ const PublicBookingPage = () => {
                 });
                 return false;
             }
+            // Only the Nightly Fee option needs "which nights" — a Flat Fee
+            // purchase charges the same no matter how many nights are ticked.
             const { pooledGroup } = groupBarnsForBooking(inventory.barns, inventory.extraStallFees);
-            const pooledQty = pooledGroup
-                ? pooledGroup.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]) || 0), 0)
+            const pooledNightQty = pooledGroup
+                ? pooledGroup.members.reduce((s, m) => s + (Number(selection.stalls?.[m.id]?.night) || 0), 0)
                 : 0;
-            if (pooledQty > 0 && (selection.barnNights?.[ALL_BARNS_GROUP_ID]?.length === 0)) {
+            if (pooledNightQty > 0 && (selection.barnNights?.[ALL_BARNS_GROUP_ID]?.length === 0)) {
                 toast({ title: 'Select at least one night', description: 'Pick which nights you need All Barns for.', variant: 'destructive' });
                 return false;
             }
             for (const barn of inventory.barns) {
                 if (pooledGroup?.members.some(m => m.id === barn.id)) continue; // validated above as the pooled row
-                const qty = selection.stalls?.[barn.id] || 0;
-                if (qty > 0 && (selection.barnNights?.[barn.id]?.length === 0)) {
+                const nightQty = Number(selection.stalls?.[barn.id]?.night) || 0;
+                if (nightQty > 0 && (selection.barnNights?.[barn.id]?.length === 0)) {
                     toast({ title: 'Select at least one night', description: `Pick which nights you need ${barn.name} for.`, variant: 'destructive' });
                     return false;
                 }
             }
             const { pooledGroup: pooledRvGroup } = groupRvAreasForBooking(inventory.rvAreas, inventory.extraRvFees);
-            const pooledRvQty = pooledRvGroup
-                ? pooledRvGroup.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]) || 0), 0)
+            const pooledRvNightQty = pooledRvGroup
+                ? pooledRvGroup.members.reduce((s, m) => s + (Number(selection.rvs?.[m.id]?.night) || 0), 0)
                 : 0;
-            if (pooledRvQty > 0 && (selection.rvNights?.[ALL_RV_GROUP_ID]?.length === 0)) {
+            if (pooledRvNightQty > 0 && (selection.rvNights?.[ALL_RV_GROUP_ID]?.length === 0)) {
                 toast({ title: 'Select at least one night', description: 'Pick which nights you need All RV Areas for.', variant: 'destructive' });
                 return false;
             }
             for (const rv of inventory.rvAreas) {
                 if (pooledRvGroup?.members.some(m => m.id === rv.id)) continue; // validated above as the pooled row
-                const qty = selection.rvs?.[rv.id] || 0;
-                const isFlat = flatRateForRvArea(rv.id, inventory.extraRvFees) > 0;
-                if (!isFlat && qty > 0 && (selection.rvNights?.[rv.id]?.length === 0)) {
+                const nightQty = Number(selection.rvs?.[rv.id]?.night) || 0;
+                if (nightQty > 0 && (selection.rvNights?.[rv.id]?.length === 0)) {
                     toast({ title: 'Select at least one night', description: `Pick which nights you need ${rv.name} for.`, variant: 'destructive' });
                     return false;
                 }
