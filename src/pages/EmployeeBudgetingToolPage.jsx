@@ -385,11 +385,22 @@ const EmployeeBudgetingToolPage = () => {
                 supabase.from('projects').select('id, project_name, project_data, status')
                     .eq('project_type', 'contract').eq('user_id', user.id),
             ]);
+            let combinedShows = showsRes.data || [];
+            if (showId && !combinedShows.some(s => s.id === showId)) {
+                // Not one of my own shows — I may still be a Full/Section Admin on
+                // it via Manage Access. RLS on `projects` allows owner OR admin.
+                const { data: adminShow } = await supabase
+                    .from('projects')
+                    .select('id, project_name, project_type, project_data, status, created_at, user_id, admins')
+                    .eq('id', showId)
+                    .maybeSingle();
+                if (adminShow) combinedShows = [...combinedShows, adminShow];
+            }
             if (showsRes.data) {
-                setShows(showsRes.data);
+                setShows(combinedShows);
                 // Auto-select show from URL param
                 if (showId) {
-                    const match = showsRes.data.find(s => s.id === showId);
+                    const match = combinedShows.find(s => s.id === showId);
                     if (match) setSelectedShow(match);
                 }
             }

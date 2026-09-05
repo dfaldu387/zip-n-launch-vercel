@@ -30,10 +30,21 @@ const ResultsManagementPage = () => {
                 .not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")')
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false });
-            if (!error && data) {
-                setShows(data);
+            let combined = data || [];
+            if (!error && showId && !combined.some(s => s.id === showId)) {
+                // Not one of my own shows — I may still be a Full/Section Admin on
+                // it via Manage Access. RLS on `projects` allows owner OR admin.
+                const { data: adminShow } = await supabase
+                    .from('projects')
+                    .select('id, project_name, project_type, project_data, status, created_at, user_id, admins')
+                    .eq('id', showId)
+                    .maybeSingle();
+                if (adminShow) combined = [...combined, adminShow];
+            }
+            if (!error) {
+                setShows(combined);
                 if (showId) {
-                    const match = data.find(s => s.id === showId);
+                    const match = combined.find(s => s.id === showId);
                     if (match) setSelectedShow(match);
                 }
             }

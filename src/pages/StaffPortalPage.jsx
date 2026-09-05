@@ -9,10 +9,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { 
-    Users, FileText, BookOpen, Eye, Loader2, Calendar, 
-    Building, MapPin, Clock, ChevronRight, Briefcase
+import {
+    Users, FileText, BookOpen, Eye, Loader2, Calendar,
+    Building, MapPin, Clock, ChevronRight, Briefcase, Shield
 } from 'lucide-react';
+import { routeForShowAccess, SHOW_SECTION_TITLES } from '@/lib/showSections';
 import ProjectDetailModal from '@/components/ProjectDetailModal';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
@@ -32,6 +33,12 @@ const StaffPortalPage = () => {
     const [horseShowProjects, setHorseShowProjects] = useState([]);
     const [isLoadingPatternBooks, setIsLoadingPatternBooks] = useState(false);
     const [isLoadingHorseShows, setIsLoadingHorseShows] = useState(false);
+
+    // Shows where I've been granted Full/Section Admin via Manage Access
+    // (separate from judge/staff assignments above, and from shows I own —
+    // those already live on the Horse Show Manager list).
+    const [adminAccessShows, setAdminAccessShows] = useState([]);
+    const [isLoadingAdminAccess, setIsLoadingAdminAccess] = useState(false);
     
     // Project Detail Modal State
     const [selectedProject, setSelectedProject] = useState(null);
@@ -150,7 +157,32 @@ const StaffPortalPage = () => {
 
         fetchAssignedProjects();
     }, [user?.email, toast]);
-    
+
+    // Fetch shows where I've been granted admin access (Manage Access on the
+    // Horse Show Manager list page) — same RPC that page uses, filtered here
+    // to the ones I don't own, since owned shows are already listed there.
+    useEffect(() => {
+        const fetchAdminAccessShows = async () => {
+            if (!user) return;
+            setIsLoadingAdminAccess(true);
+            const { data, error } = await supabase.rpc('get_my_horse_shows');
+            if (!error && data) {
+                const myEmail = (user.email || '').toLowerCase();
+                const granted = data
+                    .filter(show => show.user_id !== user.id)
+                    .map(show => {
+                        const admins = Array.isArray(show.admins) ? show.admins : [];
+                        const myEntry = admins.find(a => a.user_id === user.id || a.email?.toLowerCase() === myEmail);
+                        return myEntry ? { ...show, myRole: myEntry.role, mySections: myEntry.sections || [] } : null;
+                    })
+                    .filter(Boolean);
+                setAdminAccessShows(granted);
+            }
+            setIsLoadingAdminAccess(false);
+        };
+        fetchAdminAccessShows();
+    }, [user]);
+
     // Handle View Project
     const handleViewProject = (project) => {
         setSelectedProject(project);
@@ -335,7 +367,7 @@ const StaffPortalPage = () => {
 
                     {/* Tabs */}
                     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                        <TabsList className="grid w-full max-w-md mx-auto grid-cols-2 mb-8">
+                        <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-3 mb-8">
                             <TabsTrigger value="pattern-books" className="flex items-center gap-2">
                                 <BookOpen className="h-4 w-4" />
                                 Active Pattern Books
@@ -343,6 +375,10 @@ const StaffPortalPage = () => {
                             <TabsTrigger value="horse-shows" className="flex items-center gap-2">
                                 <Building className="h-4 w-4" />
                                 Horse Shows
+                            </TabsTrigger>
+                            <TabsTrigger value="admin-access" className="flex items-center gap-2">
+                                <Shield className="h-4 w-4" />
+                                Show Manager Access
                             </TabsTrigger>
                         </TabsList>
 
@@ -667,6 +703,84 @@ const StaffPortalPage = () => {
                                                             </TableRow>
                                                         );
                                                     })}
+                                                </TableBody>
+                                            </Table>
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+
+                        {/* Tab C: Shows I've been granted admin access to */}
+                        <TabsContent value="admin-access" className="space-y-4">
+                            <Card className="shadow-lg border-2">
+                                <CardHeader className="bg-gradient-to-r from-primary/5 to-primary/10 border-b">
+                                    <CardTitle className="flex items-center gap-2 text-2xl">
+                                        <Shield className="h-6 w-6 text-primary" />
+                                        Show Manager Access
+                                    </CardTitle>
+                                    <CardDescription className="text-base mt-1">
+                                        Shows where an owner has given you Full or Section Admin access via Manage Access.
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="p-0">
+                                    {isLoadingAdminAccess ? (
+                                        <div className="flex items-center justify-center py-12">
+                                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                                            <span className="ml-2 text-muted-foreground">Loading show access...</span>
+                                        </div>
+                                    ) : adminAccessShows.length === 0 ? (
+                                        <div className="text-center py-12 text-muted-foreground">
+                                            <Shield className="h-10 w-10 mx-auto mb-3 opacity-50" />
+                                            <p>No show manager access yet.</p>
+                                            <p className="text-sm">If an owner adds you in Manage Access, it'll show up here.</p>
+                                        </div>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <Table>
+                                                <TableHeader className="bg-muted/50">
+                                                    <TableRow className="hover:bg-muted/50 border-b-2">
+                                                        <TableHead className="font-semibold text-sm h-14">Show Name</TableHead>
+                                                        <TableHead className="font-semibold text-sm">Your Access</TableHead>
+                                                        <TableHead className="font-semibold text-sm text-center">Action</TableHead>
+                                                    </TableRow>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {adminAccessShows.map((show) => (
+                                                        <TableRow key={show.id} className="border-b hover:bg-muted/30 transition-colors">
+                                                            <TableCell className="font-semibold py-4">
+                                                                <span className="text-base">{show.project_name || 'Untitled Show'}</span>
+                                                            </TableCell>
+                                                            <TableCell className="py-4">
+                                                                {show.myRole === 'full_admin' ? (
+                                                                    <Badge variant="outline" className="text-xs px-3 py-1.5 bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border-purple-200 dark:border-purple-700 rounded-full">
+                                                                        Full Admin
+                                                                    </Badge>
+                                                                ) : (
+                                                                    <div className="flex flex-wrap gap-1">
+                                                                        {(show.mySections || []).length === 0 ? (
+                                                                            <span className="text-muted-foreground text-sm">Section Admin — no sections yet</span>
+                                                                        ) : show.mySections.map(key => (
+                                                                            <Badge key={key} variant="outline" className="text-xs px-2.5 py-1 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-700 rounded-full">
+                                                                                {SHOW_SECTION_TITLES[key] || key}
+                                                                            </Badge>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </TableCell>
+                                                            <TableCell className="text-right py-4">
+                                                                <Button
+                                                                    variant="default"
+                                                                    size="sm"
+                                                                    onClick={() => navigate(routeForShowAccess(show.id, show.myRole, show.mySections))}
+                                                                    className="gap-1.5"
+                                                                >
+                                                                    Open
+                                                                    <ChevronRight className="h-3 w-3" />
+                                                                </Button>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))}
                                                 </TableBody>
                                             </Table>
                                         </div>

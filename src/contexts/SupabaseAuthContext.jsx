@@ -15,7 +15,7 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [permissions, setPermissions] = useState([]);
-  const [authModalState, setAuthModalState] = useState({ isOpen: false, initialTab: 'signin' });
+  const [authModalState, setAuthModalState] = useState({ isOpen: false, initialTab: 'signin', prefillEmail: '' });
   const skipAutoCloseRef = useRef(false);
   // Set while the user is signing out on purpose, so losing the session then is
   // not reported back to them as an expiry.
@@ -406,14 +406,14 @@ export const AuthProvider = ({ children }) => {
     return permissions.includes(permission);
   }, [permissions]);
 
-  const openAuthModal = (initialTab = 'signin') => {
+  const openAuthModal = (initialTab = 'signin', prefillEmail = '') => {
     const validTab = (initialTab === 'sign_up' || initialTab === 'signup') ? 'signup' : 'signin';
-    setAuthModalState({ isOpen: true, initialTab: validTab });
+    setAuthModalState({ isOpen: true, initialTab: validTab, prefillEmail });
   };
-  
+
   const closeAuthModal = () => {
     skipAutoCloseRef.current = false;
-    setAuthModalState({ isOpen: false, initialTab: 'signin' });
+    setAuthModalState({ isOpen: false, initialTab: 'signin', prefillEmail: '' });
   };
 
   const setSkipAutoClose = (value) => {
@@ -436,6 +436,7 @@ export const AuthProvider = ({ children }) => {
     updateUserProfile,
     isAuthModalOpen: authModalState.isOpen,
     authModalInitialTab: authModalState.initialTab,
+    authModalPrefillEmail: authModalState.prefillEmail,
     openAuthModal,
     closeAuthModal,
     setSkipAutoClose,

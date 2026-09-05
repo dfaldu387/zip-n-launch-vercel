@@ -38,7 +38,7 @@ import {
 
 /* ── Module card ── */
 
-const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, statusReadOnlyReason, moduleKey, onStatusChange, comingSoon, isShowLocked }) => {
+const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, statusReadOnlyReason, moduleKey, onStatusChange, comingSoon, isShowLocked, isSectionLocked }) => {
   const { toast } = useToast();
   const colorMap = {
     blue: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600',
@@ -60,10 +60,13 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
     } else if (isShowLocked) {
       e.preventDefault();
       toast({ title: 'Show Locked', description: 'Unlock the show to access this module.', variant: 'destructive' });
+    } else if (isSectionLocked) {
+      e.preventDefault();
+      toast({ title: 'Not in your access', description: "You can see this section, but you haven't been granted access to it. Ask the show owner to add it in Manage Access.", variant: 'destructive' });
     }
   };
 
-  const isClickable = !comingSoon && !isShowLocked;
+  const isClickable = !comingSoon && !isShowLocked && !isSectionLocked;
   // A module can either navigate (`to`) or run an action (`onClick`) —
   // the Pattern Book card uses the action form when no book is linked yet.
   let Wrapper = 'div';
@@ -92,6 +95,7 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
           comingSoon && 'hover:border-amber-300 hover:shadow-md cursor-pointer',
           borderClass,
           isShowLocked && !comingSoon && 'opacity-75',
+          isSectionLocked && !comingSoon && 'opacity-50 grayscale-[40%]',
         )}>
           <CardContent className="p-5">
             <div className="flex items-start gap-4">
@@ -105,7 +109,7 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
                     <ModuleStatusBadge
                       status={status}
                       moduleKey={moduleKey}
-                      isShowLocked={isShowLocked}
+                      isShowLocked={isShowLocked || isSectionLocked}
                       onStatusChange={onStatusChange}
                       readOnly={statusReadOnly}
                       readOnlyReason={statusReadOnlyReason}
@@ -114,7 +118,7 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
               </div>
-              <ChevronRight className={cn('h-4 w-4 shrink-0 mt-1', isShowLocked ? 'text-muted-foreground/30' : 'text-muted-foreground')} />
+              <ChevronRight className={cn('h-4 w-4 shrink-0 mt-1', (isShowLocked || isSectionLocked) ? 'text-muted-foreground/30' : 'text-muted-foreground')} />
             </div>
           </CardContent>
         </Card>
@@ -435,20 +439,19 @@ const ShowWorkspacePage = () => {
     })),
   }));
 
-  // A Section Admin only sees the tool cards they've been scoped to in Manage
-  // Access — everything else is hidden outright (not shown locked), per
-  // Robert's ask. The owner and Full Admins are unaffected. Groups left with
-  // no visible items are dropped so an empty "Employee Management" heading
-  // doesn't show for nothing.
+  // A Section Admin sees every tool card, but only the ones they've been
+  // scoped to in Manage Access are clickable — the rest render grayed out so
+  // they know the tool exists without being able to open it. Matched by
+  // user_id when available, falling back to email for someone invited by
+  // address before they had an account (see Manage Access on the Horse Show
+  // Manager list page). The owner and Full Admins are unaffected.
   const isOwner = show?.user_id === user?.id;
-  const myAdminEntry = (Array.isArray(show?.admins) ? show.admins : []).find(a => a.user_id === user?.id);
+  const myAdminEntry = (Array.isArray(show?.admins) ? show.admins : []).find(a =>
+    a.user_id === user?.id || (a.email && user?.email && a.email.toLowerCase() === user.email.toLowerCase())
+  );
   const isSectionOnlyAdmin = !isOwner && myAdminEntry?.role === 'section_admin';
   const mySections = myAdminEntry?.sections || [];
-  const visibleModules = isSectionOnlyAdmin
-    ? modulesWithStatus
-        .map(section => ({ ...section, items: section.items.filter(item => mySections.includes(item.key)) }))
-        .filter(section => section.items.length > 0)
-    : modulesWithStatus;
+  const visibleModules = modulesWithStatus;
 
   // "Who manages what" — Robert's ask: note at the bottom which section, if
   // any, has been handed off to a Section Admin (see Manage Access on the
@@ -684,7 +687,14 @@ const ShowWorkspacePage = () => {
               <h2 className="text-lg font-bold text-foreground mb-4">{section.section}</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {section.items.map((mod) => (
-                  <ModuleCard key={mod.title} {...mod} moduleKey={mod.key} onStatusChange={changeModuleStatus} isShowLocked={isShowLocked} />
+                  <ModuleCard
+                    key={mod.title}
+                    {...mod}
+                    moduleKey={mod.key}
+                    onStatusChange={changeModuleStatus}
+                    isShowLocked={isShowLocked}
+                    isSectionLocked={isSectionOnlyAdmin && !mySections.includes(mod.key)}
+                  />
                 ))}
               </div>
             </motion.div>

@@ -309,7 +309,7 @@ const HorseShowManagerPage = () => {
   };
 
   const handleAddAdmin = (userToAdd) => {
-    if (pendingAdmins.some(a => a.user_id === userToAdd.user_id)) return;
+    if (pendingAdmins.some(a => a.email?.toLowerCase() === userToAdd.email?.toLowerCase())) return;
     setPendingAdmins(prev => [
       ...prev,
       {
@@ -327,19 +327,49 @@ const HorseShowManagerPage = () => {
     ]);
   };
 
-  const handleRemoveAdmin = (userId) => {
-    setPendingAdmins(prev => prev.filter(a => a.user_id !== userId));
+  // Adds someone who doesn't have an account yet (not in `allUsers`, so there's
+  // no `user_id` to key off of). Identity for this entry is the email address
+  // until they sign up — ShowWorkspacePage matches admins by user_id OR email
+  // for exactly this reason.
+  const handleInviteByEmail = (email) => {
+    const trimmed = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      toast({ title: 'Invalid email', description: 'Enter a full email address to invite someone new.', variant: 'destructive' });
+      return;
+    }
+    if (pendingAdmins.some(a => a.email?.toLowerCase() === trimmed.toLowerCase())) {
+      toast({ title: 'Already added', description: 'That email is already in this list.', variant: 'destructive' });
+      return;
+    }
+    setPendingAdmins(prev => [
+      ...prev,
+      {
+        user_id: null,
+        email: trimmed,
+        full_name: null,
+        added_at: new Date().toISOString(),
+        added_by: user.id,
+        role: 'full_admin',
+        sections: [],
+        invited: true,
+      },
+    ]);
+    setUserSearchQuery('');
   };
 
-  const handleSetAdminRole = (userId, role) => {
+  const handleRemoveAdmin = (email) => {
+    setPendingAdmins(prev => prev.filter(a => a.email?.toLowerCase() !== email?.toLowerCase()));
+  };
+
+  const handleSetAdminRole = (email, role) => {
     setPendingAdmins(prev => prev.map(a => (
-      a.user_id === userId ? { ...a, role, sections: role === 'full_admin' ? [] : a.sections } : a
+      a.email?.toLowerCase() === email?.toLowerCase() ? { ...a, role, sections: role === 'full_admin' ? [] : a.sections } : a
     )));
   };
 
-  const handleToggleAdminSection = (userId, sectionKey) => {
+  const handleToggleAdminSection = (email, sectionKey) => {
     setPendingAdmins(prev => prev.map(a => {
-      if (a.user_id !== userId) return a;
+      if (a.email?.toLowerCase() !== email?.toLowerCase()) return a;
       const has = (a.sections || []).includes(sectionKey);
       return { ...a, sections: has ? a.sections.filter(s => s !== sectionKey) : [...(a.sections || []), sectionKey] };
     }));
@@ -348,6 +378,7 @@ const HorseShowManagerPage = () => {
   const handleSaveAdmins = async () => {
     if (!manageAccessShow) return;
     setIsSavingAccess(true);
+    const previousAdmins = Array.isArray(manageAccessShow.admins) ? manageAccessShow.admins : [];
     const { error } = await supabase
       .from('projects')
       .update({ admins: pendingAdmins })
@@ -360,6 +391,32 @@ const HorseShowManagerPage = () => {
         s.id === manageAccessShow.id ? { ...s, admins: pendingAdmins } : s
       ));
       toast({ title: 'Access updated', description: `${pendingAdmins.length} show manager(s) saved.` });
+
+      // Notify anyone who is newly added or whose role/sections just changed —
+      // not everyone in the list on every save, or a routine edit would
+      // re-email people who already know they have access.
+      const grantedByName = user.user_metadata?.full_name || user.email;
+      const toNotify = pendingAdmins.filter(a => {
+        const prev = previousAdmins.find(p => p.email?.toLowerCase() === a.email?.toLowerCase());
+        if (!prev) return true;
+        const prevSections = JSON.stringify((prev.sections || []).slice().sort());
+        const nextSections = JSON.stringify((a.sections || []).slice().sort());
+        return prev.role !== a.role || prevSections !== nextSections;
+      });
+      if (toNotify.length > 0) {
+        Promise.all(toNotify.map(a => supabase.functions.invoke('send-admin-access-email', {
+          body: {
+            recipientEmail: a.email,
+            recipientName: a.full_name,
+            role: a.role,
+            sectionTitles: (a.sections || []).map(key => SHOW_SECTIONS.find(s => s.key === key)?.title || key),
+            showId: manageAccessShow.id,
+            showName: manageAccessShow.project_name || 'Untitled Show',
+            grantedByName,
+          },
+        }))).catch(err => console.error('send-admin-access-email failed:', err));
+      }
+
       handleCloseManageAccess();
     }
     setIsSavingAccess(false);
@@ -663,17 +720,17 @@ const HorseShowManagerPage = () => {
                 ) : (
                   <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                     {pendingAdmins.map((a) => (
-                      <div key={a.user_id} className="px-3 py-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
+                      <div key={a.email} className="px-3 py-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900 rounded-md">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium truncate">{a.full_name || '(no name)'}</p>
+                            <p className="text-sm font-medium truncate">{a.full_name || (a.invited ? 'Invited — no account yet' : '(no name)')}</p>
                             <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
                               <Mail className="h-3 w-3" /> {a.email}
                             </p>
                           </div>
                           <button
                             type="button"
-                            onClick={() => handleRemoveAdmin(a.user_id)}
+                            onClick={() => handleRemoveAdmin(a.email)}
                             className="p-1 rounded text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
                             title="Remove show manager"
                           >
@@ -685,7 +742,7 @@ const HorseShowManagerPage = () => {
                         <div className="flex items-center gap-1 mt-2">
                           <button
                             type="button"
-                            onClick={() => handleSetAdminRole(a.user_id, 'full_admin')}
+                            onClick={() => handleSetAdminRole(a.email, 'full_admin')}
                             className={cn(
                               'text-[11px] px-2 py-1 rounded-full border transition-colors',
                               (a.role || 'full_admin') === 'full_admin'
@@ -697,7 +754,7 @@ const HorseShowManagerPage = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleSetAdminRole(a.user_id, 'section_admin')}
+                            onClick={() => handleSetAdminRole(a.email, 'section_admin')}
                             className={cn(
                               'text-[11px] px-2 py-1 rounded-full border transition-colors',
                               a.role === 'section_admin'
@@ -718,7 +775,7 @@ const HorseShowManagerPage = () => {
                                 <button
                                   key={sec.key}
                                   type="button"
-                                  onClick={() => handleToggleAdminSection(a.user_id, sec.key)}
+                                  onClick={() => handleToggleAdminSection(a.email, sec.key)}
                                   className={cn(
                                     'text-[11px] px-2 py-1 rounded-full border transition-colors',
                                     checked
@@ -767,9 +824,9 @@ const HorseShowManagerPage = () => {
                   <div className="max-h-48 overflow-y-auto border rounded-md divide-y">
                     {(() => {
                       const q = userSearchQuery.trim().toLowerCase();
-                      const adminIds = new Set(pendingAdmins.map(a => a.user_id));
+                      const adminEmails = new Set(pendingAdmins.map(a => a.email?.toLowerCase()));
                       const filtered = allUsers
-                        .filter(u => !adminIds.has(u.user_id))
+                        .filter(u => !adminEmails.has(u.email?.toLowerCase()))
                         .filter(u => {
                           if (!q) return true;
                           return (
@@ -778,11 +835,29 @@ const HorseShowManagerPage = () => {
                           );
                         })
                         .slice(0, 50);
+
+                      const looksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userSearchQuery.trim());
+                      const exactMatchExists = allUsers.some(u => u.email?.toLowerCase() === q) || pendingAdmins.some(a => a.email?.toLowerCase() === q);
+
                       if (filtered.length === 0) {
                         return (
-                          <p className="text-xs text-muted-foreground italic px-3 py-4 text-center">
-                            {q ? `No users match "${userSearchQuery}"` : 'No users available to add.'}
-                          </p>
+                          <div className="px-3 py-4 text-center space-y-2">
+                            <p className="text-xs text-muted-foreground italic">
+                              {q ? `No existing account matches "${userSearchQuery}"` : 'No users available to add.'}
+                            </p>
+                            {looksLikeEmail && !exactMatchExists && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="text-xs"
+                                onClick={() => handleInviteByEmail(userSearchQuery.trim())}
+                              >
+                                <Mail className="h-3 w-3 mr-1.5" />
+                                Invite {userSearchQuery.trim()} as a new show manager
+                              </Button>
+                            )}
+                          </div>
                         );
                       }
                       return filtered.map((u) => (
@@ -802,6 +877,10 @@ const HorseShowManagerPage = () => {
                     })()}
                   </div>
                 )}
+                <p className="text-[11px] text-muted-foreground mt-1.5">
+                  Don't see them? Type their full email and invite them — they'll get an email either
+                  way, and a new membership signup link if they don't have an account yet.
+                </p>
               </div>
             </div>
 

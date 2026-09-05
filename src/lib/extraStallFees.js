@@ -471,13 +471,19 @@ export function groupBarnsForBooking(barns = [], extraStallFees = []) {
  * per-barn counts, filling each member barn's own remaining capacity in turn.
  * Purely a UI-layer allocation — booking/pricing code never sees the pooled id,
  * only the real barn ids this returns.
+ *
+ * `alreadyUsed` ({ [memberId]: qty }) reserves capacity a sibling allocation
+ * already claimed on the same members — since Flat and Nightly Fee stalls can
+ * now be booked together in the same pooled barn, allocating one kind must not
+ * hand out stalls the other kind already took.
  */
-export function allocatePooledStalls(members, qty) {
+export function allocatePooledStalls(members, qty, alreadyUsed = {}) {
     let remaining = Math.max(0, Number(qty) || 0);
     const out = {};
     for (const member of members) {
         if (remaining <= 0) break;
-        const available = Math.max((Number(member.total) || 0) - (Number(member.taken) || 0), 0);
+        const used = Number(alreadyUsed[member.id]) || 0;
+        const available = Math.max((Number(member.total) || 0) - (Number(member.taken) || 0) - used, 0);
         const take = Math.min(available, remaining);
         if (take > 0) out[member.id] = take;
         remaining -= take;

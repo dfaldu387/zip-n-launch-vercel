@@ -63,31 +63,60 @@ const POWER_LABELS = {
 
 // ───────────────────────── Quantity Stepper ─────────────────────────
 
-const QtyStepper = ({ value, onChange, max, min = 0 }) => (
-    <div className="flex items-center gap-2">
-        <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            disabled={value <= min}
-            onClick={() => onChange(Math.max(min, value - 1))}
-        >
-            <Minus className="h-3.5 w-3.5" />
-        </Button>
-        <span className="w-10 text-center text-sm font-semibold tabular-nums">{value}</span>
-        <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            disabled={max != null && value >= max}
-            onClick={() => onChange(Math.min(max ?? Infinity, value + 1))}
-        >
-            <Plus className="h-3.5 w-3.5" />
-        </Button>
-    </div>
-);
+// A plain "type a number" field, not just +/- clicks — Robert: "eight stalls,
+// you'll need forty bags... maybe we could type a number in here." Keeps a
+// local draft string so clearing the field to type a fresh number doesn't
+// immediately snap to 0 mid-keystroke; the typed value is clamped to
+// [min, max] on blur/Enter, same limits the +/- buttons already respect.
+const QtyStepper = ({ value, onChange, max, min = 0 }) => {
+    const [draft, setDraft] = useState(String(value));
+    useEffect(() => { setDraft(String(value)); }, [value]);
+
+    const commit = (raw) => {
+        const n = parseInt(raw, 10);
+        const clamped = Number.isNaN(n) ? min : Math.min(max ?? Infinity, Math.max(min, n));
+        setDraft(String(clamped));
+        if (clamped !== value) onChange(clamped);
+    };
+
+    return (
+        <div className="flex items-center gap-2">
+            <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                disabled={value <= min}
+                onClick={() => onChange(Math.max(min, value - 1))}
+            >
+                <Minus className="h-3.5 w-3.5" />
+            </Button>
+            <Input
+                type="number"
+                inputMode="numeric"
+                min={min}
+                max={max ?? undefined}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={(e) => commit(e.target.value)}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); commit(e.currentTarget.value); e.currentTarget.blur(); }
+                }}
+                className="w-14 h-8 text-center text-sm font-semibold tabular-nums px-1"
+            />
+            <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                disabled={max != null && value >= max}
+                onClick={() => onChange(Math.min(max ?? Infinity, value + 1))}
+            >
+                <Plus className="h-3.5 w-3.5" />
+            </Button>
+        </div>
+    );
+};
 
 // ───────────────────────── Step 1: Select Items ─────────────────────────
 
@@ -186,20 +215,40 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                             const barnStart = barn.moveInDate || bookWindow?.start;
                             const barnEnd = barn.moveOutDate || bookWindow?.end;
 
-                            // Flat Fee and Nightly Fee are two separate purchases, never both
-                            // at once for the same barn (Robert: "people either buy the flat
-                            // fee for all nights, or they're buying a night or two — those are
-                            // separate," shown as radio options in his mockup). Picking a qty
-                            // on one option clears the other for this barn.
+                            // Flat Fee and Nightly Fee are independent purchases that can both
+                            // apply to the same barn (e.g. 3 stalls at the flat rate plus 1
+                            // more stall by the night) — each option keeps its own qty, capped
+                            // so the two together never exceed the barn's real availability
+                            // (see the `max` props below).
                             const updateOptionQty = (kind, v) => setSelection(prev => {
                                 const stalls = { ...(prev.stalls || {}) };
+                                const otherKind = kind === 'flat' ? 'night' : 'flat';
                                 if (barn.members) {
-                                    for (const m of barn.members) delete stalls[m.id];
-                                    if (v > 0) Object.assign(stalls, Object.fromEntries(
-                                        Object.entries(allocatePooledStalls(barn.members, v)).map(([id, q]) => [id, { [kind]: q }])
-                                    ));
+                                    // Preserve each member's existing allocation of the OTHER
+                                    // kind, and reserve it so this kind's reallocation can't
+                                    // double-book the same physical stalls.
+                                    const otherByMember = {};
+                                    for (const m of barn.members) {
+                                        const otherVal = stalls[m.id]?.[otherKind];
+                                        if (otherVal) otherByMember[m.id] = otherVal;
+                                    }
+                                    for (const m of barn.members) {
+                                        if (otherByMember[m.id]) stalls[m.id] = { [otherKind]: otherByMember[m.id] };
+                                        else delete stalls[m.id];
+                                    }
+                                    if (v > 0) {
+                                        const allocation = allocatePooledStalls(barn.members, v, otherByMember);
+                                        for (const [id, q] of Object.entries(allocation)) {
+                                            stalls[id] = { ...(stalls[id] || {}), [kind]: q };
+                                        }
+                                    }
                                 } else {
-                                    stalls[barn.id] = v > 0 ? { [kind]: v } : {};
+                                    const otherVal = stalls[barn.id]?.[otherKind];
+                                    const next = {};
+                                    if (otherVal) next[otherKind] = otherVal;
+                                    if (v > 0) next[kind] = v;
+                                    if (Object.keys(next).length > 0) stalls[barn.id] = next;
+                                    else delete stalls[barn.id];
                                 }
                                 return { ...prev, stalls };
                             });
@@ -232,7 +281,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                                     </div>
                                                     <QtyStepper
                                                         value={flatQty}
-                                                        max={available}
+                                                        max={Math.max(0, available - nightQty)}
                                                         onChange={(v) => updateOptionQty('flat', v)}
                                                     />
                                                 </div>
@@ -248,7 +297,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                                     </div>
                                                     <QtyStepper
                                                         value={nightQty}
-                                                        max={available}
+                                                        max={Math.max(0, available - flatQty)}
                                                         onChange={(v) => updateOptionQty('night', v)}
                                                     />
                                                 </div>
@@ -323,18 +372,34 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                             // same no matter how many nights are ticked.
                             const showRvNightPicker = nightQty > 0 && hasNightly && showNights.length > 1;
 
-                            // Flat Fee and Nightly Fee are two separate purchases, never both
-                            // at once for the same area — same "radio option" split rule as
-                            // barns. Picking a qty on one option clears the other.
+                            // Flat Fee and Nightly Fee are independent purchases that can both
+                            // apply to the same area — mirrors barns' updateOptionQty above.
                             const updateRvOptionQty = (kind, v) => setSelection(prev => {
                                 const rvs = { ...(prev.rvs || {}) };
+                                const otherKind = kind === 'flat' ? 'night' : 'flat';
                                 if (rv.members) {
-                                    for (const m of rv.members) delete rvs[m.id];
-                                    if (v > 0) Object.assign(rvs, Object.fromEntries(
-                                        Object.entries(allocatePooledRvSpots(rv.members, v)).map(([id, q]) => [id, { [kind]: q }])
-                                    ));
+                                    const otherByMember = {};
+                                    for (const m of rv.members) {
+                                        const otherVal = rvs[m.id]?.[otherKind];
+                                        if (otherVal) otherByMember[m.id] = otherVal;
+                                    }
+                                    for (const m of rv.members) {
+                                        if (otherByMember[m.id]) rvs[m.id] = { [otherKind]: otherByMember[m.id] };
+                                        else delete rvs[m.id];
+                                    }
+                                    if (v > 0) {
+                                        const allocation = allocatePooledRvSpots(rv.members, v, otherByMember);
+                                        for (const [id, q] of Object.entries(allocation)) {
+                                            rvs[id] = { ...(rvs[id] || {}), [kind]: q };
+                                        }
+                                    }
                                 } else {
-                                    rvs[rv.id] = v > 0 ? { [kind]: v } : {};
+                                    const otherVal = rvs[rv.id]?.[otherKind];
+                                    const next = {};
+                                    if (otherVal) next[otherKind] = otherVal;
+                                    if (v > 0) next[kind] = v;
+                                    if (Object.keys(next).length > 0) rvs[rv.id] = next;
+                                    else delete rvs[rv.id];
                                 }
                                 return { ...prev, rvs };
                             });
@@ -380,7 +445,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                                     </div>
                                                     <QtyStepper
                                                         value={flatQty}
-                                                        max={available}
+                                                        max={Math.max(0, available - nightQty)}
                                                         onChange={(v) => updateRvOptionQty('flat', v)}
                                                     />
                                                 </div>
@@ -396,7 +461,7 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                                     </div>
                                                     <QtyStepper
                                                         value={nightQty}
-                                                        max={available}
+                                                        max={Math.max(0, available - flatQty)}
                                                         onChange={(v) => updateRvOptionQty('night', v)}
                                                     />
                                                 </div>
@@ -1264,6 +1329,14 @@ const PublicBookingPage = () => {
                 bookingShortId: String(data || '').slice(0, 8).toUpperCase(),
                 payload: bookingPayload,
             };
+
+            // Fire-and-forget confirmation email to the exhibitor — the function
+            // re-reads the booking itself (get_public_booking) rather than trusting
+            // this request, so it's safe to fire before knowing whether Stripe is
+            // about to redirect the browser away.
+            supabase.functions.invoke('send-booking-confirmation', {
+                body: { bookingId: data },
+            }).catch(err => console.error('send-booking-confirmation failed:', err));
 
             // Bill-at-booking → send them straight to Stripe to pre-pay. Stash the
             // booking so we can show a paid confirmation when they return. If checkout

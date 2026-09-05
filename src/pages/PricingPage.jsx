@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Helmet } from 'react-helmet';
 import { Check, Crown, Star, Zap, Loader2, BookOpen, Gift, CalendarRange } from 'lucide-react';
@@ -93,6 +94,20 @@ const PricingPage = () => {
   const { createCheckoutSession, checkoutLoading } = useSubscription();
   const { toast } = useToast();
   const [loadingKey, setLoadingKey] = useState(null);
+  const [searchParams] = useSearchParams();
+
+  // A "you've been added as a show manager" email links non-members here with
+  // ?invite_email=&show=&showName= instead of a dedicated signup page. Someone
+  // already signed in just needs the banner for context; a stranger gets the
+  // signup tab pre-opened with their email filled in.
+  const inviteEmail = searchParams.get('invite_email');
+  const inviteShowName = searchParams.get('showName');
+  useEffect(() => {
+    if (inviteEmail && !user) {
+      openAuthModal('signup', inviteEmail);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteEmail]);
 
   const handleSubscribe = async (tierKey) => {
     if (!user) {
@@ -165,6 +180,17 @@ const PricingPage = () => {
 
         <main className="py-16 sm:py-24 px-4 sm:px-6 lg:px-8">
           <div className="max-w-7xl mx-auto">
+
+            {inviteEmail && (
+              <div className="mb-10 mx-auto max-w-2xl rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-900 px-5 py-4 text-center">
+                <p className="text-sm text-blue-900 dark:text-blue-200">
+                  You've been invited to help manage{inviteShowName ? ` "${inviteShowName}"` : ' a show'} on EquiPatterns.
+                  {user
+                    ? ' You already have an account — head to Horse Show Manager to get started.'
+                    : ' Create a free account below to get access — no paid plan needed for show-manager access.'}
+                </p>
+              </div>
+            )}
 
             {/* Hero */}
             <motion.div

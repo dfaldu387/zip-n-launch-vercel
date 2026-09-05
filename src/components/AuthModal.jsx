@@ -76,7 +76,7 @@ const AGE_DIVISIONS = [
 ];
 
 const AuthModal = () => {
-    const { isAuthModalOpen, authModalInitialTab, closeAuthModal, signIn, signUp, sendPasswordResetEmail, setSkipAutoClose } = useAuth();
+    const { isAuthModalOpen, authModalInitialTab, authModalPrefillEmail, closeAuthModal, signIn, signUp, sendPasswordResetEmail, setSkipAutoClose } = useAuth();
     const { toast } = useToast();
     const navigate = useNavigate();
     const [isLoading, setIsLoading] = useState(false);
@@ -137,8 +137,12 @@ const AuthModal = () => {
             setView('tabs');
             setActiveTab(authModalInitialTab);
             setSignUpStep(1);
+            if (authModalPrefillEmail) {
+                setSignUpEmail(authModalPrefillEmail);
+                setSignInEmail(authModalPrefillEmail);
+            }
         }
-    }, [isAuthModalOpen, authModalInitialTab]);
+    }, [isAuthModalOpen, authModalInitialTab, authModalPrefillEmail]);
 
     const handleSignIn = async (e) => {
         e.preventDefault();

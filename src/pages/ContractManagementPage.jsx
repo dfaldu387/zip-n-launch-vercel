@@ -251,11 +251,13 @@ const ContractManagementPage = () => {
         } else if (showIdFromQuery && projectsRes.data) {
           // Navigated from ShowWorkspace with ?showId=xxx — find existing contract or auto-link
           // First, check if a contract already exists for this show
+          // No user_id filter — a Full/Section Admin scoped to Contracts should
+          // find (and reuse) the owner's existing contract for this show rather
+          // than silently creating a duplicate. RLS still applies.
           const { data: existingContract } = await supabase
             .from('projects')
             .select('id')
             .eq('project_type', 'contract')
-            .eq('user_id', user.id)
             .filter('project_data->>linkedProjectId', 'eq', showIdFromQuery)
             .limit(1)
             .maybeSingle();
