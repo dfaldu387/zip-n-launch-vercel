@@ -157,11 +157,14 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
         });
     };
 
-    const updateRvFields = (rvId, fields) => {
-        setSelection(prev => ({
-            ...prev,
-            rvOptions: { ...(prev.rvOptions || {}), [rvId]: { ...(prev.rvOptions?.[rvId] || {}), ...fields } },
-        }));
+    // rvOptions[rvId] is an array, one entry per RV spot booked in that area —
+    // Robert's RV video: multiple spots need multiple Length/Plate lines.
+    const updateRvUnitFields = (rvId, index, fields) => {
+        setSelection(prev => {
+            const units = [...(prev.rvOptions?.[rvId] || [])];
+            units[index] = { ...(units[index] || {}), ...fields };
+            return { ...prev, rvOptions: { ...(prev.rvOptions || {}), [rvId]: units } };
+        });
     };
 
     // Same night picker as barns, for an RV area priced Per Night — "the same
@@ -365,8 +368,10 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                             const nightlyRate = Number(rv.pricePerNight) || 0;
                             const hasNightly = nightlyRate > 0;
                             const hasFlat = flatRate > 0;
-                            const userLen = Number(selection.rvOptions?.[rv.id]?.length || 0);
-                            const lengthExceeded = rv.maxLength > 0 && userLen > 0 && userLen > rv.maxLength;
+                            // One Length/Plate line per RV spot booked — Robert: "if we're getting
+                            // multiple RV spots... this needs to multiply out" so staff know each
+                            // RV's length before assigning it to a spot.
+                            const rvUnits = selection.rvOptions?.[rv.id] || [];
                             const selectedRvNights = selection.rvNights?.[rv.id] || showNights;
                             // Only Per Night RV areas need "which nights" — Flat charges the
                             // same no matter how many nights are ticked.
@@ -496,34 +501,45 @@ const Step1_SelectItems = ({ inventory, selection, setSelection, bookWindow }) =
                                         )}
                                     </div>
                                     {qty > 0 && (
-                                        <div className="grid grid-cols-2 gap-2 pt-2 border-t">
-                                            <div>
-                                                <Label className="text-xs">
-                                                    RV Length (ft){rv.maxLength > 0 && ` · max ${rv.maxLength}`}
-                                                </Label>
-                                                <Input
-                                                    type="number"
-                                                    min={0}
-                                                    value={selection.rvOptions?.[rv.id]?.length || ''}
-                                                    onChange={(e) => updateRvFields(rv.id, { length: e.target.value })}
-                                                    className={`h-8 text-xs ${lengthExceeded ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
-                                                    placeholder="e.g., 32"
-                                                />
-                                                {lengthExceeded && (
-                                                    <p className="text-[10px] text-red-600 mt-1">
-                                                        Your RV is longer than this area allows.
-                                                    </p>
-                                                )}
-                                            </div>
-                                            <div>
-                                                <Label className="text-xs">License Plate</Label>
-                                                <Input
-                                                    value={selection.rvOptions?.[rv.id]?.plate || ''}
-                                                    onChange={(e) => updateRvFields(rv.id, { plate: e.target.value })}
-                                                    className="h-8 text-xs"
-                                                    placeholder="ABC-1234"
-                                                />
-                                            </div>
+                                        <div className="space-y-2 pt-2 border-t">
+                                            {Array.from({ length: qty }).map((_, i) => {
+                                                const unitLen = Number(rvUnits[i]?.length || 0);
+                                                const unitExceeded = rv.maxLength > 0 && unitLen > 0 && unitLen > rv.maxLength;
+                                                return (
+                                                    <div key={i} className="grid grid-cols-2 gap-2">
+                                                        {qty > 1 && (
+                                                            <p className="col-span-2 text-[10px] font-medium text-muted-foreground">RV #{i + 1}</p>
+                                                        )}
+                                                        <div>
+                                                            <Label className="text-xs">
+                                                                RV Length (ft){rv.maxLength > 0 && ` · max ${rv.maxLength}`}
+                                                            </Label>
+                                                            <Input
+                                                                type="number"
+                                                                min={0}
+                                                                value={rvUnits[i]?.length || ''}
+                                                                onChange={(e) => updateRvUnitFields(rv.id, i, { length: e.target.value })}
+                                                                className={`h-8 text-xs ${unitExceeded ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                                                                placeholder="e.g., 32"
+                                                            />
+                                                            {unitExceeded && (
+                                                                <p className="text-[10px] text-red-600 mt-1">
+                                                                    Your RV is longer than this area allows.
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                        <div>
+                                                            <Label className="text-xs">License Plate</Label>
+                                                            <Input
+                                                                value={rvUnits[i]?.plate || ''}
+                                                                onChange={(e) => updateRvUnitFields(rv.id, i, { plate: e.target.value })}
+                                                                className="h-8 text-xs"
+                                                                placeholder="ABC-1234"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     )}
                                 </div>
@@ -1146,7 +1162,7 @@ const PublicBookingPage = () => {
             nightsByArea,
         });
         for (const item of rvAreaItems.items) {
-            item.options = selection.rvOptions?.[item.refId] || {};
+            item.options = selection.rvOptions?.[item.refId] || [];
             // Display only: a member of the pooled "All RV Areas" group shows as
             // that, matching the Select Items row actually picked — `refId` is
             // left pointing at the REAL area for assignment/analytics.
@@ -1198,14 +1214,17 @@ const PublicBookingPage = () => {
 
     const hasSelection = orderSummary.lineItems.length > 0;
 
-    // Any selected RV area where the customer's length exceeds the maxLength?
+    // Any selected RV area where any booked RV's length exceeds the maxLength?
     const lengthViolation = useMemo(() => {
         const rvsByArea = rvsByAreaFromSelection(selection);
         for (const rv of inventory.rvAreas) {
             const qty = rvsByArea[rv.id] || 0;
-            const len = Number(selection.rvOptions?.[rv.id]?.length || 0);
-            if (qty > 0 && rv.maxLength > 0 && len > 0 && len > rv.maxLength) {
-                return { rvName: rv.name, len, max: rv.maxLength };
+            if (qty === 0 || !(rv.maxLength > 0)) continue;
+            for (const unit of selection.rvOptions?.[rv.id] || []) {
+                const len = Number(unit?.length || 0);
+                if (len > 0 && len > rv.maxLength) {
+                    return { rvName: rv.name, len, max: rv.maxLength };
+                }
             }
         }
         return null;
@@ -1308,6 +1327,11 @@ const PublicBookingPage = () => {
                 departureDate: details.departureDate,
                 nights: orderSummary.nights,
                 items: orderSummary.lineItems,
+                // Per-RV Length/Plate, keyed the same way the picker captured it
+                // (pooled "All RV Areas" id or a real area id) — kept at the
+                // booking level since a pooled selection can't be attributed to
+                // one real area's line item.
+                rvOptions: selection.rvOptions || {},
                 preferences: details.preferences || '',
                 amount: orderSummary.subtotal,
                 totalAmount: orderSummary.subtotal,

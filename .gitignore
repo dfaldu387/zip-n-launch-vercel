@@ -28,3 +28,4 @@ Thumbs.db
 *.md
 config/plan_overrides.json
 .vercel
+supabase/.temp

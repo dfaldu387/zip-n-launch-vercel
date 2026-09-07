@@ -72,6 +72,7 @@ const QuickSupplyOrderPage = () => {
     const [quantities, setQuantities] = useState({});
     const [details, setDetails] = useState({
         stableWith: '',
+        stallNumber: '',
         name: '',
         phone: '',
         email: '',
@@ -175,6 +176,7 @@ const QuickSupplyOrderPage = () => {
                 // admin booking rows still show who this belongs to.
                 stableWith: details.stableWith,
                 trainerName: details.stableWith,
+                stallNumber: details.stallNumber.trim(),
                 items: orderSummary.lineItems,
                 amount: orderSummary.subtotal,
                 totalAmount: orderSummary.subtotal,
@@ -204,6 +206,7 @@ const QuickSupplyOrderPage = () => {
                         items: bookingPayload.items.map(it => ({ name: it.name, amount: it.amount })),
                         total: bookingPayload.totalAmount,
                         stableWith: bookingPayload.stableWith,
+                        stallNumber: bookingPayload.stallNumber,
                     },
                 });
             } catch (mailErr) {
@@ -294,6 +297,12 @@ const QuickSupplyOrderPage = () => {
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Stable With / Under</p>
                                             <p>{confirmation.payload.stableWith}</p>
                                         </div>
+                                        {confirmation.payload.stallNumber && (
+                                            <div>
+                                                <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Stall Number</p>
+                                                <p>{confirmation.payload.stallNumber}</p>
+                                            </div>
+                                        )}
                                         <div>
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Phone</p>
                                             <p>{confirmation.payload.phone}</p>
@@ -443,6 +452,15 @@ const QuickSupplyOrderPage = () => {
                                         placeholder="Trainer or barn name"
                                     />
                                     <p className="text-xs text-muted-foreground mt-1">If not applicable, enter N/A.</p>
+                                </div>
+                                <div>
+                                    <Label>Stall Number</Label>
+                                    <Input
+                                        value={details.stallNumber}
+                                        onChange={(e) => setDetails(d => ({ ...d, stallNumber: e.target.value }))}
+                                        placeholder="e.g., B12 (optional)"
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">Optional — helps the facility team know where to deliver.</p>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>

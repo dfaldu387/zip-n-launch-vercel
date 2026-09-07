@@ -23,6 +23,7 @@ interface SupplyOrderEmailRequest {
   items: OrderItem[];
   total: number;
   stableWith?: string;
+  stallNumber?: string;
 }
 
 const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -66,13 +67,13 @@ const receiptBody = (r: SupplyOrderEmailRequest) => `
     <div style="font-size:22px;font-weight:bold;letter-spacing:2px;font-family:monospace;">${r.orderRef}</div>
   </div>
   ${orderTable(r)}
-  ${r.stableWith ? `<p style="color:#6b7280;font-size:13px;">Delivering to: <strong style="color:#333;">${r.stableWith}</strong></p>` : ""}
+  ${r.stableWith ? `<p style="color:#6b7280;font-size:13px;">Delivering to: <strong style="color:#333;">${r.stableWith}${r.stallNumber ? ` (Stall ${r.stallNumber})` : ""}</strong></p>` : ""}
   <p style="font-size:13px;color:#6b7280;">Payment is arranged on-site. Keep your order reference handy.</p>
 `;
 
 const deliveredBody = (r: SupplyOrderEmailRequest) => `
   <p>Hi <strong>${r.customerName}</strong>,</p>
-  <p style="font-size:16px;">Your order was <strong style="color:#059669;">delivered</strong>${r.stableWith ? ` to <strong>${r.stableWith}</strong>` : ""}.</p>
+  <p style="font-size:16px;">Your order was <strong style="color:#059669;">delivered</strong>${r.stableWith ? ` to <strong>${r.stableWith}${r.stallNumber ? ` (Stall ${r.stallNumber})` : ""}</strong>` : ""}.</p>
   <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:14px;margin:18px 0;">
     <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:bold;">Order Reference</div>
     <div style="font-size:22px;font-weight:bold;letter-spacing:2px;font-family:monospace;">${r.orderRef}</div>

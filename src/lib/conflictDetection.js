@@ -289,6 +289,9 @@ function checkDateWindow(bookings, showInfo) {
 }
 
 // 11. RV length exceeds area's max length
+// rvOptions holds one entry per RV spot booked in an area (array) since
+// Robert's "multiply this out for multiple RVs" request; older bookings may
+// still carry the single {length, plate} object, so both shapes are read.
 function checkRvLengthViolations(bookings, rvAreas) {
     const out = [];
     const byId = new Map((rvAreas || []).map(a => [a.id, a]));
@@ -299,18 +302,22 @@ function checkRvLengthViolations(bookings, rvAreas) {
             if (it.type !== 'rv') continue;
             const area = byId.get(it.refId);
             if (!area || !area.maxLength) continue;
-            const len = Number((rvOpts[it.refId]?.length) ?? it.options?.length ?? 0);
-            if (len > 0 && len > area.maxLength) {
-                out.push({
-                    id: `rvlen-${b.id}-${it.refId}`,
-                    severity: 'warning',
-                    type: 'rv_length_violation',
-                    title: 'RV exceeds area length limit',
-                    description: `${labelOf(b)}'s ${len}ft RV is parked in "${area.name}" (limit ${area.maxLength}ft).`,
-                    relatedIds: { bookingId: b.id, rvAreaId: area.id },
-                    fix: 'Move the booking to a larger RV area, or note the exception manually.',
-                });
-            }
+            const raw = rvOpts[it.refId] ?? it.options;
+            const units = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+            units.forEach((unit, i) => {
+                const len = Number(unit?.length || 0);
+                if (len > 0 && len > area.maxLength) {
+                    out.push({
+                        id: `rvlen-${b.id}-${it.refId}-${i}`,
+                        severity: 'warning',
+                        type: 'rv_length_violation',
+                        title: 'RV exceeds area length limit',
+                        description: `${labelOf(b)}'s ${len}ft RV is parked in "${area.name}" (limit ${area.maxLength}ft).`,
+                        relatedIds: { bookingId: b.id, rvAreaId: area.id },
+                        fix: 'Move the booking to a larger RV area, or note the exception manually.',
+                    });
+                }
+            });
         }
     }
     return out;

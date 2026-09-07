@@ -2297,6 +2297,7 @@ const SupplyOrderCard = ({ order, onFulfill, showName }) => {
                     items: (order.items || []).map(it => ({ name: it.name, amount: it.amount })),
                     total,
                     stableWith: order.stableWith || order.trainerName || '',
+                    stallNumber: order.stallNumber || '',
                 },
             });
             if (error) throw error;
@@ -2327,6 +2328,11 @@ const SupplyOrderCard = ({ order, onFulfill, showName }) => {
                         <p className="text-sm text-muted-foreground">
                             Stable with/under: <span className="text-foreground">{order.stableWith || order.trainerName || '—'}</span>
                         </p>
+                        {order.stallNumber && (
+                            <p className="text-sm text-muted-foreground">
+                                Stall #: <span className="text-foreground font-medium">{order.stallNumber}</span>
+                            </p>
+                        )}
                         {order.phone && (
                             <p className="text-sm text-muted-foreground flex items-center gap-1">
                                 <Phone className="h-3.5 w-3.5" /> {order.phone}
