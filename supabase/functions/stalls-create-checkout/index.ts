@@ -37,10 +37,46 @@ function assignedStallsForBooking(projectData: any, bookingId: string) {
   return result;
 }
 
-// Live total = assigned stalls × nights × current price/night, plus non-stall items.
+// Does `barnId` carry a fee scoped specifically to it (as opposed to "All
+// Barns")? A barn with its own fee is priced from that fee alone — mirrors
+// barnHasOwnFee() in src/lib/extraStallFees.js and the fixed barn_flat_rate()
+// Postgres function (see 20260907120000_fix_barn_flat_rate_exclusivity.sql).
+function feeAppliesTo(fee: any, barnId: string): { scoped: boolean; facilityWide: boolean } {
+  const applies = fee?.appliesTo;
+  if (Array.isArray(applies)) {
+    if (applies.length === 0 || applies.includes("all")) return { scoped: false, facilityWide: true };
+    return { scoped: applies.includes(barnId), facilityWide: false };
+  }
+  if (!applies || applies === "all") return { scoped: false, facilityWide: true };
+  return { scoped: applies === barnId, facilityWide: false };
+}
+
+function barnHasOwnFee(barnId: string, extraStallFees: any[]): boolean {
+  return (extraStallFees || []).some((fee) => feeAppliesTo(fee, barnId).scoped);
+}
+
+// A barn's flat-rate total, live from today's fees — same exclusivity rule as
+// flatRateForBarn() in src/lib/extraStallFees.js: "All Barns" only counts when
+// the barn has no fee of its own.
+function barnFlatRate(barnId: string, extraStallFees: any[]): number {
+  const exclusive = barnHasOwnFee(barnId, extraStallFees);
+  return (extraStallFees || []).reduce((sum, fee) => {
+    if ((fee.unitType || "per_stall") !== "flat") return sum;
+    const amount = Number(fee.amount) || 0;
+    if (amount <= 0) return sum;
+    const { scoped, facilityWide } = feeAppliesTo(fee, barnId);
+    if (scoped) return sum + amount;
+    if (facilityWide && !exclusive) return sum + amount;
+    return sum;
+  }, 0);
+}
+
+// Live total = assigned stalls priced at whichever option was bought (Flat Fee
+// charges once per stall, Nightly Fee × nights), plus non-stall items.
 function computeBookingTotal(projectData: any, booking: any): number {
   const nights = Number(booking?.nights) || 1;
   const assigned = assignedStallsForBooking(projectData, booking?.id);
+  const extraStallFees = projectData?.stallingService?.extraStallFees || [];
   const items = Array.isArray(booking?.items) ? booking.items : [];
   let total = 0;
 
@@ -49,8 +85,21 @@ function computeBookingTotal(projectData: any, booking: any): number {
       if (it.type === "stall") {
         const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
         const count = stallsInThisBarn.length || Number(it.qty) || 0;
-        const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
-        total += count * nights * price;
+        const flatRate = barnFlatRate(it.refId, extraStallFees);
+        const feeType = it.feeType;
+
+        if (feeType === "flat") {
+          total += count * flatRate;
+        } else if (feeType === "per_night") {
+          const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
+          total += count * nights * price;
+        } else if (flatRate > 0) {
+          // Legacy item with no recorded feeType — same fallback as get_public_booking().
+          total += count * flatRate;
+        } else {
+          const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
+          total += count * nights * price;
+        }
       } else {
         total += Number(it.amount) || 0;
       }
@@ -170,8 +219,12 @@ serve(async (req: Request): Promise<Response> => {
       throw new Error("Nothing is due on this booking");
     }
 
+    // "Stalls for X" reads oddly on a hay & shavings order that has no stall
+    // or RV items — use a neutral "Order for X" label for those instead.
+    const items = Array.isArray(booking.items) ? booking.items : [];
+    const isStalling = items.some((it: any) => it.type === "stall" || it.type === "rv");
     const label =
-      `${project.project_name || "Show"} — Stalls for ` +
+      `${project.project_name || "Show"} — ${isStalling ? "Stalls" : "Order"} for ` +
       `${booking.exhibitorName || "exhibitor"}`;
 
     const params: Record<string, string> = {

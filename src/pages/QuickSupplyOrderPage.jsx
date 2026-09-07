@@ -4,7 +4,7 @@ import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import {
     Loader2, ShoppingCart, User, Phone, Mail, Plus, Minus, Info,
-    ArrowLeft, PartyPopper, Hash, Copy, Lock, CalendarClock, Clock,
+    ArrowLeft, PartyPopper, Hash, Copy, Lock, CalendarClock, Clock, CheckCircle2,
 } from 'lucide-react';
 
 import Navigation from '@/components/Navigation';
@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { startStallCheckout } from '@/lib/housingCheckout';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -101,6 +102,30 @@ const QuickSupplyOrderPage = () => {
         };
         if (showId) loadShow();
     }, [showId, toast]);
+
+    // How this show sells online: 'at_booking' (pre-pay now) or 'invoice_after' —
+    // same setting the stall/RV booking page reads, so a supply order lines up
+    // with whichever way the show already collects money.
+    const billingMode = show?.billingMode || 'invoice_after';
+
+    // Returning from Stripe (success_url carries ?session_id=…) → show the paid
+    // confirmation. The webhook has already marked the order paid server-side;
+    // here we just restore the order we stashed before redirecting.
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get('session_id')) return;
+        try {
+            const stashed = sessionStorage.getItem('pendingSupplyOrder');
+            if (stashed) {
+                const b = JSON.parse(stashed);
+                setConfirmation({ ...b, paid: true });
+                sessionStorage.removeItem('pendingSupplyOrder');
+            } else {
+                setConfirmation({ paid: true, bookingShortId: '', payload: {} });
+            }
+        } catch { /* ignore */ }
+        window.history.replaceState({}, '', window.location.pathname);
+    }, []);
 
     // A supply flagged Pre-Show Delivery only (not also Delivered at Show) is a
     // pre-order item — it stays off the walk-up list until move-in has started,
@@ -213,11 +238,34 @@ const QuickSupplyOrderPage = () => {
                 console.error('Receipt email failed:', mailErr);
             }
 
-            setConfirmation({
-                bookingId: data,
-                bookingShortId,
-                payload: bookingPayload,
-            });
+            const conf = { bookingId: data, bookingShortId, payload: bookingPayload };
+
+            // Bill-at-booking → send them straight to Stripe to pre-pay, same as
+            // stall/RV bookings. Stash the order so the paid confirmation can be
+            // rebuilt when Stripe redirects back. If checkout can't start, fall
+            // back to the normal (unpaid) confirmation below.
+            if (billingMode === 'at_booking' && orderSummary.subtotal > 0) {
+                try {
+                    sessionStorage.setItem('pendingSupplyOrder', JSON.stringify(conf));
+                    await startStallCheckout({
+                        showId,
+                        bookingId: data,
+                        customerEmail: bookingPayload.email,
+                    });
+                    return; // browser is redirecting to Stripe
+                } catch (payErr) {
+                    sessionStorage.removeItem('pendingSupplyOrder');
+                    toast({
+                        title: 'Could not open payment',
+                        description: `${payErr.message}. Your order is saved — you can pay from the confirmation.`,
+                        variant: 'destructive',
+                    });
+                    setConfirmation({ ...conf, payFailed: true });
+                    return;
+                }
+            }
+
+            setConfirmation(conf);
         } catch (err) {
             toast({ title: 'Could not place order', description: err.message || 'Please try again.', variant: 'destructive' });
         } finally {
@@ -256,14 +304,47 @@ const QuickSupplyOrderPage = () => {
                             <Card className="border-2 border-amber-500">
                                 <CardHeader className="text-center pb-4">
                                     <div className="mx-auto h-16 w-16 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center mb-3">
-                                        <PartyPopper className="h-8 w-8 text-amber-600" />
+                                        {confirmation.paid
+                                            ? <CheckCircle2 className="h-8 w-8 text-amber-600" />
+                                            : <PartyPopper className="h-8 w-8 text-amber-600" />}
                                     </div>
-                                    <CardTitle className="text-2xl">Order Received!</CardTitle>
+                                    <CardTitle className="text-2xl">{confirmation.paid ? 'Payment Received!' : 'Order Received!'}</CardTitle>
                                     <CardDescription>
-                                        Thanks, {confirmation.payload.exhibitorName}. Your hay &amp; shavings order for <strong>{show?.name}</strong> is in.
+                                        {confirmation.paid ? (
+                                            <>Thank you{confirmation.payload?.exhibitorName ? `, ${confirmation.payload.exhibitorName}` : ''}. Your hay &amp; shavings order for <strong>{show?.name}</strong> is confirmed and <strong>paid</strong>.</>
+                                        ) : (
+                                            <>Thanks, {confirmation.payload.exhibitorName}. Your hay &amp; shavings order for <strong>{show?.name}</strong> is in.</>
+                                        )}
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-5">
+                                    {/* Payment status / pay-now */}
+                                    {confirmation.paid ? (
+                                        <div className="rounded-lg border border-emerald-500 bg-emerald-500/10 p-3 text-sm font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                                            <CheckCircle2 className="h-4 w-4" /> Paid in full — {money(confirmation.payload?.totalAmount)}
+                                        </div>
+                                    ) : billingMode === 'at_booking' ? (
+                                        <div className="rounded-lg border border-amber-400 bg-amber-500/10 p-3 space-y-2">
+                                            <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                                                {confirmation.payFailed ? 'Payment didn’t start — your order is saved. Pay now to confirm it.' : 'Payment required to confirm your order.'}
+                                            </p>
+                                            <Button
+                                                className="w-full bg-amber-600 hover:bg-amber-700"
+                                                onClick={async () => {
+                                                    try {
+                                                        sessionStorage.setItem('pendingSupplyOrder', JSON.stringify(confirmation));
+                                                        await startStallCheckout({ showId, bookingId: confirmation.bookingId, customerEmail: confirmation.payload?.email });
+                                                    } catch (e) {
+                                                        sessionStorage.removeItem('pendingSupplyOrder');
+                                                        toast({ title: 'Could not open payment', description: e.message, variant: 'destructive' });
+                                                    }
+                                                }}
+                                            >
+                                                Pay {money(confirmation.payload?.totalAmount)} now
+                                            </Button>
+                                        </div>
+                                    ) : null}
+
                                     <div className="bg-muted/50 rounded-lg p-4 flex items-center justify-between">
                                         <div>
                                             <p className="text-xs text-muted-foreground uppercase font-semibold mb-1 flex items-center gap-1">
@@ -279,7 +360,7 @@ const QuickSupplyOrderPage = () => {
                                     <div>
                                         <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Items Ordered</p>
                                         <div className="space-y-1 text-sm border rounded-md divide-y">
-                                            {confirmation.payload.items.map((it, i) => (
+                                            {(confirmation.payload.items || []).map((it, i) => (
                                                 <div key={i} className="flex justify-between p-2">
                                                     <span>{it.name}</span>
                                                     <span className="font-semibold tabular-nums">{money(it.amount)}</span>
@@ -315,7 +396,10 @@ const QuickSupplyOrderPage = () => {
 
                                     <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md p-3 text-sm">
                                         <p className="text-amber-800 dark:text-amber-400 text-xs">
-                                            The facility team has been sent your order and will deliver to your stalls. A receipt is on its way to <strong>{confirmation.payload.email}</strong>, and we'll email you again the moment it's delivered. Payment is arranged on-site — keep your order reference handy.
+                                            The facility team has been sent your order and will deliver to your stalls. A receipt is on its way to <strong>{confirmation.payload.email}</strong>, and we'll email you again the moment it's delivered.{' '}
+                                            {confirmation.paid || billingMode === 'at_booking'
+                                                ? 'Keep your order reference handy.'
+                                                : 'Payment is arranged on-site — keep your order reference handy.'}
                                         </p>
                                     </div>
                                 </CardContent>
