@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2 } from 'lucide-react';
+import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
     assignStallToBooking, unassignStall, applyPlanToBarns,
@@ -48,12 +48,16 @@ const NO_GROUP = '__none__';
 const rvCols = (area) => Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
 
 // Which group a booking belongs to: an explicit manual group wins, otherwise the
-// trainer / ranch name it booked under.
+// trainer / ranch name it booked under, otherwise the exhibitor's own name — so a
+// solo booking still reads as a (one-person) group instead of showing nothing.
+// NO_GROUP is the explicit "keep this one on its own" override and stays blank.
 const groupNameOf = (b) => {
     const manual = (b.stallGroup || '').trim();
     if (manual === NO_GROUP) return '';
     if (manual) return manual;
-    return (b.trainerName || '').trim();
+    const trainer = (b.trainerName || '').trim();
+    if (trainer) return trainer;
+    return (b.exhibitorName || '').trim();
 };
 
 // Hex + alpha, so a stall with nothing to show under the current layer still hints
@@ -87,11 +91,12 @@ const LabelInput = ({ value, onCommit, className, title }) => {
 };
 
 // A draggable / clickable booking chip in the left rail.
-const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, groupOptions, onSetGroup }) => {
+const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, groupOptions, onSetGroup, onMove, onRemove, moving }) => {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
         id: `bk-${booking.id}`,
         data: { bookingId: booking.id },
     });
+    const [groupPickerOpen, setGroupPickerOpen] = useState(false);
     const done = assigned >= requested;
     const current = (booking.stallGroup || '').trim();
     const value = current === NO_GROUP ? NO_GROUP : (current || '__auto__');
@@ -113,6 +118,31 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
                     <p className="text-sm font-medium truncate">{booking.exhibitorName || '—'}</p>
                     {booking.trainerName && <p className="text-[11px] text-muted-foreground truncate">{booking.trainerName}</p>}
                 </div>
+                {/* Move / remove just THIS exhibitor's own stalls (not the whole group) —
+                    only shown once they hold at least one, same rule as the group card. */}
+                {assigned > 0 && onMove && (
+                    <button type="button" title="Move this exhibitor's stalls" aria-label="Move this exhibitor's stalls"
+                        className={cn('shrink-0 p-0.5', moving ? 'text-primary' : 'text-muted-foreground hover:text-primary')}
+                        onClick={(e) => { e.stopPropagation(); onMove(); }}>
+                        <Move className="h-3.5 w-3.5" />
+                    </button>
+                )}
+                {assigned > 0 && onRemove && (
+                    <button type="button" title="Remove this exhibitor's stalls" aria-label="Remove this exhibitor's stalls"
+                        className="shrink-0 p-0.5 text-muted-foreground hover:text-red-600"
+                        onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                )}
+                {/* Small inline toggle for the group picker below, instead of always showing
+                    a full-width dropdown — keeps this row compact when you're not re-grouping. */}
+                {onSetGroup && (
+                    <button type="button" title="Change group" aria-label="Change group"
+                        className="shrink-0 p-0.5 text-muted-foreground hover:text-primary"
+                        onClick={(e) => { e.stopPropagation(); setGroupPickerOpen(o => !o); }}>
+                        {groupPickerOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    </button>
+                )}
                 <Badge variant="outline" className={cn('text-[10px] tabular-nums shrink-0',
                     done ? 'border-emerald-500 text-emerald-600' : 'border-amber-500 text-amber-600')}>
                     {done ? <Check className="h-3 w-3" /> : `${assigned}/${requested}`}
@@ -120,8 +150,8 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
             </div>
             {/* Move this exhibitor into any group by hand — Robert's "take individuals
                 and put them in the group". Auto = follow the trainer name they booked with. */}
-            {onSetGroup && (
-                <Select value={value} onValueChange={(v) => onSetGroup(booking.id, v)}>
+            {onSetGroup && groupPickerOpen && (
+                <Select value={value} onValueChange={(v) => { onSetGroup(booking.id, v); setGroupPickerOpen(false); }}>
                     <SelectTrigger className="h-6 text-[10px] mt-1.5 px-2" onClick={(e) => e.stopPropagation()}>
                         <SelectValue placeholder="Group" />
                     </SelectTrigger>
@@ -241,6 +271,11 @@ const UnitCell = ({
             <span className={cn('px-0.5 text-center leading-tight truncate max-w-full', showGroupTag && 'mt-1.5')}>
                 {cellText ? cellText.text : unit.number}
             </span>
+            {/* Hierarchy for the Trainer/Group layer: group name above (the main line),
+                exhibitor here, stall number last — skipped in the smallest box size. */}
+            {cellText?.subExhibitor && size !== 'sm' && (
+                <span className={cn(S.sub, 'opacity-90 leading-none truncate max-w-full')}>{cellText.subExhibitor}</span>
+            )}
             {cellText?.sub && (
                 <span className={cn(S.sub, 'opacity-70 leading-none')}>{cellText.sub}</span>
             )}
@@ -253,6 +288,10 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     const [mode, setMode] = useState('stalls'); // 'stalls' | 'rv'
     const [selectedBookingId, setSelectedBookingId] = useState(null);
     const [selectedGroupId, setSelectedGroupId] = useState(null); // a whole group picked for autofill
+    const [moveGroupId, setMoveGroupId] = useState(null); // a whole (already-assigned) group picked to relocate
+    const [groupRemoval, setGroupRemoval] = useState(null); // pending whole-group removal awaiting confirmation
+    const [moveBookingId, setMoveBookingId] = useState(null); // a single exhibitor's own stalls picked to relocate
+    const [bookingRemoval, setBookingRemoval] = useState(null); // pending single-exhibitor removal awaiting confirmation
     const [activeBookingId, setActiveBookingId] = useState(null);
     const [size, setSize] = useState('md');
     const [fit, setFit] = useState(false);
@@ -262,10 +301,19 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     const [isPrintingChart, setIsPrintingChart] = useState(false);
     const [perBarnPages, setPerBarnPages] = useState(true); // print/download each barn on its own page
     const [removal, setRemoval] = useState(null); // pending stall/spot removal awaiting confirmation
+    const [collapsedBarns, setCollapsedBarns] = useState(() => new Set()); // barn/RV-area ids hidden, so a show with many barns doesn't force scrolling past ones you're not touching
+    const toggleBarnCollapsed = (id) => setCollapsedBarns(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+    });
 
-    // Selecting a booking and selecting a group are mutually exclusive.
-    const pickBooking = (id) => { setSelectedGroupId(null); setSelectedBookingId(id); };
-    const pickGroup = (id) => { setSelectedBookingId(null); setSelectedGroupId(prev => prev === id ? null : id); };
+    // Selecting a booking, selecting a group (to place), moving a whole group and moving
+    // one exhibitor's own stalls are all mutually exclusive.
+    const pickBooking = (id) => { setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(null); setSelectedBookingId(id); };
+    const pickGroup = (id) => { setSelectedBookingId(null); setMoveGroupId(null); setMoveBookingId(null); setSelectedGroupId(prev => prev === id ? null : id); };
+    const pickMoveGroup = (id) => { setSelectedBookingId(null); setSelectedGroupId(null); setMoveBookingId(null); setMoveGroupId(prev => prev === id ? null : id); };
+    const pickMoveBooking = (id) => { setSelectedBookingId(null); setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(prev => prev === id ? null : id); };
 
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -357,13 +405,20 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
         return { groups, individuals: solo };
     }, [needRows, mode]);
 
-    // Every group name an exhibitor can be moved into (existing groups + every trainer
-    // name on the books, so a solo exhibitor can join a trainer who has no block yet).
+    // Every REAL group name an exhibitor can be moved into — manual groups already in
+    // use, plus every trainer name on the books (even one with no block yet). Deliberately
+    // excludes the exhibitor-name fallback `groups` picks up for solo bookings, or every
+    // solo exhibitor's own name would clutter this list as a fake "group".
     const groupOptions = useMemo(() => {
-        const names = new Set(groups.map(g => g.name));
-        needRows.forEach(r => { const t = (r.booking.trainerName || '').trim(); if (t) names.add(t); });
+        const names = new Set();
+        needRows.forEach(r => {
+            const manual = (r.booking.stallGroup || '').trim();
+            if (manual && manual !== NO_GROUP) names.add(manual);
+            const t = (r.booking.trainerName || '').trim();
+            if (t) names.add(t);
+        });
         return [...names].sort((a, b) => a.localeCompare(b));
-    }, [groups, needRows]);
+    }, [needRows]);
 
     // One stable colour per group, used for the left-rail dot, the chart outline and
     // the group name tag.
@@ -434,6 +489,81 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
         fillGroupFrom(group, barn, startIdx);
     };
 
+    // Clear every stall a set of bookings currently holds. Shared by whole-group removal
+    // and single-exhibitor removal.
+    const clearBookingIds = (bookingIds) => (barns || []).map(b => ({
+        ...b,
+        stalls: (b.stalls || []).map(s => bookingIds.has(s.bookingId) ? { ...s, bookingId: null } : s),
+    }));
+
+    // Relocate one or more bookings that are already (partly or fully) on the chart:
+    // free every stall they currently hold, then re-place their FULL requested counts
+    // starting at the clicked stall. All-or-nothing — a move only searches FORWARD from
+    // the clicked stall (same rule as placing a new group), so it never sees the room it
+    // just freed up behind that point. If forward space runs short, committing anyway
+    // would silently strand exhibitors with no stall at all, so nothing is changed and
+    // everyone stays exactly where they were. Shared by "move a whole group" (rows =
+    // every exhibitor in it) and "move one exhibitor's own stalls" (rows = just them).
+    const moveRowsTo = (rows, label, barn, startIdx) => {
+        const bookingIds = new Set(rows.map(r => r.booking.id));
+        const clearedBarns = clearBookingIds(bookingIds);
+        const queue = [];
+        [...rows].sort((a, b) => b.requested - a.requested).forEach(r => {
+            for (let i = 0; i < r.requested; i++) queue.push(r.booking.id);
+        });
+        const total = queue.length;
+        const targetBarn = clearedBarns.find(b => b.id === barn.id);
+        const units = targetBarn?.stalls || [];
+        const plan = [];
+        for (let i = startIdx; i < units.length && queue.length; i++) {
+            const s = units[i];
+            if ((s.type || 'stall') === 'stall' && !s.bookingId) plan.push({ stallId: s.id, bookingId: queue.shift() });
+        }
+        if (queue.length > 0) {
+            toast({
+                title: 'Not enough room from there',
+                description: `"${label}" needs ${total} stalls; only ${plan.length} are free forward from that spot. Nothing was moved — pick a stall further from the end of the row, or with more empty boxes ahead of it.`,
+                variant: 'destructive',
+            });
+            return false;
+        }
+        onApplyBarns?.(applyPlanToBarns(clearedBarns, plan));
+        toast({ title: `"${label}" moved`, description: `${plan.length} stall${plan.length === 1 ? '' : 's'} relocated.` });
+        return true;
+    };
+
+    const moveGroupTo = (group, barn, startIdx) => {
+        if (moveRowsTo(group.rows, group.name, barn, startIdx)) setMoveGroupId(null);
+    };
+
+    const moveBookingTo = (row, barn, startIdx) => {
+        if (moveRowsTo([row], row.booking.exhibitorName || 'This exhibitor', barn, startIdx)) setMoveBookingId(null);
+    };
+
+    const requestRemoveGroup = (group) => {
+        setGroupRemoval({ groupId: group.id, name: group.name, count: group.totalAssigned, exhibitorCount: group.rows.length });
+    };
+
+    const confirmRemoveGroup = () => {
+        if (!groupRemoval) return;
+        const group = groupById[groupRemoval.groupId];
+        if (group) {
+            const bookingIds = new Set(group.rows.map(r => r.booking.id));
+            onApplyBarns?.(clearBookingIds(bookingIds));
+        }
+        setGroupRemoval(null);
+    };
+
+    const requestRemoveBooking = (row) => {
+        setBookingRemoval({ bookingId: row.booking.id, name: row.booking.exhibitorName || 'This exhibitor', count: row.assigned });
+    };
+
+    const confirmRemoveBooking = () => {
+        if (!bookingRemoval) return;
+        onApplyBarns?.(clearBookingIds(new Set([bookingRemoval.bookingId])));
+        setBookingRemoval(null);
+    };
+
     // Which booking currently owns a unit (null if free).
     const unitOwner = (unitId) => {
         for (const c of cfg.containers) {
@@ -489,6 +619,36 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     };
 
     const handleUnitClick = (unit) => {
+        // One exhibitor's own stalls are picked to be relocated → same rule as a group
+        // move, just scoped to their single row.
+        if (mode === 'stalls' && moveBookingId) {
+            const row = needRows.find(r => r.booking.id === moveBookingId);
+            if (!row) { setMoveBookingId(null); return; }
+            if ((unit.type || 'stall') !== 'stall') return;
+            if (unit.bookingId && unit.bookingId !== moveBookingId) {
+                toast({ title: 'Start on an empty stall', description: 'Click a free stall (or one already theirs) for the new spot.' });
+                return;
+            }
+            const barn = (barns || []).find(b => (b.stalls || []).some(s => s.id === unit.id));
+            if (!barn) return;
+            moveBookingTo(row, barn, (barn.stalls || []).findIndex(s => s.id === unit.id));
+            return;
+        }
+        // A whole group is picked to be relocated → clear its old stalls and refill from here.
+        if (mode === 'stalls' && moveGroupId) {
+            const group = groupById[moveGroupId];
+            if (!group) { setMoveGroupId(null); return; }
+            if ((unit.type || 'stall') !== 'stall') return;
+            const groupBookingIds = new Set(group.rows.map(r => r.booking.id));
+            if (unit.bookingId && !groupBookingIds.has(unit.bookingId)) {
+                toast({ title: 'Start on an empty stall', description: 'Click a free stall (or one already in this group) for the new spot.' });
+                return;
+            }
+            const barn = (barns || []).find(b => (b.stalls || []).some(s => s.id === unit.id));
+            if (!barn) return;
+            moveGroupTo(group, barn, (barn.stalls || []).findIndex(s => s.id === unit.id));
+            return;
+        }
         // A whole group is selected → autofill it from this stall.
         if (mode === 'stalls' && selectedGroup) {
             if ((unit.type || 'stall') !== 'stall') return;
@@ -553,7 +713,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     const ModeToggle = () => (
         <div className="inline-flex rounded-full border bg-muted p-0.5">
             {[{ id: 'stalls', label: 'Stalls', Icon: Home }, { id: 'rv', label: 'RV / Camping', Icon: Car }].map(m => (
-                <button key={m.id} type="button" onClick={() => { setMode(m.id); setSelectedBookingId(null); setSelectedGroupId(null); }}
+                <button key={m.id} type="button" onClick={() => { setMode(m.id); setSelectedBookingId(null); setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(null); }}
                     className={cn('flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
                         mode === m.id ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground')}>
                     <m.Icon className="h-3.5 w-3.5" /> {m.label}
@@ -682,13 +842,24 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                             or pick a row from the <span className="font-semibold">Place in row</span> box above a barn.
                                         </div>
                                     )}
+                                    {moveGroupId && groupById[moveGroupId] && (
+                                        <div className="rounded-md border border-primary bg-primary/5 p-2 text-xs">
+                                            Moving <span className="font-semibold">{groupById[moveGroupId].name}</span> — click an empty stall (or one already in this group) for its new spot. The old stalls free automatically.
+                                        </div>
+                                    )}
+                                    {moveBookingId && bookingById[moveBookingId] && (
+                                        <div className="rounded-md border border-primary bg-primary/5 p-2 text-xs">
+                                            Moving <span className="font-semibold">{bookingById[moveBookingId].exhibitorName}</span>'s stalls — click an empty stall (or one already theirs) for the new spot.
+                                        </div>
+                                    )}
                                     {groups.map(g => {
                                         const remaining = g.totalRequested - g.totalAssigned;
                                         const done = remaining <= 0;
                                         const sel = selectedGroupId === g.id;
+                                        const moving = moveGroupId === g.id;
                                         return (
-                                            <div key={g.id} className={cn('rounded-lg border p-2 space-y-1.5', sel && 'ring-2 ring-primary')} style={{ borderLeft: `4px solid ${colorByGroup[g.id]}` }}>
-                                                <div className="flex items-center justify-between gap-2">
+                                            <div key={g.id} className={cn('rounded-lg border p-2 space-y-1.5', (sel || moving) && 'ring-2 ring-primary')} style={{ borderLeft: `4px solid ${colorByGroup[g.id]}` }}>
+                                                <div className="flex items-center justify-between gap-2 flex-wrap">
                                                     <div className="min-w-0">
                                                         <p className="text-sm font-semibold truncate flex items-center gap-1.5">
                                                             <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0" style={{ background: colorByGroup[g.id] }} />
@@ -699,17 +870,38 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                                             <span className={cn(done ? 'text-emerald-600' : 'text-amber-600', 'font-medium tabular-nums')}>{g.totalAssigned}/{g.totalRequested}</span> stalls
                                                         </p>
                                                     </div>
-                                                    <Button variant={sel ? 'default' : 'outline'} size="sm" className="h-7 text-xs shrink-0" disabled={done}
-                                                        onClick={() => pickGroup(g.id)}>
-                                                        {done ? <Check className="h-3.5 w-3.5" /> : (sel ? 'Selected' : 'Assign group')}
-                                                    </Button>
+                                                    <div className="flex items-center gap-1 shrink-0">
+                                                        {!done && (
+                                                            <Button variant={sel ? 'default' : 'outline'} size="sm" className="h-7 text-xs"
+                                                                onClick={() => pickGroup(g.id)}>
+                                                                {sel ? 'Selected' : (g.totalAssigned > 0 ? 'Assign rest' : 'Assign group')}
+                                                            </Button>
+                                                        )}
+                                                        {g.totalAssigned > 0 && (
+                                                            <>
+                                                                <Button variant={moving ? 'default' : 'outline'} size="sm" className="h-7 text-xs gap-1"
+                                                                    title="Relocate this whole group to a new spot"
+                                                                    onClick={() => pickMoveGroup(g.id)}>
+                                                                    <Move className="h-3.5 w-3.5" /> {moving ? 'Click new spot' : 'Move'}
+                                                                </Button>
+                                                                <Button variant="outline" size="sm" className="h-7 w-7 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                                    title="Remove this whole group from the chart"
+                                                                    onClick={() => requestRemoveGroup(g)}>
+                                                                    <Trash2 className="h-3.5 w-3.5" />
+                                                                </Button>
+                                                            </>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <div className="space-y-1 pl-1">
                                                     {g.rows.map(r => (
                                                         <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                             assigned={r.assigned} requested={r.requested}
                                                             selected={selectedBookingId === r.booking.id} onSelect={pickBooking}
-                                                            groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null} />
+                                                            groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null}
+                                                            onMove={() => pickMoveBooking(r.booking.id)}
+                                                            onRemove={() => requestRemoveBooking(r)}
+                                                            moving={moveBookingId === r.booking.id} />
                                                     ))}
                                                 </div>
                                             </div>
@@ -724,7 +916,10 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                                 <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                     assigned={r.assigned} requested={r.requested}
                                                     selected={selectedBookingId === r.booking.id} onSelect={pickBooking}
-                                                    groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null} />
+                                                    groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null}
+                                                    onMove={() => pickMoveBooking(r.booking.id)}
+                                                    onRemove={() => requestRemoveBooking(r)}
+                                                    moving={moveBookingId === r.booking.id} />
                                             ))}
                                         </div>
                                     )}
@@ -753,9 +948,9 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                     )}
                                 </>
                             )}
-                            {(selectedBookingId || selectedGroupId) && (
+                            {(selectedBookingId || selectedGroupId || moveGroupId || moveBookingId) && (
                                 <Button variant="outline" size="sm" className="h-7 text-xs w-full"
-                                    onClick={() => { setSelectedBookingId(null); setSelectedGroupId(null); }}>
+                                    onClick={() => { setSelectedBookingId(null); setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(null); }}>
                                     <X className="h-3 w-3 mr-1" /> Clear selection
                                 </Button>
                             )}
@@ -788,6 +983,8 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                 onSetLabel={setBarnLabel}
                                 onResetLabels={resetBarnLabels}
                                 onFillRow={fillGroupIntoRow}
+                                collapsed={collapsedBarns.has(container.id)}
+                                onToggleCollapsed={() => toggleBarnCollapsed(container.id)}
                             />
                         ))}
                     </div>
@@ -814,6 +1011,28 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                 confirmText={`Remove ${cfg.unitWord}`}
                 cancelText="Keep it"
             />
+
+            {/* Whole-group removal — same two-step confirm, scaled up to every stall in the group. */}
+            <ConfirmationDialog
+                isOpen={!!groupRemoval}
+                onClose={() => setGroupRemoval(null)}
+                onConfirm={confirmRemoveGroup}
+                title={`Remove group "${groupRemoval?.name || ''}" from the chart?`}
+                description={`This frees ${groupRemoval?.count || 0} stall${groupRemoval?.count === 1 ? '' : 's'} across ${groupRemoval?.exhibitorCount || 0} exhibitor${groupRemoval?.exhibitorCount === 1 ? '' : 's'}. Their bookings stay — only the stall assignment is cleared.`}
+                confirmText="Remove group"
+                cancelText="Keep it"
+            />
+
+            {/* One exhibitor's own stalls, removed all at once instead of one at a time. */}
+            <ConfirmationDialog
+                isOpen={!!bookingRemoval}
+                onClose={() => setBookingRemoval(null)}
+                onConfirm={confirmRemoveBooking}
+                title={`Remove "${bookingRemoval?.name || ''}"'s stalls?`}
+                description={`This frees ${bookingRemoval?.count || 0} stall${bookingRemoval?.count === 1 ? '' : 's'} held by "${bookingRemoval?.name || 'this exhibitor'}". Their booking stays — only the stall assignment is cleared.`}
+                confirmText="Remove stalls"
+                cancelText="Keep it"
+            />
         </DndContext>
     );
 };
@@ -824,6 +1043,7 @@ const ContainerChart = ({
     container, isStalls, size, fit, layer, layerIndex, Icon,
     bookingById, colorByBooking, colorByGroup, groupIdByBooking, groupById,
     selectedBookingId, selectedGroup, onClickUnit, onSetLabel, onResetLabels, onFillRow,
+    collapsed, onToggleCollapsed,
 }) => {
     const wrapRef = useRef(null);
     const innerRef = useRef(null);
@@ -841,21 +1061,21 @@ const ContainerChart = ({
     // height, so we also pin the wrapper's height to the scaled height — otherwise a
     // shrunk chart leaves a tall band of empty space under it.
     const measure = useCallback(() => {
-        if (!fit) { setScale(1); setScaledHeight(null); return; }
+        if (!fit || collapsed) { setScale(1); setScaledHeight(null); return; }
         const w = wrapRef.current?.clientWidth || 0;
         const k = w && naturalWidth > w ? w / naturalWidth : 1;
         setScale(k);
         const h = innerRef.current?.offsetHeight || 0;
         setScaledHeight(h ? Math.ceil(h * k) : null);
-    }, [fit, naturalWidth]);
+    }, [fit, naturalWidth, collapsed]);
 
     useLayoutEffect(() => {
         measure();
-        if (!fit) return undefined;
+        if (!fit || collapsed) return undefined;
         const ro = new ResizeObserver(measure);
         if (wrapRef.current) ro.observe(wrapRef.current);
         return () => ro.disconnect();
-    }, [measure, fit, size, units.length]);
+    }, [measure, fit, size, units.length, collapsed]);
 
     const { rowLabels: defRowLabels, colLabels: defColLabels } = useMemo(
         () => computeGridLabels(units, c), [units, c]
@@ -890,10 +1110,15 @@ const ContainerChart = ({
     return (
         <div className="rounded-lg border p-3 bg-background/60">
             <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                <p className="text-sm font-semibold flex items-center gap-1.5"><Icon className="h-4 w-4 text-primary" /> {container.name}</p>
+                <button type="button" onClick={onToggleCollapsed}
+                    className="text-sm font-semibold flex items-center gap-1.5 hover:text-primary"
+                    title={collapsed ? 'Show this barn' : 'Hide this barn'}>
+                    {collapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    <Icon className="h-4 w-4 text-primary" /> {container.name}
+                </button>
                 <div className="flex items-center gap-2">
                     {/* "Put this group into a row and autofill it" */}
-                    {rowChoices.length > 0 && (
+                    {!collapsed && rowChoices.length > 0 && (
                         <Select onValueChange={(v) => onFillRow(selectedGroup, container.id, Number(v))}>
                             <SelectTrigger className="h-7 text-xs w-[150px]">
                                 <SelectValue placeholder={`Place ${selectedGroup.name} in row…`} />
@@ -910,7 +1135,7 @@ const ContainerChart = ({
                     <span className="text-xs text-muted-foreground">{freeCount} free</span>
                 </div>
             </div>
-            {isStalls && (
+            {isStalls && !collapsed && (
                 <div className="flex items-center justify-between gap-2 mb-1.5">
                     <p className="text-[11px] text-muted-foreground">
                         ✏️ Click a <span className="font-medium text-foreground">row (A, B…)</span> or <span className="font-medium text-foreground">column (1, 2…)</span> label to rename it.
@@ -923,6 +1148,7 @@ const ContainerChart = ({
                     )}
                 </div>
             )}
+            {collapsed ? null : (
             <div ref={wrapRef} className={cn(fit ? 'overflow-hidden' : 'overflow-x-auto')}
                 style={fit && scaledHeight ? { height: scaledHeight } : undefined}>
                 <div ref={innerRef} className="inline-flex flex-col gap-0 origin-top-left" style={fit ? { transform: `scale(${scale})` } : undefined}>
@@ -1001,6 +1227,7 @@ const ContainerChart = ({
                     })}
                 </div>
             </div>
+            )}
         </div>
     );
 };

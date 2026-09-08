@@ -35,12 +35,15 @@ const rvCols = (area) => Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
 // same rule the on-screen board uses.
 const withAlpha = (hex, aa) => `${hex}${aa}`;
 
-// Same rule the board uses: a manual group wins, else the trainer / ranch name.
+// Same rule the board uses: a manual group wins, else the trainer / ranch name, else
+// the exhibitor's own name (a solo booking still prints as a named block of one).
 const groupNameOf = (b) => {
     const manual = (b.stallGroup || '').trim();
     if (manual === NO_GROUP) return '';
     if (manual) return manual;
-    return (b.trainerName || '').trim();
+    const trainer = (b.trainerName || '').trim();
+    if (trainer) return trainer;
+    return (b.exhibitorName || '').trim();
 };
 
 // Room labels shown in non-stall boxes; aisle/empty print blank for a clean chart.
@@ -117,10 +120,14 @@ function buildStallingChartHtml({
         const pale = info.tone === 'muted';
         const fill = warm ? '#f59e0b' : pale ? withAlpha(base, '55') : base;
         const main = esc(info.text || unit.number);
+        // Hierarchy for the Trainer/Group layer: group name (main), exhibitor, then
+        // stall number last — matches the on-screen board.
+        const subExhibitor = info.subExhibitor ? `<span class="num3">${esc(info.subExhibitor)}</span>` : '';
         const sub = info.sub && info.sub !== info.text ? `<span class="num2">${esc(info.sub)}</span>` : '';
         const cls = `cell taken${pale ? ' pale' : ''}`;
         return `<div class="${cls}" style="background:${fill};border-color:${fill};${outline}">
             <span class="name">${main}</span>
+            ${subExhibitor}
             ${sub}
         </div>`;
     };
@@ -238,11 +245,14 @@ function buildStallingChartHtml({
         .cell{position:relative;min-height:58px;border:1px solid #cbd5e1;border-radius:5px;padding:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden}
         .cell .num{font-size:13px;font-family:ui-monospace,monospace;color:#475569;font-weight:700}
         .cell .num2{font-size:11px;font-family:ui-monospace,monospace;color:#64748b;font-weight:700;margin-top:2px}
+        .cell .num3{font-size:10px;font-family:ui-monospace,monospace;color:#64748b;font-weight:600;margin-top:1px}
         .cell.taken{padding-bottom:6px}
         .cell.taken .name{font-size:14px;font-weight:700;text-align:center;line-height:1.15;word-break:break-word;color:#fff}
         .cell.taken .num2{color:rgba(255,255,255,0.85)}
+        .cell.taken .num3{color:rgba(255,255,255,0.9)}
         .cell.taken.pale .name{color:#0f172a}
         .cell.taken.pale .num2{color:#475569}
+        .cell.taken.pale .num3{color:#475569}
         .cell.free{background:#f8fafc}
         .cell.room{background:#f1f5f9;color:#94a3b8;font-size:11px;justify-content:center;font-family:ui-monospace,monospace;text-transform:uppercase}
         .footer{text-align:center;margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b}

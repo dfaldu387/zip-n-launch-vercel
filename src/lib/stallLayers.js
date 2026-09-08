@@ -30,12 +30,16 @@ const NO_GROUP = '__none__';
 
 // The group a booking belongs to — the same rule the Assign board and the printer
 // use. A manual group wins; otherwise the trainer / ranch they booked under; and
-// NO_GROUP means "keep this one on their own".
+// if there's no trainer either, the exhibitor's own name (so a solo booking is
+// never nameless — it just reads as a group of one). NO_GROUP means "keep this
+// one on their own" and stays blank even then.
 const groupNameOf = (b) => {
     const manual = (b.stallGroup || '').trim();
     if (manual === NO_GROUP) return '';
     if (manual) return manual;
-    return (b.trainerName || '').trim();
+    const trainer = (b.trainerName || '').trim();
+    if (trainer) return trainer;
+    return (b.exhibitorName || '').trim();
 };
 
 // Spread a total evenly across n stalls; the remainder lands on the earliest stalls.
@@ -158,8 +162,14 @@ export function layerCell(layerId, { unit, index }) {
     switch (layerId) {
         case 'name':
             return { text: shortName(b.exhibitor) || num, sub: num, tone: 'booked' };
-        case 'trainer':
-            return { text: b.trainer || '—', sub: num, tone: b.trainer ? 'booked' : 'muted' };
+        case 'trainer': {
+            // Hierarchy: group/trainer name on top, then (when it's a real group, not
+            // just the exhibitor's own name standing in for one) the exhibitor below
+            // that, then the stall number last.
+            const trainer = b.trainer || '—';
+            const isRealGroup = b.trainer && norm(b.trainer) !== norm(b.exhibitor);
+            return { text: trainer, sub: num, subExhibitor: isRealGroup ? shortName(b.exhibitor) : '', tone: b.trainer ? 'booked' : 'muted' };
+        }
         case 'horses':
             return { text: b.horses ? `${b.horses}🐴` : '—', sub: num, tone: b.horses ? 'booked' : 'muted' };
         case 'shavings': {
