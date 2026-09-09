@@ -21,6 +21,9 @@ const corsHeaders = {
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 
+// Same rate as stalls-create-checkout — keep the two in sync if this changes.
+const PLATFORM_COMMISSION_RATE = 0.05;
+
 // ───── Live booking pricing (mirrors src/lib/invoiceGenerator.js) ─────
 
 // Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
@@ -69,16 +72,23 @@ function computeBookingTotal(projectData: any, booking: any): number {
 
 // ─────────────────────────────────────────────────────────────────────
 
+// stripeAccount, when set, runs the call ON that connected account (a
+// "direct charge") instead of the platform account — the standard pattern
+// for Invoicing + Connect, since invoices don't support destination charges.
 async function stripePost(
   endpoint: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  stripeAccount?: string | null
 ): Promise<any> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (stripeAccount) headers["Stripe-Account"] = stripeAccount;
+
   const response = await fetch(`https://api.stripe.com/v1/${endpoint}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: new URLSearchParams(params).toString(),
   });
   return response.json();
@@ -153,10 +163,25 @@ serve(async (req: Request): Promise<Response> => {
 
     const { data: project, error } = await admin
       .from("projects")
-      .select("project_name, project_data")
+      .select("project_name, project_data, user_id")
       .eq("id", showId)
       .single();
     if (error || !project) throw new Error("Show not found");
+
+    // Same Connect split as stalls-create-checkout — no retroactive gating for
+    // shows onboarded before this existed, they keep billing on the platform
+    // account exactly as before.
+    let connectedAccountId: string | null = null;
+    if (project.user_id) {
+      const { data: ownerProfile } = await admin
+        .from("profiles")
+        .select("stripe_connect_account_id, stripe_connect_payouts_enabled")
+        .eq("id", project.user_id)
+        .single();
+      if (ownerProfile?.stripe_connect_payouts_enabled && ownerProfile.stripe_connect_account_id) {
+        connectedAccountId = ownerProfile.stripe_connect_account_id;
+      }
+    }
 
     const bookings = project.project_data?.stallingService?.bookings || [];
     const booking = bookings.find((b: any) => b.id === bookingId);
@@ -175,16 +200,19 @@ serve(async (req: Request): Promise<Response> => {
     if (amountCents <= 0) throw new Error("Nothing is due on this booking");
 
     // 1) Customer (create fresh per invoice — guests have no stored customer).
+    //    Direct charge: when the show has payouts enabled, the customer and
+    //    invoice live ON the connected account, not the platform account, so
+    //    money is collected straight into the show manager's Stripe balance.
     const customer = await stripePost("customers", {
       email,
       name: booking.exhibitorName || email,
       "metadata[showId]": showId,
       "metadata[bookingId]": bookingId,
-    });
+    }, connectedAccountId);
     if (customer.error) throw new Error(customer.error.message);
 
     // 2) Create the invoice FIRST (draft), then attach line items by id (step 3).
-    const invoice = await stripePost("invoices", {
+    const invoiceParams: Record<string, string> = {
       customer: customer.id,
       collection_method: "send_invoice",
       days_until_due: "14",
@@ -192,7 +220,13 @@ serve(async (req: Request): Promise<Response> => {
       "metadata[type]": "stall_booking",
       "metadata[showId]": showId,
       "metadata[bookingId]": bookingId,
-    });
+    };
+    if (connectedAccountId) {
+      invoiceParams["application_fee_amount"] = String(
+        Math.round(amountCents * PLATFORM_COMMISSION_RATE)
+      );
+    }
+    const invoice = await stripePost("invoices", invoiceParams, connectedAccountId);
     if (invoice.error) throw new Error(invoice.error.message);
 
     // 3) Attach line items with LIVE amounts (never the stale $0 stored on
@@ -207,7 +241,7 @@ serve(async (req: Request): Promise<Response> => {
           amount: String(Math.round(Number(it.total) * 100)),
           currency: "usd",
           description: it.description || "Booking item",
-        });
+        }, connectedAccountId);
         if (r.error) throw new Error(r.error.message);
       }
     } else {
@@ -219,12 +253,12 @@ serve(async (req: Request): Promise<Response> => {
         description:
           `${project.project_name || "Show"} — Stalls balance for ` +
           `${booking.exhibitorName || "exhibitor"}`,
-      });
+      }, connectedAccountId);
       if (r.error) throw new Error(r.error.message);
     }
 
     // 4) Finalize + email it. Returns the hosted invoice URL for reference.
-    const sent = await stripePost(`invoices/${invoice.id}/send`, {});
+    const sent = await stripePost(`invoices/${invoice.id}/send`, {}, connectedAccountId);
     if (sent.error) throw new Error(sent.error.message);
 
     return new Response(

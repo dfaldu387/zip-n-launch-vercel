@@ -21,6 +21,11 @@ const corsHeaders = {
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 
+// Platform commission on stall/RV bookings once a show manager has Connect
+// payouts enabled (meeting 2026-09-07: 5% to start, adjustable any time —
+// change this one constant, no other code needs to move).
+const PLATFORM_COMMISSION_RATE = 0.05;
+
 // ───── Live booking pricing (mirrors src/lib/invoiceGenerator.js) ─────
 
 // Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
@@ -194,12 +199,27 @@ serve(async (req: Request): Promise<Response> => {
 
     const { data: project, error } = await admin
       .from("projects")
-      .select("project_name, project_data")
+      .select("project_name, project_data, user_id")
       .eq("id", showId)
       .single();
 
     if (error || !project) {
       throw new Error("Show not found");
+    }
+
+    // Split the payment if the show's owner has Connect payouts enabled —
+    // shows onboarded before this feature keep going 100% to the platform
+    // account exactly as before (no retroactive gating, per 2026-09-07 call).
+    let connectedAccountId: string | null = null;
+    if (project.user_id) {
+      const { data: ownerProfile } = await admin
+        .from("profiles")
+        .select("stripe_connect_account_id, stripe_connect_payouts_enabled")
+        .eq("id", project.user_id)
+        .single();
+      if (ownerProfile?.stripe_connect_payouts_enabled && ownerProfile.stripe_connect_account_id) {
+        connectedAccountId = ownerProfile.stripe_connect_account_id;
+      }
     }
 
     const bookings = project.project_data?.stallingService?.bookings || [];
@@ -242,6 +262,16 @@ serve(async (req: Request): Promise<Response> => {
 
     const email = customerEmail || booking.email;
     if (email) params["customer_email"] = email;
+
+    // Destination charge: platform still collects the payment, then Stripe
+    // automatically moves (amount − fee) to the show manager's connected
+    // account. The exhibitor never sees any of this — same checkout page either way.
+    if (connectedAccountId) {
+      params["payment_intent_data[application_fee_amount]"] = String(
+        Math.round(amountCents * PLATFORM_COMMISSION_RATE)
+      );
+      params["payment_intent_data[transfer_data][destination]"] = connectedAccountId;
+    }
 
     const session = await stripePost("checkout/sessions", params);
     if (session.error) {

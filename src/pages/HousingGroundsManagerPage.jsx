@@ -32,6 +32,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { stampModuleStatusOnSave, migrateLegacyStatus } from '@/lib/moduleStatusService';
 import { useToast } from '@/components/ui/use-toast';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { LogoUploader } from '@/components/show-structure/LogoUploader';
 import AddBookingDialog from '@/components/housing/AddBookingDialog';
 import MasterListPanel from '@/components/housing/MasterListPanel';
@@ -2719,6 +2720,7 @@ const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
 const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
+    const { profile, refreshProfile } = useAuth();
     const [activeSection, setActiveSection] = useState('inventory');
 
     // Stall Fee Calculator "What-If" mode — a scratch estimator, never saved. Lets
@@ -2922,10 +2924,52 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // Locked and Published are both read-only (matches the app's isModuleEditable).
     const isLocked = publishStatus === 'locked' || publishStatus === 'published';
 
+    // Stripe Connect payout gate (meeting 2026-09-07): a show can't go live for
+    // the FIRST time until its manager has payouts enabled, so the platform's
+    // commission is guaranteed from the first booking. Shows already published
+    // before this existed are untouched — this only blocks the transition INTO
+    // Published, never Published itself.
+    const payoutsEnabled = profile?.stripe_connect_payouts_enabled === true;
+    const [payoutSetupOpen, setPayoutSetupOpen] = useState(false);
+    const [payoutSetupLoading, setPayoutSetupLoading] = useState(false);
+
+    // Onboarding was likely started on an earlier visit and finished on Stripe's
+    // site — account.updated usually syncs this within seconds, but catch up
+    // immediately in case that webhook hasn't landed yet.
+    useEffect(() => {
+        if (profile?.stripe_connect_account_id && !payoutsEnabled) {
+            invokeAsUser('stripe-connect-status', {}).then(({ data }) => {
+                if (data?.payoutsEnabled) refreshProfile();
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const startPayoutOnboarding = async () => {
+        setPayoutSetupLoading(true);
+        const { data, error } = await invokeAsUser('stripe-connect-onboarding', {
+            returnUrl: window.location.href,
+        });
+        if (error || !data?.url) {
+            setPayoutSetupLoading(false);
+            toast({
+                variant: 'destructive',
+                title: 'Could not start payout setup',
+                description: error?.message || 'Please try again.',
+            });
+            return;
+        }
+        window.location.href = data.url;
+    };
+
     // Guard the lifecycle toggle: going *to* Published asks first; everything else applies now.
     const requestStatusChange = (nextStatus) => {
         if (nextStatus === publishStatus) return;
-        if (nextStatus === 'published') { setConfirmPublish(true); return; }
+        if (nextStatus === 'published') {
+            if (!payoutsEnabled) { setPayoutSetupOpen(true); return; }
+            setConfirmPublish(true);
+            return;
+        }
         setPublishStatus(nextStatus);
     };
 
@@ -5105,6 +5149,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 description={`This makes Housing & Grounds for "${show.project_name || 'this show'}" live on the public Events page — anyone can view it and book stalls. You can switch back to Draft to take it down.`}
                 confirmText="Yes, publish"
                 cancelText="Cancel"
+            />
+
+            {/* Payout account required before a show can go live for the first time. */}
+            <ConfirmationDialog
+                isOpen={payoutSetupOpen}
+                onClose={() => setPayoutSetupOpen(false)}
+                onConfirm={startPayoutOnboarding}
+                title="Set up payouts before publishing"
+                description="Before this show can go live for booking, connect a bank account so exhibitor payments can reach you. You'll be taken to Stripe to finish a short setup — takes a few minutes."
+                confirmText={payoutSetupLoading ? 'Opening Stripe…' : 'Set Up Payouts'}
+                cancelText="Not yet"
             />
         </div>
     );

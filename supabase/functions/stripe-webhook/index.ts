@@ -3,6 +3,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
+// A second, separate Stripe destination delivers Connect account events
+// (account.updated) to this same URL — Stripe assigns it its own signing
+// secret, which the dashboard can't be pointed to reuse the first one's. Both
+// are accepted here so either webhook can call this function. Optional: unset
+// until that second destination exists, in which case only the original is checked.
+const STRIPE_CONNECT_WEBHOOK_SECRET = Deno.env.get("STRIPE_CONNECT_WEBHOOK_SECRET") || "";
 
 async function verifyStripeSignature(
   payload: string,
@@ -121,7 +127,10 @@ serve(async (req: Request): Promise<Response> => {
   console.log("Signature header found, length:", signature.length);
   console.log("Webhook secret configured:", STRIPE_WEBHOOK_SECRET ? "yes" : "NO");
 
-  const isValid = await verifyStripeSignature(body, signature, STRIPE_WEBHOOK_SECRET);
+  const isValid =
+    (await verifyStripeSignature(body, signature, STRIPE_WEBHOOK_SECRET)) ||
+    (STRIPE_CONNECT_WEBHOOK_SECRET !== "" &&
+      (await verifyStripeSignature(body, signature, STRIPE_CONNECT_WEBHOOK_SECRET)));
   if (!isValid) {
     console.error("Invalid webhook signature - returning 400");
     return new Response(JSON.stringify({ error: "Invalid signature" }), {
@@ -367,6 +376,26 @@ serve(async (req: Request): Promise<Response> => {
             invoice.metadata.bookingId,
             paidDollars
           );
+        }
+        break;
+      }
+
+      // Connect account status change — this endpoint must have "Listen to
+      // events on Connected accounts" turned on in the Stripe dashboard, or
+      // these never arrive and payouts_enabled stays stuck at false.
+      case "account.updated": {
+        const account = event.data.object;
+        const payoutsEnabled = !!(account.charges_enabled && account.payouts_enabled);
+
+        const { error: connectError } = await adminClient
+          .from("profiles")
+          .update({ stripe_connect_payouts_enabled: payoutsEnabled })
+          .eq("stripe_connect_account_id", account.id);
+
+        if (connectError) {
+          console.error("Error updating stripe_connect_payouts_enabled:", connectError);
+        } else {
+          console.log(`Connect account ${account.id} payouts_enabled -> ${payoutsEnabled}`);
         }
         break;
       }

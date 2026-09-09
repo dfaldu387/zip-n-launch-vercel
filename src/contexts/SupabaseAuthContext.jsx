@@ -445,7 +445,14 @@ export const AuthProvider = ({ children }) => {
     subscriptionTier: profile?.subscription_tier || null,
     isSubscribed: profile?.subscription_status === 'active',
     hasUsedFreePatternBook: profile?.free_pattern_book_used === true,
-  }), [user, profile, session, loading, isAdmin, permissions, hasPermission, signUp, signIn, signOut, sendPasswordResetEmail, updatePassword, updateUserProfile, authModalState]);
+    // Stripe Connect payout account (synced via the account.updated webhook —
+    // see stripe-connect-onboarding / stripe-connect-status).
+    stripeConnectAccountId: profile?.stripe_connect_account_id || null,
+    stripeConnectPayoutsEnabled: profile?.stripe_connect_payouts_enabled === true,
+    // Re-reads the profile row — call after returning from Stripe onboarding,
+    // where the account.updated webhook may not have landed yet.
+    refreshProfile: () => fetchProfileAndPermissions(user, { force: true }),
+  }), [user, profile, session, loading, isAdmin, permissions, hasPermission, signUp, signIn, signOut, sendPasswordResetEmail, updatePassword, updateUserProfile, authModalState, fetchProfileAndPermissions]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
