@@ -207,7 +207,22 @@ const ContractManagementPage = () => {
         if (projectsRes.error) throw projectsRes.error;
         if (associationsRes.error) throw associationsRes.error;
 
-        setExistingProjects(projectsRes.data || []);
+        let ownedAndAdminProjects = projectsRes.data || [];
+
+        // The list above is owner-only. A Section Admin scoped to Contracts
+        // who doesn't own this show won't find it there — fetch it
+        // separately so the auto-link below still finds it (RLS already
+        // allows the owner or an admin listed on the show to read it).
+        if (showIdFromQuery && !ownedAndAdminProjects.some(p => p.id === showIdFromQuery)) {
+          const { data: adminShow } = await supabase
+            .from('projects')
+            .select('id, project_name, project_type, project_data, created_at')
+            .eq('id', showIdFromQuery)
+            .maybeSingle();
+          if (adminShow) ownedAndAdminProjects = [...ownedAndAdminProjects, adminShow];
+        }
+
+        setExistingProjects(ownedAndAdminProjects);
         setAssociationsData(associationsRes.data || []);
 
         // Load existing contract project if projectId is present
@@ -232,8 +247,8 @@ const ContractManagementPage = () => {
             // Sync from linked project: if contract has a linkedProjectId,
             // re-apply auto-fill from the linked project to pick up any
             // fields that weren't populated when the contract was first created.
-            if (saved.linkedProjectId && projectsRes.data) {
-              const linkedProject = projectsRes.data.find(p => p.id === saved.linkedProjectId);
+            if (saved.linkedProjectId && ownedAndAdminProjects) {
+              const linkedProject = ownedAndAdminProjects.find(p => p.id === saved.linkedProjectId);
               if (linkedProject) {
                 const officials = saved.showDetails?.officials;
                 const hasOfficials = officials && Object.keys(officials).length > 0;
@@ -248,7 +263,7 @@ const ContractManagementPage = () => {
             setCurrentStep(saved.currentStep || 1);
             setCompletedSteps(new Set(saved.completedSteps || []));
           }
-        } else if (showIdFromQuery && projectsRes.data) {
+        } else if (showIdFromQuery && ownedAndAdminProjects) {
           // Navigated from ShowWorkspace with ?showId=xxx — find existing contract or auto-link
           // First, check if a contract already exists for this show
           // No user_id filter — a Full/Section Admin scoped to Contracts should
@@ -263,14 +278,17 @@ const ContractManagementPage = () => {
             .maybeSingle();
 
           if (existingContract) {
-            // Contract already exists for this show — navigate to it
+            // Contract already exists for this show — navigate to it.
+            // Keep ?showId= on the URL so MembershipRoute can still verify a
+            // Section Admin's access after this redirect (the contract row
+            // itself carries no admins list of its own to check against).
             // Don't set skipReloadRef — the new URL needs to trigger a full data load
-            navigate(`/horse-show-manager/employee-management/contracts/${existingContract.id}`, { replace: true });
+            navigate(`/horse-show-manager/employee-management/contracts/${existingContract.id}?showId=${showIdFromQuery}`, { replace: true });
             return;
           }
 
           // No existing contract — auto-link to the show
-          const showProject = projectsRes.data.find(p => p.id === showIdFromQuery);
+          const showProject = ownedAndAdminProjects.find(p => p.id === showIdFromQuery);
           if (showProject) {
             setFormData(prev => applyLinkedProjectData(prev, showProject));
           }

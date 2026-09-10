@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { Loader2 } from 'lucide-react';
@@ -9,9 +9,13 @@ const MembershipRoute = ({ children, requiredPermission }) => {
     const location = useLocation();
     const navigate = useNavigate();
     const modalWasOpened = useRef(false);
-    // Every horse-show-manager route that takes a specific show uses :showId —
-    // present here only on those routes, undefined everywhere else.
-    const { showId } = useParams();
+    // Most horse-show-manager routes that take a specific show use :showId in
+    // the path. Contract Management is the one exception — it carries the
+    // show as a ?showId= query param instead (its path param is the
+    // contract's own id) — so fall back to that when the path param is absent.
+    const { showId: showIdParam } = useParams();
+    const [searchParams] = useSearchParams();
+    const showId = showIdParam || searchParams.get('showId');
 
     // A person granted Full/Section Admin on a show (Manage Access) shouldn't
     // need a paid membership just to do that job — only to own their own
