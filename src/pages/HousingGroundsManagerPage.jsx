@@ -3267,10 +3267,27 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // was actually written — otherwise the barn map would keep showing the released
     // stalls as booked until the page was reloaded.
     const changeBookingStatus = async (bookingId, newStatus) => {
+        const wasAlreadyConfirmed = bookings.find(b => b.id === bookingId)?.status === 'confirmed';
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: newStatus } : b));
         const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
         if (result?.barns) setBarns(result.barns);
         if (result?.bookings) setBookings(result.bookings);
+
+        // Tell the exhibitor once, right when the organizer actually confirms —
+        // not on every later edit, so re-saving a confirmed booking doesn't resend it.
+        if (newStatus === 'confirmed' && !wasAlreadyConfirmed && show?.id) {
+            const { error: emailError } = await invokeAsUser('send-booking-confirmed-email', {
+                showId: show.id,
+                bookingId,
+            });
+            if (emailError) {
+                toast({
+                    title: 'Booking confirmed, but the email failed to send',
+                    description: emailError.message,
+                    variant: 'destructive',
+                });
+            }
+        }
     };
 
     const removeBooking = async (bookingId) => {

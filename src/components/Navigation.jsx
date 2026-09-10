@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { Menu, X, User, LogOut, LayoutDashboard, UserPlus, UploadCloud, Library, Edit, Archive, Activity, Shield, Gavel, Briefcase, Receipt, Palette } from 'lucide-react';
+import { Menu, X, User, LogOut, LayoutDashboard, UserPlus, UploadCloud, Library, Edit, Archive, Activity, Shield, Gavel, Briefcase, Receipt, Palette, Search } from 'lucide-react';
 import logoImage from '@/assets/logo.png';
 import { useSiteBranding } from '@/contexts/SiteBrandingContext';
 
@@ -192,6 +192,18 @@ const Navigation = () => {
         );
     }
 
+    // A compact icon rather than a text nav item — the full-width bar is already
+    // tuned to fit exactly 7 text links at the xl breakpoint (see the comment
+    // above), so an 8th would risk the same overflow that pushed tablets to the
+    // drawer in the first place.
+    const FindBookingButton = () => (
+        <Link to="/find-booking">
+            <Button variant="ghost" size="icon" aria-label="Find my reservation" title="Find my reservation">
+                <Search className="h-5 w-5" />
+            </Button>
+        </Link>
+    );
+
     const navClass = "bg-background/80 backdrop-blur-md";
 
     return (
@@ -241,6 +253,7 @@ const Navigation = () => {
                                     Login / Sign Up
                                 </Button>
                             )}
+                            <FindBookingButton />
                             <ThemeToggle />
                         </div>
                     </div>
@@ -254,6 +267,7 @@ const Navigation = () => {
                                 <UserMenu />
                             </>
                         )}
+                        <FindBookingButton />
                         <Button
                             variant="ghost"
                             size="icon"
@@ -335,6 +349,13 @@ const Navigation = () => {
                                     </Link>
                                 );
                             })}
+                            <Link
+                                to="/find-booking"
+                                className="flex min-h-[44px] items-center px-3 py-2 rounded-md text-base font-medium text-foreground hover:bg-accent/50"
+                                onClick={() => setIsMenuOpen(false)}
+                            >
+                                <Search className="inline-block mr-2 h-4 w-4" />Find My Reservation
+                            </Link>
                         </div>
                          {user && (
                             <div className="pt-4 pb-3 border-t border-border px-5 space-y-1">
