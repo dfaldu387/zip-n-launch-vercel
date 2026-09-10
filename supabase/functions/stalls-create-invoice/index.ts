@@ -24,44 +24,135 @@ const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 // Same rate as stalls-create-checkout — keep the two in sync if this changes.
 const PLATFORM_COMMISSION_RATE = 0.05;
 
-// ───── Live booking pricing (mirrors src/lib/invoiceGenerator.js) ─────
+// ───── Live booking pricing (mirrors src/lib/bookingPricing.js) ─────
+//
+// Ported from the same fix applied to bookingPricing.js and the
+// get_public_booking / record_stall_booking_payment database functions
+// (20260910120000_fix_stall_pricing_after_barn_reassignment.sql) — a stall
+// bought under the Flat Fee option (or Nightly Fee — see the split selector
+// in extraStallFees.js) must stay priced at that option even after the
+// organizer physically assigns it to a DIFFERENT barn than it was ordered
+// in. Tracking feeType per ORDERED UNIT (one per stall ordered) instead of
+// per barn is what keeps that straight; the old per-barn tracking here also
+// multiplied Flat items by nights unconditionally, which this replaces too.
 
-// Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
-function assignedStallsForBooking(projectData: any, bookingId: string) {
-  const barns = projectData?.stallingService?.barns || [];
-  const result: Array<{ barnId: string; pricePerNight: number }> = [];
-  for (const barn of barns) {
-    for (const stall of barn.stalls || []) {
-      if (stall.bookingId === bookingId) {
-        result.push({ barnId: barn.id, pricePerNight: Number(barn.pricePerNight) || 0 });
-      }
-    }
+const feeScope = (fee: any): string | string[] => {
+  const raw = fee?.appliesTo;
+  if (Array.isArray(raw)) {
+    if (raw.length === 0 || raw.includes("all")) return "all";
+    return raw;
   }
-  return result;
+  if (!raw || raw === "all") return "all";
+  return [raw];
+};
+
+const feeAppliesToBarn = (fee: any, barnId: string): boolean => {
+  const scope = feeScope(fee);
+  return scope === "all" || (scope as string[]).includes(barnId);
+};
+
+const barnHasOwnFee = (barnId: string, stallFees: any[] = []): boolean =>
+  (stallFees || []).some((fee) => {
+    const scope = feeScope(fee);
+    return scope !== "all" && (scope as string[]).includes(barnId);
+  });
+
+// A barn's flat-rate total = every Flat stall fee scoped to it. A barn with
+// its own named fee is priced from that fee alone — "All Barns" fees are the
+// default for barns that don't have one, not an add-on stacked on top.
+function flatRateForBarn(barnId: string, stallFees: any[] = []): number {
+  const exclusive = barnHasOwnFee(barnId, stallFees);
+  return (stallFees || []).reduce((sum, fee) => {
+    if ((fee.unitType || "per_stall") !== "flat") return sum;
+    const scope = feeScope(fee);
+    if (exclusive && scope === "all") return sum;
+    if (!feeAppliesToBarn(fee, barnId)) return sum;
+    return sum + (Number(fee.amount) || 0);
+  }, 0);
 }
 
-// Invoice line items with LIVE amounts. Stall lines are recomputed from the
-// current price × assigned count × nights; other items keep their stored amount.
+// Invoice line items with LIVE amounts. Each ordered stall unit keeps the
+// feeType/nights it was bought under; pairing it with whichever physical
+// stall fulfilled it (capped at the ordered total, same as before) and
+// grouping by (real assigned barn, feeType) prices Flat-bought stalls at
+// their Flat rate and Nightly-bought stalls at their Nightly rate, wherever
+// they actually ended up. Other items keep their stored amount.
 function buildBookingLineItems(projectData: any, booking: any) {
   const rows: Array<{ description: string; total: number }> = [];
-  const nights = Number(booking?.nights) || 1;
-  const assigned = assignedStallsForBooking(projectData, booking?.id);
+  const extraStallFees = projectData?.stallingService?.extraStallFees || [];
+  const bookingNights = Number(booking?.nights) || 1;
   const items = Array.isArray(booking?.items) ? booking.items : [];
+  const stallItems = items.filter((it: any) => it.type === "stall");
+  const otherItems = items.filter((it: any) => it.type !== "stall");
 
-  if (items.length > 0) {
-    for (const it of items) {
-      if (it.type === "stall") {
-        const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
-        const count = stallsInThisBarn.length || Number(it.qty) || 0;
-        const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
-        rows.push({ description: it.name || "Stalls", total: count * nights * price });
-      } else {
-        rows.push({ description: it.name || it.type || "Booking item", total: Number(it.amount) || 0 });
+  if (stallItems.length > 0) {
+    const orderedTotal = stallItems.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
+
+    const units: Array<{ feeType: string | null; nights: number }> = [];
+    for (const it of stallItems) {
+      const qty = Number(it.qty) || 0;
+      const unitNights = it.nights != null ? (Number(it.nights) || bookingNights) : bookingNights;
+      for (let i = 0; i < qty; i++) units.push({ feeType: it.feeType || null, nights: unitNights });
+    }
+
+    const barns = projectData?.stallingService?.barns || [];
+    const assignedStalls: Array<{ barnId: string; pricePerNight: number }> = [];
+    for (const barn of barns) {
+      for (const stall of barn.stalls || []) {
+        if (stall.bookingId === booking?.id) {
+          assignedStalls.push({ barnId: barn.id, pricePerNight: Number(barn.pricePerNight) || 0 });
+        }
       }
     }
-  } else {
+    const used = assignedStalls.slice(0, orderedTotal);
+
+    const groups = new Map<string, { barnId: string; feeType: string | null; nights: number; count: number; pricePerNight: number }>();
+    for (let i = 0; i < used.length; i++) {
+      const stall = used[i];
+      const unit = units[i];
+      const key = `${stall.barnId}::${unit?.feeType || ""}`;
+      const g = groups.get(key);
+      if (g) {
+        g.count += 1;
+      } else {
+        groups.set(key, { barnId: stall.barnId, feeType: unit?.feeType || null, nights: unit?.nights ?? bookingNights, count: 1, pricePerNight: stall.pricePerNight });
+      }
+    }
+
+    for (const { barnId, feeType, nights, count, pricePerNight } of groups.values()) {
+      const flatRate = flatRateForBarn(barnId, extraStallFees);
+      const total = feeType === "flat" ? count * flatRate
+        : feeType === "per_night" ? count * nights * pricePerNight
+          : count * (nights * pricePerNight + flatRate);
+      rows.push({ description: `Stalls × ${count}`, total });
+    }
+
+    // Whatever isn't physically assigned yet, priced from each line's own
+    // originally-ordered barn (current flat rate if it has one, else the
+    // unitPrice frozen at booking time).
+    let deficit = Math.max(0, orderedTotal - used.length);
+    for (const it of stallItems) {
+      if (deficit <= 0) break;
+      const take = Math.min(Number(it.qty) || 0, deficit);
+      if (take <= 0) continue;
+      deficit -= take;
+
+      const itNights = it.nights != null ? (Number(it.nights) || bookingNights) : bookingNights;
+      const nightlyRate = Number(it.unitPrice) || 0;
+      const flatRate = flatRateForBarn(it.refId, extraStallFees);
+      const total = it.feeType === "flat" ? take * flatRate
+        : it.feeType === "per_night" ? take * itNights * nightlyRate
+          : take * (itNights * nightlyRate + flatRate);
+      rows.push({ description: it.name || "Stalls", total });
+    }
+  } else if (items.length === 0) {
     rows.push({ description: "Stall reservation", total: Number(booking?.amount) || 0 });
   }
+
+  for (const it of otherItems) {
+    rows.push({ description: it.name || it.type || "Booking item", total: Number(it.amount) || 0 });
+  }
+
   return rows;
 }
 

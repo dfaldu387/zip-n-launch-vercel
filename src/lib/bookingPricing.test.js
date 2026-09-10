@@ -118,6 +118,27 @@ describe('computeBookingTotal', () => {
         expect(computeBookingTotal(null, [])).toBe(0);
         expect(computeBookingTotal({}, [])).toBe(0);
     });
+
+    it('keeps a Flat-bought stall priced as Flat and a Nightly-bought stall priced as Nightly, even after both are reassigned into the same different barn', () => {
+        // Regression test for a live bug: Barn A sold as 1 Flat-fee stall + 1
+        // Nightly-fee stall (the split selector — see buildBarnStallOptionItems),
+        // but the organizer physically assigned BOTH stalls into Barn B. The old
+        // code only remembered one feeType per BARN, so once the barn changed it
+        // forgot which stall was Flat and which was Nightly and billed both at
+        // one combined "mixed" per-stall rate instead.
+        const extraStallFees = [{ id: 'f1', appliesTo: 'barn-b', amount: 40, unitType: 'flat' }];
+        const booking = {
+            id: 'bk-10',
+            nights: 2,
+            items: [
+                { type: 'stall', refId: 'barn-a', feeType: 'flat', name: 'Barn A – Flat Fee', qty: 1, unitPrice: 0 },
+                { type: 'stall', refId: 'barn-a', feeType: 'per_night', name: 'Barn A – Nightly Fee', qty: 1, unitPrice: 75, nights: 2 },
+            ],
+        };
+        const assigned = stalls(2, 75, 'barn-b'); // both stalls actually in Barn B
+        // 1 stall billed Flat at Barn B's $40, 1 stall billed Nightly at $75 × 2 nights = $150.
+        expect(computeBookingTotal(booking, assigned, extraStallFees)).toBe(190);
+    });
 });
 
 describe('computeBookingTotal — Flat stall fees', () => {

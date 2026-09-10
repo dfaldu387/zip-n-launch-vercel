@@ -80,17 +80,33 @@ const AddBookingDialog = ({
 
     const setSupplyQty = (id, v) => setSelection(prev => ({ ...prev, supplies: { ...prev.supplies, [id]: v } }));
 
-    // Flat Fee and Nightly Fee are two separate purchases, never both at once
-    // for the same barn/area (same "radio option" rule as the public booking
-    // page) — picking a qty on one option clears the other.
-    const setOptionQty = (group, id, kind, v) => setSelection(prev => ({
-        ...prev,
-        [group]: { ...prev[group], [id]: v > 0 ? { [kind]: v } : {} },
-    }));
+    // Flat Fee and Nightly Fee are independent purchases that can both apply to
+    // the same barn/area at once — same rule as the public booking page (see
+    // PublicBookingPage.jsx's updateOptionQty). Setting one must preserve
+    // whatever quantity is already set on the other.
+    const setOptionQty = (group, id, kind, v) => setSelection(prev => {
+        const groupState = { ...(prev[group] || {}) };
+        const otherKind = kind === 'flat' ? 'night' : 'flat';
+        const otherVal = groupState[id]?.[otherKind];
+        const next = {};
+        if (otherVal) next[otherKind] = otherVal;
+        if (v > 0) next[kind] = v;
+        if (Object.keys(next).length > 0) groupState[id] = next;
+        else delete groupState[id];
+        return { ...prev, [group]: groupState };
+    });
 
     const handleSubmit = async () => {
         if (!details.exhibitorName.trim()) {
             toast({ title: 'Name required', description: 'Enter the exhibitor name.', variant: 'destructive' });
+            return;
+        }
+        // Same required fields as the public booking page (see validateStep's
+        // step-2 check in PublicBookingPage.jsx) — a manually-entered booking
+        // needs an email/phone on file too, e.g. to send the confirmation and
+        // organizer-confirmed emails.
+        if (!details.email.trim() || !details.phone.trim()) {
+            toast({ title: 'Email and phone required', description: 'Enter the exhibitor\'s email and phone.', variant: 'destructive' });
             return;
         }
         if (items.length === 0) {
@@ -185,16 +201,16 @@ const AddBookingDialog = ({
                                 </div>
                                 <div className="hidden sm:block" />
                                 <div className="space-y-1">
-                                    <Label className="text-xs">Exhibitor email</Label>
+                                    <Label className="text-xs">Exhibitor email *</Label>
                                     <Input className="h-8 text-sm" value={details.email}
                                         onChange={(e) => setDetails(d => ({ ...d, email: e.target.value }))}
-                                        placeholder="Optional" />
+                                        placeholder="you@example.com" />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label className="text-xs">Exhibitor phone</Label>
+                                    <Label className="text-xs">Exhibitor phone *</Label>
                                     <Input className="h-8 text-sm" value={details.phone}
                                         onChange={(e) => setDetails(d => ({ ...d, phone: e.target.value }))}
-                                        placeholder="Optional" />
+                                        placeholder="(555) 555-1234" />
                                 </div>
 
                                 <p className="col-span-2 mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
