@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users } from 'lucide-react';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
+import { getBookingDisplayStatus } from '@/lib/bookingPricing';
 
 // ── Phase 1: Master List ──
 // A spreadsheet-style roster of everyone who booked (stalls + RV + pre-ordered
@@ -96,12 +97,13 @@ const buildRow = (booking, barns) => {
         horses: getHorseCount(booking),
         horseNamesArr,
         horseNamesStr: horseNamesArr.join(', '),
-        status: booking.status || 'pending',
+        status: getBookingDisplayStatus(booking),
     };
 };
 
 const STATUS_STYLES = {
     pending: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+    paid: 'bg-teal-500/15 text-teal-700 dark:text-teal-300',
     confirmed: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
     checked_in: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
     cancelled: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
@@ -308,6 +310,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                     <SelectContent>
                         <SelectItem value="all" className="text-xs">All statuses</SelectItem>
                         <SelectItem value="pending" className="text-xs">Pending</SelectItem>
+                        <SelectItem value="paid" className="text-xs">Paid</SelectItem>
                         <SelectItem value="confirmed" className="text-xs">Confirmed</SelectItem>
                         <SelectItem value="checked_in" className="text-xs">Checked in</SelectItem>
                         <SelectItem value="cancelled" className="text-xs">Cancelled</SelectItem>
@@ -490,6 +493,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                                     {/* Meta */}
                                                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
                                                         <span>Payment: <span className="capitalize font-medium text-foreground">{(r.booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
+                                                        {r.booking.paidAt ? <span>Paid: <span className="font-medium text-foreground">{fmtDateTime(r.booking.paidAt)}</span></span> : null}
                                                         {(r.arrivalLabel || r.departureLabel) ? <span>Dates: <span className="font-medium text-foreground">{r.arrivalLabel || '?'} – {r.departureLabel || '?'}</span></span> : null}
                                                         {r.booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{r.booking.source}</span></span> : null}
                                                         {r.booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtDateTime(r.booking.createdAt)}</span></span> : null}

@@ -9,6 +9,20 @@ const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
 // are accepted here so either webhook can call this function. Optional: unset
 // until that second destination exists, in which case only the original is checked.
 const STRIPE_CONNECT_WEBHOOK_SECRET = Deno.env.get("STRIPE_CONNECT_WEBHOOK_SECRET") || "";
+// Same Postmark token send-booking-confirmation / send-booking-confirmed-email use —
+// project-wide secret, already configured for those.
+const POSTMARK_API_TOKEN = Deno.env.get("POSTMARK_API_TOKEN") || "";
+const SITE_URL = "https://equipatterns.com";
+
+const escapeHtml = (value: unknown): string =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const money = (n: unknown): string => `$${(Number(n) || 0).toFixed(2)}`;
 
 async function verifyStripeSignature(
   payload: string,
@@ -94,6 +108,164 @@ async function markStallBookingPaid(
     );
   }
   console.log(`Booking ${bookingId} payment recorded (+$${paidDollars})`, data);
+}
+
+// "Payment Received" — separate from send-booking-confirmation (fires the
+// moment the exhibitor submits, whether or not they've paid yet) and
+// send-booking-confirmed-email (fires when the organizer manually reviews and
+// confirms). This one tells them the MONEY actually landed, with what was
+// just charged, what they've paid in total, and any balance still open (a
+// partial "pay the difference" payment). Best-effort: logged, never thrown —
+// a failed email must not turn into a Stripe retry of an already-recorded payment.
+async function sendPaymentReceivedEmail(
+  adminClient: any,
+  bookingId: string,
+  paidDollars: number
+): Promise<void> {
+  if (!POSTMARK_API_TOKEN) {
+    console.error("POSTMARK_API_TOKEN not set — skipping payment-received email");
+    return;
+  }
+  try {
+    const { data, error } = await adminClient.rpc("get_public_booking", { p_booking_id: bookingId });
+    if (error || !data?.booking) {
+      console.error("get_public_booking failed for payment email:", error);
+      return;
+    }
+
+    const booking = data.booking;
+    const recipientEmail = booking.email;
+    if (!recipientEmail) {
+      console.log(`Booking ${bookingId} has no email on file — skipping payment-received email`);
+      return;
+    }
+
+    const showName = data.show?.name || "the show";
+    const shortRef = String(bookingId).slice(0, 8).toUpperCase();
+    const total = Number(booking.liveTotal ?? booking.totalAmount ?? booking.amount ?? 0);
+    const totalPaid = Number(booking.paidAmount) || 0;
+    const balanceDue = Number(booking.balanceDue ?? Math.max(0, total - totalPaid));
+    const bookingUrl = `${SITE_URL}/booking/${bookingId}`;
+
+    const response = await fetch("https://api.postmarkapp.com/email", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Postmark-Server-Token": POSTMARK_API_TOKEN,
+      },
+      body: JSON.stringify({
+        From: "EquiPatterns <Info@equipatterns.com>",
+        To: recipientEmail,
+        Subject: `Payment Received — ${showName} (#${shortRef})`,
+        HtmlBody: `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; background-color: #eef2f7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #eef2f7; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 12px; max-width: 600px; overflow: hidden; box-shadow: 0 1px 3px rgba(16,24,40,0.08);">
+
+          <tr>
+            <td bgcolor="#0d9488" style="background-color: #0d9488; background-image: linear-gradient(135deg, #0f766e, #14b8a6); padding: 36px 30px; text-align: center;">
+              <p style="margin: 0 0 6px; color: #99f6e4; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; font-weight: 600;">EquiPatterns</p>
+              <h1 style="margin: 0; font-size: 26px; line-height: 34px; font-weight: 700; color: #ffffff;">Payment Received!</h1>
+              <p style="margin: 10px 0 0; color: #ccfbf1; font-size: 16px;">${escapeHtml(showName)}</p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 30px 30px 8px;">
+              <p style="color: #374151; font-size: 16px; line-height: 26px; margin: 0 0 16px;">
+                Hi ${escapeHtml(booking.exhibitorName || "there")}, thanks — we've received your payment of
+                <strong>${money(paidDollars)}</strong> for ${escapeHtml(showName)}.
+              </p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f0fdfa; border-left: 4px solid #0d9488; border-radius: 6px; margin: 0 0 20px;">
+                <tr>
+                  <td style="padding: 14px 16px;">
+                    <p style="margin: 0 0 2px; color: #115e59; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">Reservation Number</p>
+                    <p style="margin: 0; color: #111827; font-size: 22px; font-weight: 700; letter-spacing: 1px;">${escapeHtml(shortRef)}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 0 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1;"><p style="margin: 0; color: #6b7280; font-size: 14px;">Total paid to date</p></td>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1; text-align: right;"><p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">${money(totalPaid)}</p></td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0;"><p style="margin: 0; color: #111827; font-size: 16px; font-weight: 700;">${balanceDue > 0 ? "Balance still due" : "Status"}</p></td>
+                  <td style="padding: 8px 0; text-align: right;">
+                    <p style="margin: 0; font-size: 16px; font-weight: 700; color: ${balanceDue > 0 ? "#b45309" : "#0d9488"};">
+                      ${balanceDue > 0 ? money(balanceDue) : "Paid in full"}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 26px 30px 8px;">
+              <table role="presentation" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td bgcolor="#0d9488" style="border-radius: 8px;">
+                    <a href="${bookingUrl}"
+                       style="display: inline-block; padding: 15px 34px; color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; border-radius: 8px;">
+                      View Your Reservation
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 8px 30px 30px;">
+              <p style="color: #6b7280; font-size: 13px; line-height: 20px; margin: 0; text-align: center;">
+                You can look this reservation up any time at ${SITE_URL}/find-booking using this email or reservation number.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td bgcolor="#111827" style="background-color: #111827; color: #9ca3af; padding: 22px 30px; text-align: center; font-size: 12px; line-height: 20px;">
+              <p style="margin: 0 0 6px;">
+                <a href="${SITE_URL}" style="color: #93c5fd; text-decoration: none; font-weight: 600;">EquiPatterns.com</a>
+              </p>
+              <p style="margin: 0;">&copy; ${new Date().getFullYear()} EquiPatterns. All rights reserved.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
+        MessageStream: "outbound",
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Postmark error sending payment-received email:", await response.text());
+      return;
+    }
+    const result = await response.json();
+    console.log("Payment-received email sent:", result.MessageID, "to", recipientEmail);
+  } catch (err: any) {
+    console.error("Error sending payment-received email:", err.message);
+  }
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -188,6 +360,7 @@ serve(async (req: Request): Promise<Response> => {
             session.metadata.bookingId,
             paidDollars
           );
+          await sendPaymentReceivedEmail(adminClient, session.metadata.bookingId, paidDollars);
           break;
         }
 
@@ -376,6 +549,7 @@ serve(async (req: Request): Promise<Response> => {
             invoice.metadata.bookingId,
             paidDollars
           );
+          await sendPaymentReceivedEmail(adminClient, invoice.metadata.bookingId, paidDollars);
         }
         break;
       }

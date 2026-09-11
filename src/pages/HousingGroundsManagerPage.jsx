@@ -44,6 +44,7 @@ const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { unassignBookingRvSpots } from '@/lib/rvAssignment';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
+import { getBookingDisplayStatus } from '@/lib/bookingPricing';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import {
@@ -430,6 +431,7 @@ const BOOKING_STATUSES = ['confirmed', 'pending', 'cancelled', 'checked_in', 'ch
 const STATUS_COLORS = {
     confirmed: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
     pending: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+    paid: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300',
     cancelled: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
     checked_in: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
     checked_out: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300',
@@ -1954,8 +1956,8 @@ const BookingRow = ({
                     </Select>
                 ) : (
                     <div className="h-7 flex items-center">
-                        <Badge className={cn('text-[10px] capitalize', STATUS_COLORS[booking.status || 'pending'])}>
-                            {(booking.status || 'pending').replace('_', ' ')}
+                        <Badge className={cn('text-[10px] capitalize', STATUS_COLORS[getBookingDisplayStatus(booking)])}>
+                            {getBookingDisplayStatus(booking).replace('_', ' ')}
                         </Badge>
                     </div>
                 )}
@@ -2113,6 +2115,9 @@ const BookingRow = ({
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
                     <span>Payment: <span className="capitalize font-medium text-foreground">{(booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
                     <span>Paid: <span className="font-medium text-foreground">{fmtMoney(paidAmount)}</span> of {fmtMoney(bookingTotal)}</span>
+                    {booking.paidAt && (
+                        <span>Paid on: <span className="font-medium text-foreground">{fmtOrderedAt(booking.paidAt)}</span></span>
+                    )}
                     {balanceDue > 0 && (
                         <span className="font-semibold text-amber-600">Balance due: {fmtMoney(balanceDue)}</span>
                     )}
@@ -4149,6 +4154,20 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 <p className="text-[11px] text-muted-foreground">
                                     Online card payment (Stripe) is wired up in a later step — this setting decides which flow the public booking page will use.
                                 </p>
+                                {/* Platform commission disclosure — same fact stated at payout setup
+                                    (see payoutSetupOpen dialog below), repeated here since this is
+                                    where an organizer reviewing billing will actually look for it. */}
+                                {payoutsEnabled ? (
+                                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                                        <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                        Payouts connected — you keep 95% of each online payment; EquiPatterns retains a 5% platform fee.
+                                    </p>
+                                ) : (
+                                    <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                                        Online payments need a connected payout account first. EquiPatterns retains a 5% platform fee from each payment — you receive the other 95%, deposited by Stripe.{' '}
+                                        <button type="button" onClick={() => setPayoutSetupOpen(true)} className="underline font-medium">Set up payouts</button>
+                                    </p>
+                                )}
                             </div>
 
                             {/* Stall Fees — every charge on a stall booking. Pick which barns a fee
@@ -5174,7 +5193,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 onClose={() => setPayoutSetupOpen(false)}
                 onConfirm={startPayoutOnboarding}
                 title="Set up payouts before publishing"
-                description="Before this show can go live for booking, connect a bank account so exhibitor payments can reach you. You'll be taken to Stripe to finish a short setup — takes a few minutes."
+                description="Before this show can go live for booking, connect a bank account so exhibitor payments can reach you. EquiPatterns keeps a 5% platform fee from each online stall/RV payment — the other 95% is deposited to this account by Stripe. You'll be taken to Stripe to finish a short setup — takes a few minutes."
                 confirmText={payoutSetupLoading ? 'Opening Stripe…' : 'Set Up Payouts'}
                 cancelText="Not yet"
             />

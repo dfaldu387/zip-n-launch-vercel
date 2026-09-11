@@ -17,11 +17,13 @@ import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { cn } from '@/lib/utils';
 import { startStallCheckout } from '@/lib/housingCheckout';
+import { getBookingDisplayStatus } from '@/lib/bookingPricing';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
 const STATUS_META = {
     pending:     { label: 'Pending',     color: 'bg-amber-500',   icon: Clock,         note: 'Waiting for the show organizer to confirm. Save this page or your booking ID.' },
+    paid:        { label: 'Paid',        color: 'bg-teal-500',    icon: CheckCircle2,  note: 'Payment received in full. The show organizer will confirm your stall assignment soon.' },
     confirmed:   { label: 'Confirmed',   color: 'bg-blue-500',    icon: CheckCircle2,  note: 'You\'re all set! See you at the show. Bring this page (or your booking ID) at check-in.' },
     checked_in:  { label: 'Checked In',  color: 'bg-emerald-500', icon: LogIn,         note: 'Welcome! You\'re checked in. Find your stalls below.' },
     checked_out: { label: 'Checked Out', color: 'bg-slate-500',   icon: LogOut,        note: 'Thanks for joining us! Come back for the next show.' },
@@ -130,7 +132,7 @@ const BookingStatusPage = () => {
 
     const { booking, assignedStalls = [], assignedRvSpots = [], show } = data;
     const liveTotal = Number(booking.liveTotal ?? booking.totalAmount ?? booking.amount ?? 0);
-    const meta = STATUS_META[booking.status] || STATUS_META.pending;
+    const meta = STATUS_META[getBookingDisplayStatus(booking)] || STATUS_META.pending;
     const StatusIcon = meta.icon;
     const shortRef = String(booking.id || '').slice(0, 8).toUpperCase();
     const horseList = booking.horseNames?.length
@@ -356,6 +358,9 @@ const BookingStatusPage = () => {
                                                     <span>Payment: <Badge variant="outline" className="capitalize">{booking.paymentStatus.replace('_', ' ')}</Badge></span>
                                                 )}
                                                 <span>Paid: <span className="font-medium text-foreground">{money(paid)}</span> of {money(total)}</span>
+                                                {booking.paidAt && (
+                                                    <span>on <span className="font-medium text-foreground">{format(parseISO(booking.paidAt), 'MMM d, yyyy h:mm a')}</span></span>
+                                                )}
                                             </div>
                                             {balanceDue > 0 ? (
                                                 <div className="rounded-lg border border-amber-400 bg-amber-500/10 p-3 space-y-2">

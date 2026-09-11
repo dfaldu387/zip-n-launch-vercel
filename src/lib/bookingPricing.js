@@ -209,3 +209,22 @@ export function computeBookingTotal(booking, assignedStalls = [], extraStallFees
     return buildLineItems(booking || {}, assignedStalls, extraStallFees)
         .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
 }
+
+/**
+ * The status label to SHOW for a booking, layered on top of its stored
+ * lifecycle status (pending/confirmed/checked_in/cancelled — set by the
+ * organizer confirming/checking in, and still what drives occupancy counts
+ * and the "booking confirmed" email). A booking sitting at the default
+ * 'pending' with money already collected reads as "Paid" instead — "pending"
+ * is only meaningful pre-payment (e.g. Invoice-after-confirmation, before the
+ * organizer has confirmed and invoiced it). Never write this back to
+ * booking.status; it's a display-only overlay.
+ *
+ * @param {object} booking  Booking object (status, paymentStatus)
+ * @returns {string} one of 'paid' | booking.status | 'pending'
+ */
+export function getBookingDisplayStatus(booking) {
+    const status = booking?.status || 'pending';
+    if (status === 'pending' && booking?.paymentStatus === 'paid') return 'paid';
+    return status;
+}

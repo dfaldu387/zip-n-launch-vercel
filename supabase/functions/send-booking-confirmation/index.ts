@@ -82,6 +82,21 @@ const handler = async (req: Request): Promise<Response> => {
     const total = Number(booking.liveTotal ?? booking.totalAmount ?? booking.amount ?? 0);
     const bookingUrl = `${SITE_URL}/booking/${bookingId}`;
 
+    // Bill-at-booking sends the exhibitor straight to Stripe right after this
+    // email fires — but that redirect can fail or get abandoned, so we still
+    // send this immediately as a safety net (a reference number to come back
+    // to). It must not say "Confirmed" before they've actually paid, though —
+    // that's what the separate "Payment Received" email (sent by the Stripe
+    // webhook) is for. Invoice-after-confirmation shows never expect payment
+    // this early, so "Confirmed" stays accurate for them. (2026-09-11 decision)
+    const billingMode = data.show?.billingMode || "invoice_after";
+    const balanceDue = Number(booking.balanceDue ?? Math.max(0, total - (Number(booking.paidAmount) || 0)));
+    const awaitingPayment = billingMode === "at_booking" && balanceDue > 0;
+    const headline = awaitingPayment ? "Reservation Received" : "Reservation Confirmed!";
+    const introText = awaitingPayment
+      ? `Hi ${escapeHtml(booking.exhibitorName || "there")}, we've received your reservation request for ${escapeHtml(showName)}. Complete your payment to secure your spot — keep this email, it has your reservation number.`
+      : `Hi ${escapeHtml(booking.exhibitorName || "there")}, thanks for reserving with ${escapeHtml(showName)}. Keep this email — it has your reservation number.`;
+
     const itemRows = items.map((item) => `
       <tr>
         <td style="padding: 10px 0; border-bottom: 1px solid #e6ebf1;">
@@ -103,7 +118,7 @@ const handler = async (req: Request): Promise<Response> => {
       body: JSON.stringify({
         From: "EquiPatterns <Info@equipatterns.com>",
         To: recipientEmail,
-        Subject: `Reservation Confirmed — ${showName} (#${shortRef})`,
+        Subject: `${awaitingPayment ? "Reservation Received" : "Reservation Confirmed"} — ${showName} (#${shortRef})`,
         HtmlBody: `
 <!DOCTYPE html>
 <html>
@@ -120,7 +135,7 @@ const handler = async (req: Request): Promise<Response> => {
           <tr>
             <td bgcolor="#2563eb" style="background-color: #2563eb; background-image: linear-gradient(135deg, #1d4ed8, #3b82f6); padding: 36px 30px; text-align: center;">
               <p style="margin: 0 0 6px; color: #bfdbfe; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; font-weight: 600;">EquiPatterns</p>
-              <h1 style="margin: 0; font-size: 26px; line-height: 34px; font-weight: 700; color: #ffffff;">Reservation Confirmed!</h1>
+              <h1 style="margin: 0; font-size: 26px; line-height: 34px; font-weight: 700; color: #ffffff;">${headline}</h1>
               <p style="margin: 10px 0 0; color: #dbeafe; font-size: 16px;">${escapeHtml(showName)}</p>
             </td>
           </tr>
@@ -128,7 +143,7 @@ const handler = async (req: Request): Promise<Response> => {
           <tr>
             <td style="padding: 30px 30px 8px;">
               <p style="color: #374151; font-size: 16px; line-height: 26px; margin: 0 0 16px;">
-                Hi ${escapeHtml(booking.exhibitorName || "there")}, thanks for reserving with ${escapeHtml(showName)}. Keep this email — it has your reservation number.
+                ${introText}
               </p>
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #eff6ff; border-left: 4px solid #2563eb; border-radius: 6px; margin: 0 0 20px;">
                 <tr>
