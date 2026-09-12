@@ -51,9 +51,10 @@ const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack'
 
 function buildStallingChartHtml({
     barns = [], rvAreas = [], bookings = [], supplies = [],
-    layer = 'number', showName = 'Show', facility = '', dateRange = '',
+    layer = ['number'], showName = 'Show', facility = '', dateRange = '',
     perBarnPages = false,
 }, autoPrint = false) {
+    const layerIds = Array.isArray(layer) ? layer : [layer];
     // Stable color per booking that owns stalls (same order the board uses).
     const active = (bookings || []).filter(b => b && b.status !== 'cancelled');
     const stallBookings = active.filter(b => b.orderType !== 'live-supply');
@@ -76,9 +77,9 @@ function buildStallingChartHtml({
     const groupIdByBooking = {};
     stallBookings.forEach(b => { const n = groupNameOf(b); if (n) groupIdByBooking[b.id] = n.toLowerCase(); });
 
-    // The numbers/names a layer writes inside each box.
+    // The numbers/names the checked fields write inside each box.
     const index = buildLayerIndex({ bookings, barns, supplies });
-    const layerInfo = layerById(layer);
+    const layerLabel = layerIds.map(id => layerById(id).label).join(' + ');
 
     // Inset box-shadow drawing the group outline only on the boundary sides, in the
     // group's own colour so two touching blocks never look like one. The 1px border
@@ -111,7 +112,7 @@ function buildStallingChartHtml({
         if (!owner) return `<div class="cell free"><span class="num">${esc(unit.number)}</span></div>`;
 
         const base = colorByBooking[owner.id] || '#2563eb';
-        const info = useLayer ? layerCell(layer, { unit, index }) : { text: unit.number, sub: '', tone: 'booked' };
+        const info = useLayer ? layerCell(layerIds, { unit, index }) : { lines: [], num: '', tone: 'booked' };
         // Match the on-screen board: fill the box with the owner's colour and print the
         // name in white so the chart reads the same everywhere. Pre-bedded stalls are
         // amber; a stall with nothing to show on this layer fades to a light wash of the
@@ -119,15 +120,18 @@ function buildStallingChartHtml({
         const warm = info.tone === 'warm';
         const pale = info.tone === 'muted';
         const fill = warm ? '#f59e0b' : pale ? withAlpha(base, '55') : base;
-        const main = esc(info.text || unit.number);
-        // Hierarchy for the Trainer/Group layer: group name (main), exhibitor, then
-        // stall number last — matches the on-screen board.
-        const subExhibitor = info.subExhibitor ? `<span class="num3">${esc(info.subExhibitor)}</span>` : '';
-        const sub = info.sub && info.sub !== info.text ? `<span class="num2">${esc(info.sub)}</span>` : '';
+        const firstLine = info.lines?.[0];
+        const main = esc(firstLine ? firstLine.text : (info.num || unit.number));
+        // Hierarchy: main field, exhibitor sub-line (Trainer layer), any further checked
+        // fields stacked below, then the stall number last — matches the on-screen board.
+        const subExhibitor = firstLine?.subExhibitor ? `<span class="num3">${esc(firstLine.subExhibitor)}</span>` : '';
+        const extraLines = (info.lines || []).slice(1).map(l => `<span class="num3">${esc(l.text)}</span>`).join('');
+        const sub = info.num ? `<span class="num2">${esc(info.num)}</span>` : '';
         const cls = `cell taken${pale ? ' pale' : ''}`;
         return `<div class="${cls}" style="background:${fill};border-color:${fill};${outline}">
             <span class="name">${main}</span>
             ${subExhibitor}
+            ${extraLines}
             ${sub}
         </div>`;
     };
@@ -216,9 +220,9 @@ function buildStallingChartHtml({
         .join('');
 
     const subtitle = [facility, dateRange].filter(Boolean).map(esc).join(' · ');
-    const note = layerLegend(layer);
+    const note = layerLegend(layerIds);
 
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(showName)} — Stalling Chart (${esc(layerInfo.label)})</title>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(showName)} — Stalling Chart (${esc(layerLabel)})</title>
     <style>
         *{box-sizing:border-box}
         body{font-family:system-ui,Arial,sans-serif;color:#111;padding:24px;margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -264,7 +268,7 @@ function buildStallingChartHtml({
             <div class="head-left">
                 <h1>${esc(showName)} — Stalling Chart</h1>
                 ${subtitle ? `<p class="sub">${subtitle}</p>` : ''}
-                <div class="layer">Showing: ${esc(layerInfo.label)}</div>
+                <div class="layer">Showing: ${esc(layerLabel)}</div>
                 ${note ? `<p class="note">${esc(note)}</p>` : ''}
             </div>
             ${venueLabel}

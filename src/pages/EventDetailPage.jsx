@@ -1222,6 +1222,15 @@ const EventDetailPage = () => {
                       </Link>
                     </Button>
                   )}
+                  {/* Stalling Chart — only when the organizer has published it (Assign
+                      Stalls tab → Publish Chart). */}
+                  {event.isFromProjects && projectData?.stallingService?.chartPublish?.enabled && (
+                    <Button asChild variant="outline" className="w-full">
+                      <Link to={`/show/${event.id}/stalling-chart`}>
+                        <MapPin className="h-4 w-4 mr-2" /> View Stalling Chart
+                      </Link>
+                    </Button>
+                  )}
                   {/* Order Hay & Shavings — live at-show reorder. Shows when housing is
                       published AND the organizer stocks supplies (hay/shavings/etc). */}
                   {event.isFromProjects &&

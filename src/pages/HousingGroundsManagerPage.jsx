@@ -43,6 +43,7 @@ import AssignBoard from '@/components/housing/AssignBoard';
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { unassignBookingRvSpots } from '@/lib/rvAssignment';
+import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
 import { sendStallInvoice } from '@/lib/housingCheckout';
@@ -2463,6 +2464,41 @@ const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive,
     );
 };
 
+// Hay/shavings bought ahead of the show (pre-bedding or a plain pre-show
+// order) — a barn crew still has to physically deliver these, same as an
+// at-show reorder, just without the live-polling/refresh chrome since it's
+// derived straight from local booking state.
+const PreShowDeliveryPanel = ({ orders, onFulfill, showName }) => {
+    const pending = orders.filter(o => !isDelivered(o));
+    const done = orders.filter(o => isDelivered(o));
+
+    if (orders.length === 0) {
+        return (
+            <Card>
+                <CardContent className="py-10 text-center">
+                    <Package className="h-9 w-9 mx-auto text-muted-foreground mb-3" />
+                    <p className="text-muted-foreground">No pre-show hay or shavings to deliver yet.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                        Exhibitors who ordered hay or shavings ahead of the show — pre-bedded or not — show up here.
+                    </p>
+                </CardContent>
+            </Card>
+        );
+    }
+
+    return (
+        <div className="space-y-2">
+            {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
+            {done.length > 0 && (
+                <>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
+                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
+                </>
+            )}
+        </div>
+    );
+};
+
 // Old shows priced each barn directly (barn.pricePerNight, typed on a Stall Fees
 // row that WAS the barn) — sometimes WITH an all-barns Per-Night "extra" fee
 // already stacked on top of it (that stacking is the whole point of the new
@@ -2839,6 +2875,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // Read by the public booking flow (pay now vs request) and by invoicing.
     const [billingMode, setBillingMode] = useState(() => pd.stallingService?.billingMode || 'invoice_after');
     const [invoicingId, setInvoicingId] = useState(null); // booking currently being emailed a Stripe invoice
+
+    // What the public Event page shows of the stalling chart — a separate, deliberately
+    // narrower choice than the internal layers above (see stallLayers.PUBLIC_LAYER_IDS).
+    const [chartPublish, setChartPublish] = useState(() => pd.stallingService?.chartPublish || {
+        enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true,
+    });
 
     // Two-way sync: fees typed on the Fee Structure page (source !== 'housing') are
     // carried here so they show + can be edited from Housing too. Non-housing-category
@@ -3312,6 +3354,36 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         [bookings]
     );
 
+    // Hay/shavings bought ahead of the show (as part of the original stall
+    // booking — pre-bedding or not) — a separate delivery checklist from the
+    // at-show reorders above. Reuses the same card + email pipeline
+    // (fulfillmentStatus / stageTimestamps / send-supply-order-email), just fed
+    // from the stall booking's own items instead of a live-supply order.
+    const preShowDeliveryOrders = useMemo(() => {
+        return stallBookings
+            .filter(b => b && b.status !== 'cancelled')
+            .map(b => {
+                const items = beddingItemsOf(b, supplies);
+                if (!items.length) return null;
+                const stallNumber = getAssignedStallsForBooking(b, barns).map(s => s.number).filter(Boolean).join(', ');
+                return {
+                    id: b.id,
+                    exhibitorName: b.exhibitorName,
+                    email: b.email,
+                    phone: b.phone,
+                    trainerName: b.trainerName,
+                    stallNumber,
+                    createdAt: b.createdAt,
+                    fulfillmentStatus: b.fulfillmentStatus || 'new',
+                    stageTimestamps: b.stageTimestamps || {},
+                    items,
+                    totalAmount: items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0),
+                };
+            })
+            .filter(Boolean)
+            .sort((a, b) => (a.exhibitorName || '').localeCompare(b.exhibitorName || ''));
+    }, [stallBookings, barns, supplies]);
+
     const filteredBookings = useMemo(() => {
         if (!searchTerm.trim()) return stallBookings;
         const q = searchTerm.toLowerCase();
@@ -3774,10 +3846,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [bookings, barns, extraStallFees, rvAreas, extraRvFees, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode }, opts);
+        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
+    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish]);
 
     const handleSave = () => persist();
 
@@ -3791,7 +3863,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode]);
+    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish]);
 
     // KPI row at the top of the dashboard — the cards shown change with whichever
     // section is picked in the dropdown, so each section highlights numbers that
@@ -3842,11 +3914,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     { label: 'Occupancy', value: `${occupancyRate}%` },
                 ];
             case 'supplyorders': {
-                const delivered = liveSupplyOrders.filter(isDelivered).length;
+                const liveDelivered = liveSupplyOrders.filter(isDelivered).length;
+                const preShowDelivered = preShowDeliveryOrders.filter(isDelivered).length;
                 return [
-                    { label: 'Live Orders', value: liveSupplyOrders.length },
-                    { label: 'Delivered', value: delivered },
-                    { label: 'Pending', value: liveSupplyOrders.length - delivered },
+                    { label: 'Pre-Show Orders', value: preShowDeliveryOrders.length },
+                    { label: 'At-Show Orders', value: liveSupplyOrders.length },
+                    { label: 'Delivered', value: liveDelivered + preShowDelivered },
+                    { label: 'Pending', value: (liveSupplyOrders.length - liveDelivered) + (preShowDeliveryOrders.length - preShowDelivered) },
                 ];
             }
             case 'masterlist': {
@@ -3879,7 +3953,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [
         activeSection, totalStalls, totalRvSpots, supportSpaces, supplies, barns, rvAreas,
         extraStallFees, projectedRevenue, showNights, stallBookings, confirmedOnly, checkedInOnly,
-        occupancyRate, liveSupplyOrders, occupiedStalls, occupiedRvSpots,
+        occupancyRate, liveSupplyOrders, preShowDeliveryOrders, occupiedStalls, occupiedRvSpots,
     ]);
 
     return (
@@ -3917,7 +3991,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         <SelectItem value="fees">Fees</SelectItem>
                         <SelectItem value="pricing">Pricing Summary</SelectItem>
                         <SelectItem value="bookings">Bookings ({stallBookings.length})</SelectItem>
-                        <SelectItem value="supplyorders">Hay &amp; Shavings ({liveSupplyOrders.length})</SelectItem>
+                        <SelectItem value="supplyorders">Hay &amp; Shavings ({preShowDeliveryOrders.length + liveSupplyOrders.length})</SelectItem>
                         <SelectItem value="masterlist">Master List</SelectItem>
                         <SelectItem value="assign">Assign Stalls</SelectItem>
                         <SelectItem value="analytics">Analytics</SelectItem>
@@ -4480,16 +4554,34 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     )}
                 </TabsContent>
 
-                {/* ── Hay & Shavings Orders Tab (live at-show reorders) ── */}
-                <TabsContent value="supplyorders" className="space-y-4 mt-4">
-                    <SupplyOrdersPanel
-                        orders={liveSupplyOrders}
-                        onFulfill={onUpdateBookingFields}
-                        onRefresh={() => refreshLiveOrders({ silent: false })}
-                        isRefreshing={isRefreshingOrders}
-                        isLive={publishStatus === 'published'}
-                        showName={show.project_name}
-                    />
+                {/* ── Hay & Shavings Orders Tab (pre-show delivery + live at-show reorders) ── */}
+                <TabsContent value="supplyorders" className="space-y-6 mt-4">
+                    <div className="space-y-2">
+                        <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                            <Package className="h-4 w-4" /> Pre-Show Delivery
+                        </h3>
+                        <p className="text-xs text-muted-foreground -mt-1">
+                            Hay &amp; shavings ordered ahead of the show — pre-bedded or not.
+                        </p>
+                        <PreShowDeliveryPanel
+                            orders={preShowDeliveryOrders}
+                            onFulfill={onUpdateBookingFields}
+                            showName={show.project_name}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                            <Truck className="h-4 w-4" /> At-Show Reorders
+                        </h3>
+                        <SupplyOrdersPanel
+                            orders={liveSupplyOrders}
+                            onFulfill={onUpdateBookingFields}
+                            onRefresh={() => refreshLiveOrders({ silent: false })}
+                            isRefreshing={isRefreshingOrders}
+                            isLive={publishStatus === 'published'}
+                            showName={show.project_name}
+                        />
+                    </div>
                 </TabsContent>
 
                 {/* ── Master List Tab (Phase 1: spreadsheet-style roster) ── */}
@@ -4522,6 +4614,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         onSetBookingGroup={async (bookingId, groupName) => {
                             setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, stallGroup: groupName } : b));
                             if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, { stallGroup: groupName });
+                        }}
+                        chartPublish={chartPublish}
+                        onApplyChartPublish={async (next) => {
+                            setChartPublish(next);
+                            await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish: next });
+                            setLastSavedAt(new Date());
+                            setIsDirty(false);
                         }}
                         meta={{
                             showName: show.project_name || 'Show',
@@ -5518,7 +5617,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
@@ -5541,6 +5640,7 @@ const HousingGroundsManagerPage = () => {
                     moveOutDate: moveOutDate ?? selectedShow.project_data?.stallingService?.moveOutDate ?? '',
                     datesLocked: datesLocked ?? selectedShow.project_data?.stallingService?.datesLocked ?? false,
                     billingMode: billingMode ?? selectedShow.project_data?.stallingService?.billingMode ?? 'invoice_after',
+                    chartPublish: chartPublish ?? selectedShow.project_data?.stallingService?.chartPublish ?? { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true },
                 },
                 fees: [...manualFees, ...housingFees],
             }, 'housing');

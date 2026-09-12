@@ -4,9 +4,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuLabel, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
     assignStallToBooking, unassignStall, applyPlanToBarns,
@@ -18,7 +22,7 @@ import {
 import { printStallingChartPdf, downloadStallingChartPdf } from '@/lib/stallingChartPrint';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { gridCols, computeGridLabels, labelValue, renumberStalls } from '@/lib/barnGrid';
-import { STALL_LAYERS, buildLayerIndex, layerCell, layerLegend } from '@/lib/stallLayers';
+import { STALL_LAYERS, PUBLIC_LAYER_IDS, buildLayerIndex, layerCell, layerLegend, layerById } from '@/lib/stallLayers';
 
 // ── Assignment Board (Stalls AND RV) ──
 // One screen with the booking list on the left and the chart on the right.
@@ -269,21 +273,30 @@ const UnitCell = ({
                 </span>
             )}
             <span className={cn('px-0.5 text-center leading-tight truncate max-w-full', showGroupTag && 'mt-1.5')}>
-                {cellText ? cellText.text : unit.number}
+                {cellText?.lines?.length ? cellText.lines[0].text : (cellText?.num ?? unit.number)}
             </span>
             {/* Hierarchy for the Trainer/Group layer: group name above (the main line),
                 exhibitor here, stall number last — skipped in the smallest box size. */}
-            {cellText?.subExhibitor && size !== 'sm' && (
-                <span className={cn(S.sub, 'opacity-90 leading-none truncate max-w-full')}>{cellText.subExhibitor}</span>
+            {cellText?.lines?.[0]?.subExhibitor && size !== 'sm' && (
+                <span className={cn(S.sub, 'opacity-90 leading-none truncate max-w-full')}>{cellText.lines[0].subExhibitor}</span>
             )}
-            {cellText?.sub && (
-                <span className={cn(S.sub, 'opacity-70 leading-none')}>{cellText.sub}</span>
+            {/* Any further checked fields stack below (e.g. Trainer + Horses + Shavings together). */}
+            {size !== 'sm' && cellText?.lines?.slice(1).map((l, i) => (
+                <span key={i} className={cn(S.sub, 'opacity-90 leading-none truncate max-w-full')}>{l.text}</span>
+            ))}
+            {!!cellText?.lines?.length && !!cellText?.num && (
+                <span className={cn(S.sub, 'opacity-70 leading-none')}>{cellText.num}</span>
             )}
         </div>
     );
 };
 
-const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], onApplyBarns, onApplyRvAreas, onSetBookingGroup, meta = {} }) => {
+const DEFAULT_CHART_PUBLISH = { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true };
+
+const AssignBoard = ({
+    bookings = [], barns = [], rvAreas = [], supplies = [], onApplyBarns, onApplyRvAreas, onSetBookingGroup, meta = {},
+    chartPublish, onApplyChartPublish,
+}) => {
     const { toast } = useToast();
     const [mode, setMode] = useState('stalls'); // 'stalls' | 'rv'
     const [selectedBookingId, setSelectedBookingId] = useState(null);
@@ -296,10 +309,15 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
     const [size, setSize] = useState('md');
     const [fit, setFit] = useState(false);
     const [railOpen, setRailOpen] = useState(true);
-    const [layer, setLayer] = useState('number');
+    const [layers, setLayers] = useState(['number']); // checked fields shown inside each stall box (on-screen + print)
+    const toggleLayer = (id) => setLayers(prev => {
+        const next = prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id];
+        return next.length ? next : prev; // at least one field must stay checked
+    });
     const [isDownloadingChart, setIsDownloadingChart] = useState(false);
     const [isPrintingChart, setIsPrintingChart] = useState(false);
     const [perBarnPages, setPerBarnPages] = useState(true); // print/download each barn on its own page
+    const [publishDialogOpen, setPublishDialogOpen] = useState(false);
     const [removal, setRemoval] = useState(null); // pending stall/spot removal awaiting confirmation
     const [collapsedBarns, setCollapsedBarns] = useState(() => new Set()); // barn/RV-area ids hidden, so a show with many barns doesn't force scrolling past ones you're not touching
     const toggleBarnCollapsed = (id) => setCollapsedBarns(prev => {
@@ -736,17 +754,31 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                     </Button>
                     <ModeToggle />
                     {mode === 'stalls' && (
-                        <div className="flex items-center gap-1.5">
-                            <Layers className="h-3.5 w-3.5 text-primary shrink-0" />
-                            <Select value={layer} onValueChange={setLayer}>
-                                <SelectTrigger className="h-8 text-xs w-[150px]"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    {STALL_LAYERS.map(l => (
-                                        <SelectItem key={l.id} value={l.id} className="text-xs" title={l.hint}>{l.label}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5">
+                                    <Layers className="h-3.5 w-3.5 text-primary shrink-0" />
+                                    {layers.length === 1 ? layerById(layers[0]).label : `${layers.length} fields shown`}
+                                    <ChevronDown className="h-3 w-3 opacity-60" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="w-56">
+                                <DropdownMenuLabel className="text-xs">What each stall shows</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                {STALL_LAYERS.map(l => (
+                                    <DropdownMenuCheckboxItem
+                                        key={l.id}
+                                        checked={layers.includes(l.id)}
+                                        onCheckedChange={() => toggleLayer(l.id)}
+                                        onSelect={(e) => e.preventDefault()}
+                                        className="text-xs"
+                                        title={l.hint}
+                                    >
+                                        {l.label}
+                                    </DropdownMenuCheckboxItem>
+                                ))}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                     )}
                 </div>
                 <div className="flex items-center gap-1">
@@ -774,7 +806,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                             try {
                                 await printStallingChartPdf({
                                     barns, rvAreas: rvWithSpots, bookings, supplies,
-                                    layer: mode === 'stalls' ? layer : 'number',
+                                    layer: mode === 'stalls' ? layers : ['number'],
                                     showName: meta.showName || 'Show',
                                     facility: meta.facility || '',
                                     dateRange: meta.dateRange || '',
@@ -795,7 +827,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                             try {
                                 const ok = await downloadStallingChartPdf({
                                     barns, rvAreas: rvWithSpots, bookings, supplies,
-                                    layer: mode === 'stalls' ? layer : 'number',
+                                    layer: mode === 'stalls' ? layers : ['number'],
                                     showName: meta.showName || 'Show',
                                     facility: meta.facility || '',
                                     dateRange: meta.dateRange || '',
@@ -810,6 +842,11 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                             ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Building…</>
                             : <><Download className="h-3.5 w-3.5 mr-1.5" /> Download PDF</>}
                     </Button>
+                    <Button variant={chartPublish?.enabled ? 'default' : 'outline'} size="sm" className="h-8 text-xs shrink-0 gap-1.5"
+                        title="Choose what shows on the public Event page"
+                        onClick={() => setPublishDialogOpen(true)}>
+                        <Globe className="h-3.5 w-3.5" /> {chartPublish?.enabled ? 'Published' : 'Publish Chart'}
+                    </Button>
                 </div>
             </div>
 
@@ -817,7 +854,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                 <MousePointerClick className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
                 <p>
                     Select a name{mode === 'stalls' ? ' (or "Assign group" for a whole trainer block)' : ''}, then click {cfg.unitWord}s to assign — or drag a name onto one. Click a filled {cfg.unitWord} to remove it.
-                    {mode === 'stalls' && layerLegend(layer) && <span className="block mt-0.5 text-muted-foreground/80">{layerLegend(layer)}</span>}
+                    {mode === 'stalls' && layerLegend(layers) && <span className="block mt-0.5 text-muted-foreground/80">{layerLegend(layers)}</span>}
                 </p>
             </div>
 
@@ -969,7 +1006,7 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                                 isStalls={mode === 'stalls'}
                                 size={size}
                                 fit={fit}
-                                layer={layer}
+                                layer={layers}
                                 layerIndex={layerIndex}
                                 Icon={cfg.Icon}
                                 bookingById={bookingById}
@@ -1033,7 +1070,91 @@ const AssignBoard = ({ bookings = [], barns = [], rvAreas = [], supplies = [], o
                 confirmText="Remove stalls"
                 cancelText="Keep it"
             />
+
+            <PublishChartDialog
+                open={publishDialogOpen}
+                onOpenChange={setPublishDialogOpen}
+                value={chartPublish || DEFAULT_CHART_PUBLISH}
+                onSave={onApplyChartPublish}
+            />
         </DndContext>
+    );
+};
+
+// What shows up on the public Event page — deliberately a SEPARATE choice from the
+// internal on-screen/print layers above, and limited to fields safe for anyone to
+// see (no horse counts, shavings or pre-bedding, which stay admin-only).
+const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
+    const { toast } = useToast();
+    const [draft, setDraft] = useState(value);
+    const [saving, setSaving] = useState(false);
+    React.useEffect(() => { if (open) setDraft(value); }, [open, value]);
+
+    const toggle = (id) => setDraft(d => {
+        const next = d.layers.includes(id) ? d.layers.filter(l => l !== id) : [...d.layers, id];
+        return { ...d, layers: next.length ? next : d.layers };
+    });
+
+    const save = async () => {
+        setSaving(true);
+        try {
+            await onSave?.(draft);
+            toast({
+                title: draft.enabled ? 'Chart published' : 'Chart unpublished',
+                description: draft.enabled
+                    ? 'The stalling chart is now visible on the public Event page.'
+                    : 'The stalling chart is hidden from the public Event page.',
+            });
+            onOpenChange(false);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-md">
+                <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2"><Globe className="h-4 w-4 text-primary" /> Publish Chart</DialogTitle>
+                    <DialogDescription>
+                        Share the stalling chart on the show's public Event page — separate from what you see here internally.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="flex items-center justify-between rounded-md border p-3">
+                    <div>
+                        <p className="text-sm font-medium">Show on the public Event page</p>
+                        <p className="text-xs text-muted-foreground">Anyone visiting the event, no login needed.</p>
+                    </div>
+                    <Switch checked={draft.enabled} onCheckedChange={(v) => setDraft(d => ({ ...d, enabled: v }))} />
+                </div>
+
+                <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">What the public can see</p>
+                    {STALL_LAYERS.filter(l => PUBLIC_LAYER_IDS.includes(l.id)).map(l => (
+                        <label key={l.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <Checkbox checked={draft.layers.includes(l.id)} onCheckedChange={() => toggle(l.id)} />
+                            {l.label}
+                        </label>
+                    ))}
+                    <p className="text-[11px] text-muted-foreground">
+                        Horses, shavings and pre-bedding stay admin-only — they never appear on the public chart.
+                    </p>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={draft.perBarnPages} onCheckedChange={(v) => setDraft(d => ({ ...d, perBarnPages: !!v }))} />
+                    Show each barn as its own section
+                </label>
+
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+                    <Button onClick={save} disabled={saving}>
+                        {saving ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</> : 'Save'}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 };
 
