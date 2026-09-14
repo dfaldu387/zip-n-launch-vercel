@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel } from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -21,7 +22,7 @@ import {
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
-    ClipboardList, Package, Truck, Undo2, ArrowUpDown,
+    ClipboardList, Package, Truck, Undo2, ArrowUpDown, BarChart3,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -46,6 +47,8 @@ import { unassignBookingRvSpots } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
+import { getBookingRef } from '@/lib/bookingRef';
+import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems } from '@/lib/supplyStatus';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import {
@@ -1810,6 +1813,12 @@ const BookingRow = ({
     // Extra stalls beyond the horse count — the number that later drives invoicing.
     const extraStalls = Math.max(assignedStalls.length - horseCount, 0);
 
+    // Hay/shavings pre-ordered with this booking, if any, and where that
+    // order sits in the same Ordered→Delivered pipeline as the Hay &
+    // Shavings tab (they share booking.fulfillmentStatus).
+    const supplyItems = useMemo(() => getSupplyLineItems(booking), [booking]);
+    const supplyStage = SUPPLY_STAGES[stageIndexOf(booking)];
+
     // Payment: what the booking currently totals, what's been paid, what's still owed.
     // A booking flagged "paid" with no explicit amount is treated as paid in full;
     // if stalls are later added, the total rises and a balance appears automatically.
@@ -1852,7 +1861,14 @@ const BookingRow = ({
                         placeholder="Exhibitor name"
                     />
                 ) : (
-                    <ReadCell muted={!booking.exhibitorName}>{booking.exhibitorName || 'No exhibitor'}</ReadCell>
+                    <div className="h-7 flex items-center gap-1.5 px-0.5 text-xs min-w-0">
+                        <span className={cn('truncate', !booking.exhibitorName && 'text-muted-foreground italic')}>
+                            {booking.exhibitorName || 'No exhibitor'}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70" title="Booking reference">
+                            #{getBookingRef(booking)}
+                        </span>
+                    </div>
                 )}
 
                 {/* Horse */}
@@ -2112,6 +2128,21 @@ const BookingRow = ({
                     </div>
                 </div>
 
+                {/* Supplies / Pre-Orders — same status pipeline as the Hay & Shavings tab */}
+                {supplyItems.length > 0 && (
+                    <div>
+                        <p className="font-medium text-muted-foreground mb-0.5">Supplies / Pre-Orders</p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {supplyItems.map((s, i) => (
+                                <Badge key={i} variant="outline" className="text-[10px] font-normal">
+                                    {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
+                                </Badge>
+                            ))}
+                            <Badge className={cn(supplyStage.color, 'text-white text-[10px]')}>{supplyStage.label}</Badge>
+                        </div>
+                    </div>
+                )}
+
                 {/* Meta */}
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
                     <span>Payment: <span className="capitalize font-medium text-foreground">{(booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
@@ -2125,6 +2156,7 @@ const BookingRow = ({
                     <span>Nights: <span className="font-medium text-foreground">{booking.nights || 0}</span></span>
                     {booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{booking.source}</span></span> : null}
                     {booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtOrderedAt(booking.createdAt)}</span></span> : null}
+                    <span>Ref: <span className="font-mono font-medium text-foreground">#{getBookingRef(booking)}</span></span>
                 </div>
             </div>
           )}
@@ -2190,25 +2222,6 @@ const fmtStageTime = (iso) => {
         return '';
     }
 };
-
-// Delivery pipeline, in order. `advanceLabel` is what the button says to move
-// INTO that stage, so stage 0 ("Ordered") has none — that's where orders land.
-const SUPPLY_STAGES = [
-    { key: 'new', label: 'Ordered', icon: ClipboardList, color: 'bg-amber-600' },
-    { key: 'received', label: 'Received', icon: Package, color: 'bg-blue-600', advanceLabel: 'Mark Received' },
-    { key: 'out_for_delivery', label: 'Out for delivery', icon: Truck, color: 'bg-violet-600', advanceLabel: 'Out for Delivery' },
-    { key: 'delivered', label: 'Delivered', icon: CheckCircle2, color: 'bg-emerald-600', advanceLabel: 'Mark Delivered' },
-];
-
-// Orders placed before the pipeline existed only knew 'new' | 'fulfilled'.
-// Treat the old 'fulfilled' as the final 'delivered' stage.
-const stageIndexOf = (order) => {
-    const raw = order.fulfillmentStatus === 'fulfilled' ? 'delivered' : order.fulfillmentStatus;
-    const i = SUPPLY_STAGES.findIndex(s => s.key === raw);
-    return i === -1 ? 0 : i;
-};
-
-const isDelivered = (order) => stageIndexOf(order) === SUPPLY_STAGES.length - 1;
 
 // Compact 4-dot progress rail with a timestamp under each reached stage.
 const StageRail = ({ order }) => {
@@ -2330,6 +2343,7 @@ const SupplyOrderCard = ({ order, onFulfill, showName }) => {
                             <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
                                 {SUPPLY_STAGES[current].label}
                             </Badge>
+                            <span className="font-mono text-[10px] text-muted-foreground/70">#{getBookingRef(order)}</span>
                         </div>
                         <p className="font-semibold">{order.exhibitorName || 'Unknown'}</p>
                         <p className="text-sm text-muted-foreground">
@@ -3956,6 +3970,42 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         occupancyRate, liveSupplyOrders, preShowDeliveryOrders, occupiedStalls, occupiedRvSpots,
     ]);
 
+    // Four grouped nav categories (Robert: "barn and event setup, booking and
+    // stall management, hay/shaving and barn services, and analytics") —
+    // Charts is pulled out of Analytics into here since he wants to jump
+    // straight from Assign Stalls to the charts.
+    const SECTION_CATEGORIES = useMemo(() => [
+        {
+            id: 'setup', label: 'Barn & Event Setup', icon: Warehouse,
+            items: [
+                { value: 'inventory', label: 'Inventory' },
+                { value: 'fees', label: 'Fees' },
+                { value: 'pricing', label: 'Pricing Summary' },
+            ],
+        },
+        {
+            id: 'booking', label: 'Booking & Stall Management', icon: ClipboardList,
+            items: [
+                { value: 'bookings', label: `Bookings (${stallBookings.length})` },
+                { value: 'masterlist', label: 'Master List' },
+                { value: 'assign', label: 'Assign Stalls' },
+                { value: 'charts', label: 'Charts' },
+            ],
+        },
+        {
+            id: 'supplies', label: 'Hay, Shavings & Barn Services', icon: ShoppingCart,
+            items: [
+                { value: 'supplyorders', label: `Hay & Shavings (${preShowDeliveryOrders.length + liveSupplyOrders.length})` },
+            ],
+        },
+        {
+            id: 'analytics', label: 'Analytics', icon: BarChart3,
+            items: [
+                { value: 'analytics', label: 'Analytics' },
+            ],
+        },
+    ], [stallBookings.length, preShowDeliveryOrders.length, liveSupplyOrders.length]);
+
     return (
         <div className="space-y-6">
             {/* Read-only banner (Locked or Published) */}
@@ -3982,21 +4032,44 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             </div>
 
             {sectionSelectContainer && createPortal(
-                <Select value={activeSection} onValueChange={setActiveSection}>
-                    <SelectTrigger className="w-full sm:w-64">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="inventory">Inventory</SelectItem>
-                        <SelectItem value="fees">Fees</SelectItem>
-                        <SelectItem value="pricing">Pricing Summary</SelectItem>
-                        <SelectItem value="bookings">Bookings ({stallBookings.length})</SelectItem>
-                        <SelectItem value="supplyorders">Hay &amp; Shavings ({preShowDeliveryOrders.length + liveSupplyOrders.length})</SelectItem>
-                        <SelectItem value="masterlist">Master List</SelectItem>
-                        <SelectItem value="assign">Assign Stalls</SelectItem>
-                        <SelectItem value="analytics">Analytics</SelectItem>
-                    </SelectContent>
-                </Select>,
+                <div className="flex flex-wrap gap-2">
+                    {SECTION_CATEGORIES.map(cat => {
+                        const Icon = cat.icon;
+                        const isActiveCategory = cat.items.some(i => i.value === activeSection);
+                        const activeLabel = cat.items.find(i => i.value === activeSection)?.label;
+                        return (
+                            <DropdownMenu key={cat.id}>
+                                <DropdownMenuTrigger asChild>
+                                    <Button
+                                        type="button"
+                                        variant={isActiveCategory ? 'default' : 'outline'}
+                                        size="sm"
+                                        className="h-9 text-xs gap-1.5"
+                                    >
+                                        <Icon className="h-3.5 w-3.5" />
+                                        {cat.label}
+                                        {isActiveCategory && cat.items.length > 1 && (
+                                            <span className="opacity-80 font-normal hidden sm:inline">· {activeLabel}</span>
+                                        )}
+                                        <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start">
+                                    <DropdownMenuLabel className="text-[10px] uppercase text-muted-foreground">{cat.label}</DropdownMenuLabel>
+                                    {cat.items.map(item => (
+                                        <DropdownMenuItem
+                                            key={item.value}
+                                            onClick={() => setActiveSection(item.value)}
+                                            className={cn('text-xs', activeSection === item.value && 'bg-accent font-medium')}
+                                        >
+                                            {item.label}
+                                        </DropdownMenuItem>
+                                    ))}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        );
+                    })}
+                </div>,
                 sectionSelectContainer
             )}
 
@@ -5033,6 +5106,21 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     </Card>
                 </TabsContent>
 
+                {/* ── Charts Tab — pulled out of Analytics so it's reachable right after
+                     Assign Stalls (Robert: "once stalls are assigned, you could just go
+                     straight to the charts") ── */}
+                <TabsContent value="charts" className="mt-4 space-y-4">
+                    {analytics.noShow.total > 0 ? (
+                        <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading charts…</div>}>
+                            <AnalyticsCharts analytics={analytics} bookings={bookings} />
+                        </Suspense>
+                    ) : (
+                        <div className="text-center py-12 text-sm text-muted-foreground border border-dashed rounded-lg">
+                            📭 No bookings yet — charts fill in as exhibitors reserve.
+                        </div>
+                    )}
+                </TabsContent>
+
                 {/* ── Analytics Tab ── */}
                 <TabsContent value="analytics" className="mt-4 space-y-4">
                     <Card>
@@ -5266,12 +5354,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </CardContent>
                     </Card>
 
-                    {/* Charts */}
-                    {analytics.noShow.total > 0 && (
-                        <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading charts…</div>}>
-                            <AnalyticsCharts analytics={analytics} bookings={bookings} />
-                        </Suspense>
-                    )}
                 </TabsContent>
             </Tabs>
 
@@ -5681,7 +5763,7 @@ const HousingGroundsManagerPage = () => {
                 <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
                     <PageHeader title="Housing & Grounds Manager" backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
 
-                    {selectedShow && <div ref={setSectionSelectMount} className="mb-4 max-w-xs" />}
+                    {selectedShow && <div ref={setSectionSelectMount} className="mb-4" />}
 
                     {!showId && (
                         <div className="mb-6">

@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils';
 import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users } from 'lucide-react';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
+import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
+import { getSupplyStage, SUPPLY_STAGES } from '@/lib/supplyStatus';
 
 // ── Phase 1: Master List ──
 // A spreadsheet-style roster of everyone who booked (stalls + RV + pre-ordered
@@ -74,8 +76,14 @@ const buildRow = (booking, barns) => {
     const assigned = getAssignedStallsForBooking(booking, barns);
     const supplies = getSupplies(booking);
     const horseNamesArr = getHorseNames(booking);
+    const supplyStage = getSupplyStage(booking);
     return {
         booking,
+        ref: getBookingRef(booking),
+        kind: getBookingKind(booking),
+        supplyStatus: supplies.length > 0 ? supplyStage.label : '',
+        supplyStageKey: supplies.length > 0 ? supplyStage.key : '',
+        supplyStageColor: supplyStage.color,
         name: booking.exhibitorName || '—',
         trainer: booking.trainerName || '',
         trainerEmail: booking.trainerEmail || '',
@@ -141,6 +149,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [assignFilter, setAssignFilter] = useState('all'); // all | assigned | partial | unassigned
+    const [supplyFilter, setSupplyFilter] = useState('all'); // all | none | <SUPPLY_STAGES key>
     const [sort, setSort] = useState({ key: 'name', dir: 'asc' });
     // Rows the user has expanded (independent — several can be open at once).
     const [expandedIds, setExpandedIds] = useState(() => new Set());
@@ -164,7 +173,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         const q = search.trim().toLowerCase();
         let list = rows.filter(r => {
             if (q) {
-                const hay = `${r.name} ${r.trainer} ${r.trainerEmail} ${r.trainerPhone} ${r.stallNumbers} ${r.suppliesStr} ${r.horseNamesStr} ${r.email} ${r.phone}`.toLowerCase();
+                const hay = `${r.name} ${r.ref} ${r.trainer} ${r.trainerEmail} ${r.trainerPhone} ${r.stallNumbers} ${r.suppliesStr} ${r.supplyStatus} ${r.horseNamesStr} ${r.email} ${r.phone}`.toLowerCase();
                 if (!hay.includes(q)) return false;
             }
             if (statusFilter !== 'all' && r.status !== statusFilter) return false;
@@ -172,6 +181,10 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                 if (assignFilter === 'assigned' && !(r.stalls > 0 && r.assignedCount >= r.stalls)) return false;
                 if (assignFilter === 'partial' && !(r.assignedCount > 0 && r.assignedCount < r.stalls)) return false;
                 if (assignFilter === 'unassigned' && !(r.stalls > 0 && r.assignedCount === 0)) return false;
+            }
+            if (supplyFilter !== 'all') {
+                if (supplyFilter === 'none' && r.supplyStageKey) return false;
+                if (supplyFilter !== 'none' && r.supplyStageKey !== supplyFilter) return false;
             }
             return true;
         });
@@ -183,7 +196,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
             return String(av).localeCompare(String(bv)) * mult;
         });
         return list;
-    }, [rows, search, statusFilter, assignFilter, sort]);
+    }, [rows, search, statusFilter, assignFilter, supplyFilter, sort]);
 
     const totals = useMemo(() => filtered.reduce((t, r) => ({
         stalls: t.stalls + r.stalls,
@@ -204,11 +217,11 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
     const exportCsv = () => {
         const { human, file } = exportStamp();
         const header = [
-            'Exhibitor', 'Email', 'Phone',
+            'Reference', 'Order Type', 'Exhibitor', 'Email', 'Phone',
             'Trainer/Group', 'Trainer Email', 'Trainer Phone',
             'Arrival', 'Departure',
             'Stalls', 'Assigned', 'Assigned Stalls', 'RV',
-            'Supplies / Pre-Orders', 'Horses', 'Horse Names', 'Status',
+            'Supplies / Pre-Orders', 'Supply Status', 'Horses', 'Horse Names', 'Status',
         ];
         const lines = [
             '﻿' + csvCell(`${showName} — Master List`), // BOM so Excel reads UTF-8 accents correctly
@@ -218,11 +231,11 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         ];
         for (const r of filtered) {
             lines.push([
-                r.name, r.email, r.phone,
+                r.ref, r.kind, r.name, r.email, r.phone,
                 r.trainer, r.trainerEmail, r.trainerPhone,
                 r.arrivalLabel, r.departureLabel,
                 r.stalls, r.assignedCount, r.stallNumbers, r.rv,
-                r.suppliesStr, r.horses, r.horseNamesStr, r.status,
+                r.suppliesStr, r.supplyStatus, r.horses, r.horseNamesStr, r.status,
             ].map(csvCell).join(','));
         }
         const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
@@ -252,13 +265,14 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                 <td class="check"></td>
                 <td>
                     <strong>${esc(r.name)}</strong>
+                    <span class="muted">#${esc(r.ref)}</span>
                     ${contact ? `<div class="muted">${contact}</div>` : ''}
                     ${r.trainer ? `<div class="muted">${esc(r.trainer)}${(() => { const tc = [r.trainerEmail, r.trainerPhone].filter(Boolean).map(esc).join(' · '); return tc ? ` — ${tc}` : ''; })()}</div>` : ''}
                     ${dates ? `<div class="muted">${dates}</div>` : ''}
                 </td>
                 <td class="c">${assignedCell}</td>
                 <td class="c">${r.rv || '—'}</td>
-                <td>${r.suppliesStr ? esc(r.suppliesStr) : '—'}</td>
+                <td>${r.suppliesStr ? `${esc(r.suppliesStr)}${r.supplyStatus ? ` <span class="muted">(${esc(r.supplyStatus)})</span>` : ''}` : '—'}</td>
                 <td>${r.horseNamesStr ? esc(r.horseNamesStr) : (r.horses ? `${r.horses} horse${r.horses !== 1 ? 's' : ''}` : '—')}</td>
                 <td class="cap">${esc(r.status.replace('_', ' '))}</td>
             </tr>`;
@@ -325,6 +339,16 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                         <SelectItem value="unassigned" className="text-xs">Unassigned</SelectItem>
                     </SelectContent>
                 </Select>
+                <Select value={supplyFilter} onValueChange={setSupplyFilter}>
+                    <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue placeholder="Supply status" /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all" className="text-xs">All supplies</SelectItem>
+                        <SelectItem value="none" className="text-xs">No supplies</SelectItem>
+                        {SUPPLY_STAGES.map(s => (
+                            <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
                 <div className="flex-1" />
                 <Button variant="outline" size="sm" className="h-8 text-xs" onClick={exportCsv} disabled={filtered.length === 0}>
                     <Download className="h-3.5 w-3.5 mr-1.5" /> CSV
@@ -377,8 +401,16 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                                 {isOpen
                                                     ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                                                     : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                                                {r.name}
+                                                <span>{r.name}</span>
                                             </button>
+                                            <div className="flex items-center gap-1.5 pl-5">
+                                                <span className="text-[10px] font-mono text-muted-foreground/70">#{r.ref}</span>
+                                                {r.booking.orderType === 'live-supply' && (
+                                                    <Badge variant="outline" className="text-[9px] font-normal border-amber-400 text-amber-600">
+                                                        At-show reorder
+                                                    </Badge>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-3 py-2 text-muted-foreground">
                                             {r.trainer || (r.trainerEmail || r.trainerPhone ? '' : '—')}
@@ -419,6 +451,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                                             {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
                                                         </Badge>
                                                     ))}
+                                                    <Badge className={cn(r.supplyStageColor, 'text-white text-[10px]')}>{r.supplyStatus}</Badge>
                                                 </div>
                                             ) : <span className="text-muted-foreground">—</span>}
                                         </td>
@@ -480,18 +513,21 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                                     {r.supplies.length > 0 && (
                                                         <div>
                                                             <p className="font-medium text-muted-foreground mb-0.5">Supplies / Pre-Orders</p>
-                                                            <div className="flex flex-wrap gap-1">
+                                                            <div className="flex flex-wrap items-center gap-1">
                                                                 {r.supplies.map((s, i) => (
                                                                     <Badge key={i} variant="outline" className="text-[10px] font-normal">
                                                                         {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
                                                                     </Badge>
                                                                 ))}
+                                                                <Badge className={cn(r.supplyStageColor, 'text-white text-[10px]')}>{r.supplyStatus}</Badge>
                                                             </div>
                                                         </div>
                                                     )}
 
                                                     {/* Meta */}
                                                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
+                                                        <span>Ref: <span className="font-mono font-medium text-foreground">#{r.ref}</span></span>
+                                                        <span>Type: <span className="font-medium text-foreground">{r.kind}</span></span>
                                                         <span>Payment: <span className="capitalize font-medium text-foreground">{(r.booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
                                                         {r.booking.paidAt ? <span>Paid: <span className="font-medium text-foreground">{fmtDateTime(r.booking.paidAt)}</span></span> : null}
                                                         {(r.arrivalLabel || r.departureLabel) ? <span>Dates: <span className="font-medium text-foreground">{r.arrivalLabel || '?'} – {r.departureLabel || '?'}</span></span> : null}
