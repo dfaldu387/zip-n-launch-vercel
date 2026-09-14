@@ -3404,7 +3404,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         return stallBookings.filter(b =>
             (b.exhibitorName || '').toLowerCase().includes(q) ||
             (b.horseName || '').toLowerCase().includes(q) ||
-            (b.trainerName || '').toLowerCase().includes(q)
+            (b.trainerName || '').toLowerCase().includes(q) ||
+            getBookingRef(b).toLowerCase().includes(q)
         );
     }, [stallBookings, searchTerm]);
 
@@ -4469,7 +4470,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             <Input
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
-                                placeholder="Search exhibitor, horse, trainer..."
+                                placeholder="Search exhibitor, horse, trainer, or ref #..."
                                 className="h-8 pl-8 text-sm"
                             />
                         </div>
