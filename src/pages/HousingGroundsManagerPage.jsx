@@ -22,7 +22,7 @@ import {
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
-    ClipboardList, Package, Truck, Undo2, ArrowUpDown, BarChart3,
+    ClipboardList, Package, Truck, ArrowUpDown, BarChart3,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -48,7 +48,7 @@ import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
-import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems } from '@/lib/supplyStatus';
+import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus } from '@/lib/supplyStatus';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import {
@@ -169,7 +169,7 @@ const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, se
 );
 
 // Fee-detail options — kept in sync with FeeStructureStep so the questions
-// (Unit Type, Payment Timing) look and read identically on both pages.
+// (Unit Type) look and read identically on both pages.
 const FEE_UNIT_TYPE_OPTIONS = [
     { value: 'flat', label: 'Flat Fee' },
     { value: 'per_horse', label: 'Per Horse' },
@@ -181,14 +181,10 @@ const FEE_UNIT_TYPE_OPTIONS = [
     { value: 'custom', label: 'Custom Unit' },
 ];
 
-const FEE_TIMING_OPTIONS = [
-    { value: 'pre_entry', label: 'Pre-Entry / Reservation' },
-    { value: 'at_check_in', label: 'At Check-In' },
-    { value: 'settlement', label: 'Post-Show / Settlement' },
-];
-
-// Shared fee-detail block (Unit Type, Payment Timing, Due Date, Late Fee) so every
+// Shared fee-detail block (Unit Type, Due Date, Late Fee) so every
 // inventory card asks the same questions as the Fee Structure page.
+// Robert: billing timing is chosen once at the show level (Invoice after
+// confirmation vs. Bill at booking) — no per-fee "Payment Timing" picker.
 const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeader = true, leading = null, leadingCols = 1, unitOptions = null, dueDateRequiresFlag = null }) => {
     // Some items (Pre-Show Delivery supplies) only need a Due Date once the
     // organizer opts into early delivery — otherwise there's nothing to be due by.
@@ -201,7 +197,7 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
             </Label>
         )}
         <div className={cn('grid grid-cols-2 gap-3', showHeader && 'mt-2',
-            !leading ? 'md:grid-cols-4' : leadingCols === 3 ? 'md:grid-cols-7' : leadingCols === 2 ? 'md:grid-cols-6' : 'md:grid-cols-5')}>
+            !leading ? 'md:grid-cols-3' : leadingCols === 3 ? 'md:grid-cols-6' : leadingCols === 2 ? 'md:grid-cols-5' : 'md:grid-cols-4')}>
             {leading}
             <div className="space-y-1">
                 <Label className="text-xs">Unit Type</Label>
@@ -209,17 +205,6 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
                         {FEE_UNIT_TYPE_OPTIONS.filter(o => (unitOptions || ['flat', 'per_night', 'custom']).includes(o.value) || o.value === (item.unitType || unitDefault)).map(o => (
-                            <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </div>
-            <div className="space-y-1">
-                <Label className="text-xs">Payment Timing</Label>
-                <Select value={item.paymentTiming || 'pre_entry'} onValueChange={(val) => onUpdate('paymentTiming', val)}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                        {FEE_TIMING_OPTIONS.map(o => (
                             <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
                         ))}
                     </SelectContent>
@@ -2214,96 +2199,40 @@ const fmtOrderedAt = (iso) => {
     }
 };
 
-const fmtStageTime = (iso) => {
-    if (!iso) return '';
-    try {
-        return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    } catch {
-        return '';
-    }
-};
-
-// Compact 4-dot progress rail with a timestamp under each reached stage.
-const StageRail = ({ order }) => {
-    const current = stageIndexOf(order);
-    // 'Ordered' predates the pipeline, so it has no stage stamp — the booking's
-    // own createdAt is the moment it entered that stage.
-    const stamps = { new: order.createdAt, ...(order.stageTimestamps || {}) };
-    return (
-        <div className="flex items-start gap-1 mt-3">
-            {SUPPLY_STAGES.map((stage, i) => {
-                const reached = i <= current;
-                const Icon = stage.icon;
-                return (
-                    <React.Fragment key={stage.key}>
-                        {i > 0 && (
-                            <div className={cn(
-                                'h-0.5 flex-1 mt-3.5 rounded',
-                                i <= current ? SUPPLY_STAGES[current].color : 'bg-muted',
-                            )} />
-                        )}
-                        <div className="flex flex-col items-center gap-1 w-20 shrink-0">
-                            <div className={cn(
-                                'h-7 w-7 rounded-full flex items-center justify-center',
-                                reached ? cn(stage.color, 'text-white') : 'bg-muted text-muted-foreground',
-                            )}>
-                                <Icon className="h-4 w-4" />
-                            </div>
-                            <span className={cn(
-                                'text-[10px] leading-tight text-center',
-                                reached ? 'text-foreground font-medium' : 'text-muted-foreground',
-                            )}>
-                                {stage.label}
-                            </span>
-                            {reached && stamps[stage.key] && (
-                                <span className="text-[10px] text-muted-foreground tabular-nums">
-                                    {fmtStageTime(stamps[stage.key])}
-                                </span>
-                            )}
-                        </div>
-                    </React.Fragment>
-                );
-            })}
-        </div>
-    );
-};
-
-const SupplyOrderCard = ({ order, onFulfill, showName }) => {
+// One line item's own status control — Robert: "we might go out and deliver
+// the Shavings, but might not get to the Hay quite yet," so each item (not
+// just the order as a whole) gets its own Ordered/Received/Out for
+// Delivery/Delivered dropdown and sends its own delivery email.
+const ItemStatusRow = ({ order, item, onFulfill, showName }) => {
     const { toast } = useToast();
-    const current = stageIndexOf(order);
-    const delivered = isDelivered(order);
-    const total = order.totalAmount ?? order.amount ?? 0;
-    const next = SUPPLY_STAGES[current + 1];
     const [isNotifying, setIsNotifying] = useState(false);
+    const { status, stageTimestamps } = getItemStatus(order, item.refId);
+    const currentIndex = SUPPLY_STAGES.findIndex(s => s.key === status);
+    const stage = SUPPLY_STAGES[currentIndex === -1 ? 0 : currentIndex];
 
-    // Move the order one stage forward or back, stamping the time it entered
-    // each stage. Stepping back clears the stamp so the rail stays honest.
-    const goToStage = async (targetIndex) => {
+    const setStage = async (val) => {
+        const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === val);
+        if (targetIndex === currentIndex || targetIndex === -1) return;
         const target = SUPPLY_STAGES[targetIndex];
-        const stamps = { ...(order.stageTimestamps || {}) };
         const now = new Date().toISOString();
-        if (targetIndex > current) stamps[target.key] = now;
-        else delete stamps[SUPPLY_STAGES[current].key];
+        const stamps = { ...stageTimestamps };
+        if (targetIndex > currentIndex) stamps[target.key] = now;
+        else delete stamps[stage.key];
 
-        const reachedDelivered = target.key === 'delivered' && targetIndex > current;
+        const reachedDelivered = target.key === 'delivered' && targetIndex > currentIndex;
         if (reachedDelivered) setIsNotifying(true);
 
         await onFulfill(order.id, {
-            fulfillmentStatus: target.key,
-            stageTimestamps: stamps,
-            // Kept in sync for anything still reading the old field.
-            fulfilledAt: target.key === 'delivered' ? now : null,
+            itemStatuses: {
+                ...(order.itemStatuses || {}),
+                [item.refId]: { status: target.key, stageTimestamps: stamps },
+            },
         });
 
-        // Amazon-style "your order was delivered" email. The status change is
-        // already saved, so a mail failure must never undo it — just warn.
         if (!reachedDelivered) return;
         if (!order.email) {
             setIsNotifying(false);
-            toast({
-                title: 'Marked delivered',
-                description: 'No email on this order, so no delivery notice was sent.',
-            });
+            toast({ title: 'Marked delivered', description: `No email on this order — no delivery notice sent for ${item.name}.` });
             return;
         }
         try {
@@ -2314,7 +2243,103 @@ const SupplyOrderCard = ({ order, onFulfill, showName }) => {
                     customerName: order.exhibitorName || 'there',
                     showName: showName || 'the show',
                     orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
-                    items: (order.items || []).map(it => ({ name: it.name, amount: it.amount })),
+                    items: [{ name: item.name, amount: item.amount }],
+                    total: item.amount,
+                    stableWith: order.stableWith || order.trainerName || '',
+                    stallNumber: order.stallNumber || '',
+                },
+            });
+            if (error) throw error;
+            toast({ title: 'Delivered', description: `${item.name} delivery email sent to ${order.email}.` });
+        } catch (err) {
+            toast({
+                title: 'Marked delivered, but email failed',
+                description: err.message || 'The customer was not notified.',
+                variant: 'destructive',
+            });
+        } finally {
+            setIsNotifying(false);
+        }
+    };
+
+    return (
+        <div className="flex items-center justify-between gap-2 text-sm py-1">
+            <div className="flex items-center gap-2 min-w-0">
+                <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
+                <span className="truncate">{item.name}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+                <span className="tabular-nums text-muted-foreground">{fmtMoney(item.amount)}</span>
+                <Select value={stage.key} disabled={isNotifying} onValueChange={setStage}>
+                    <SelectTrigger className={cn('h-7 w-[10rem] text-xs text-white border-none focus:ring-0', stage.color)}>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {SUPPLY_STAGES.map(s => (
+                            <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+        </div>
+    );
+};
+
+const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onToggleCollapse }) => {
+    const { toast } = useToast();
+    const current = stageIndexOf(order);
+    const delivered = isDelivered(order);
+    const total = order.totalAmount ?? order.amount ?? 0;
+    const items = order.items || [];
+    const [isNotifying, setIsNotifying] = useState(false);
+
+    // Move every item on the order to the same stage at once — Robert: "if
+    // you're delivering all of them at once, you can mark as Received, Out
+    // for Delivery, or Delivered, and all three items would have been
+    // delivered, and I get an email." Sends one combined email, same as before.
+    const setAllStage = async (targetKey) => {
+        const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
+        const target = SUPPLY_STAGES[targetIndex];
+        const now = new Date().toISOString();
+        const nextItemStatuses = { ...(order.itemStatuses || {}) };
+        let anyAdvancedToDelivered = false;
+        for (const it of items) {
+            if (!it.refId) continue;
+            const { status, stageTimestamps } = getItemStatus(order, it.refId);
+            const curIdx = SUPPLY_STAGES.findIndex(s => s.key === status);
+            if (curIdx === targetIndex) continue;
+            const stamps = { ...stageTimestamps };
+            if (targetIndex > curIdx) stamps[target.key] = now;
+            else delete stamps[SUPPLY_STAGES[curIdx]?.key];
+            nextItemStatuses[it.refId] = { status: target.key, stageTimestamps: stamps };
+            if (target.key === 'delivered' && targetIndex > curIdx) anyAdvancedToDelivered = true;
+        }
+
+        if (anyAdvancedToDelivered) setIsNotifying(true);
+
+        await onFulfill(order.id, {
+            itemStatuses: nextItemStatuses,
+            // Kept in sync for anything still reading the old order-level fields.
+            fulfillmentStatus: target.key,
+            stageTimestamps: { ...(order.stageTimestamps || {}), [target.key]: now },
+            fulfilledAt: target.key === 'delivered' ? now : null,
+        });
+
+        if (!anyAdvancedToDelivered) return;
+        if (!order.email) {
+            setIsNotifying(false);
+            toast({ title: 'Marked delivered', description: 'No email on this order, so no delivery notice was sent.' });
+            return;
+        }
+        try {
+            const { error } = await supabase.functions.invoke('send-supply-order-email', {
+                body: {
+                    kind: 'delivered',
+                    to: order.email,
+                    customerName: order.exhibitorName || 'there',
+                    showName: showName || 'the show',
+                    orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
+                    items: items.map(it => ({ name: it.name, amount: it.amount })),
                     total,
                     stableWith: order.stableWith || order.trainerName || '',
                     stallNumber: order.stallNumber || '',
@@ -2337,87 +2362,183 @@ const SupplyOrderCard = ({ order, onFulfill, showName }) => {
         <Card className={cn('border', delivered && 'opacity-70 border-emerald-300 dark:border-emerald-800')}>
             <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                            <Clock className="h-3.5 w-3.5" /> {fmtOrderedAt(order.createdAt)}
-                            <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
-                                {SUPPLY_STAGES[current].label}
-                            </Badge>
-                            <span className="font-mono text-[10px] text-muted-foreground/70">#{getBookingRef(order)}</span>
+                    <div className="min-w-0 flex items-start gap-1.5">
+                        {onToggleCollapse && (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 shrink-0 -ml-1.5"
+                                onClick={onToggleCollapse}
+                                title={collapsed ? 'Expand' : 'Collapse'}
+                            >
+                                {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                            </Button>
+                        )}
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1 flex-wrap">
+                                <Clock className="h-3.5 w-3.5" /> {fmtOrderedAt(order.createdAt)}
+                                <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
+                                    {SUPPLY_STAGES[current].label}
+                                </Badge>
+                                <span className="font-mono text-[10px] text-muted-foreground/70">#{getBookingRef(order)}</span>
+                            </div>
+                            <p className="font-semibold">{order.exhibitorName || 'Unknown'}</p>
+                            {!collapsed && (
+                                <>
+                                    <p className="text-sm text-muted-foreground">
+                                        Stable with/under: <span className="text-foreground">{order.stableWith || order.trainerName || '—'}</span>
+                                    </p>
+                                    {order.stallNumber && (
+                                        <p className="text-sm text-muted-foreground">
+                                            Stall #: <span className="text-foreground font-medium">{order.stallNumber}</span>
+                                        </p>
+                                    )}
+                                    {order.phone && (
+                                        <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                            <Phone className="h-3.5 w-3.5" /> {order.phone}
+                                        </p>
+                                    )}
+                                    {order.email && (
+                                        <p className="text-sm text-muted-foreground flex items-center gap-1 break-all">
+                                            <Mail className="h-3.5 w-3.5 shrink-0" /> {order.email}
+                                        </p>
+                                    )}
+                                </>
+                            )}
                         </div>
-                        <p className="font-semibold">{order.exhibitorName || 'Unknown'}</p>
-                        <p className="text-sm text-muted-foreground">
-                            Stable with/under: <span className="text-foreground">{order.stableWith || order.trainerName || '—'}</span>
-                        </p>
-                        {order.stallNumber && (
-                            <p className="text-sm text-muted-foreground">
-                                Stall #: <span className="text-foreground font-medium">{order.stallNumber}</span>
-                            </p>
-                        )}
-                        {order.phone && (
-                            <p className="text-sm text-muted-foreground flex items-center gap-1">
-                                <Phone className="h-3.5 w-3.5" /> {order.phone}
-                            </p>
-                        )}
-                        {order.email && (
-                            <p className="text-sm text-muted-foreground flex items-center gap-1 break-all">
-                                <Mail className="h-3.5 w-3.5 shrink-0" /> {order.email}
-                            </p>
-                        )}
                     </div>
                     <div className="text-right">
                         <p className="text-lg font-bold tabular-nums">{fmtMoney(total)}</p>
                         <div className="flex items-center justify-end gap-2 mt-2">
-                            {current > 0 && (
-                                <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-muted-foreground"
-                                    onClick={() => goToStage(current - 1)}
-                                    title={`Back to ${SUPPLY_STAGES[current - 1].label}`}
-                                >
-                                    <Undo2 className="h-4 w-4" />
-                                </Button>
-                            )}
-                            {next && (
-                                <Button
-                                    size="sm"
-                                    disabled={isNotifying}
-                                    className={cn('text-white', next.color, 'hover:opacity-90')}
-                                    onClick={() => goToStage(current + 1)}
-                                >
-                                    {isNotifying ? (
-                                        <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Notifying…</>
-                                    ) : (
-                                        <><next.icon className="h-4 w-4 mr-1" /> {next.advanceLabel}</>
-                                    )}
-                                </Button>
-                            )}
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button size="sm" variant="outline" disabled={isNotifying}>
+                                        {isNotifying ? (
+                                            <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Notifying…</>
+                                        ) : (
+                                            <>All items <ChevronDown className="h-3.5 w-3.5 ml-1" /></>
+                                        )}
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                    <DropdownMenuLabel className="text-[10px] uppercase text-muted-foreground">Mark every item</DropdownMenuLabel>
+                                    {SUPPLY_STAGES.map(s => (
+                                        <DropdownMenuItem key={s.key} onClick={() => setAllStage(s.key)}>
+                                            <s.icon className="h-3.5 w-3.5 mr-2" /> {s.label}
+                                        </DropdownMenuItem>
+                                    ))}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
                         </div>
                     </div>
                 </div>
 
-                <StageRail order={order} />
-
-                <div className="mt-3 border-t pt-2 space-y-1">
-                    {(order.items || []).map((it, i) => (
-                        <div key={i} className="flex justify-between text-sm">
-                            <span>{it.name}</span>
-                            <span className="tabular-nums text-muted-foreground">{fmtMoney(it.amount)}</span>
-                        </div>
-                    ))}
-                </div>
+                {collapsed ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                        {items.length} item{items.length !== 1 ? 's' : ''} — click to expand
+                    </p>
+                ) : (
+                    <div className="mt-3 border-t pt-2">
+                        {items.map((it, i) => (
+                            <ItemStatusRow key={it.refId || i} order={order} item={it} onFulfill={onFulfill} showName={showName} />
+                        ))}
+                    </div>
+                )}
             </CardContent>
         </Card>
     );
 };
 
+// An order matches a search term by exhibitor name, stable/trainer, or order
+// reference — whichever the front desk is holding when they go looking for it.
+// The ref is shown on screen with a leading "#" (e.g. "#549BD68E"), so strip
+// one off the search term too — otherwise pasting it in exactly as displayed
+// never matches, since the stored ref itself has no "#".
+const orderMatchesSearch = (order, term) => {
+    const t = term.trim().toLowerCase().replace(/^#/, '');
+    if (!t) return true;
+    return (order.exhibitorName || '').toLowerCase().includes(t)
+        || (order.stableWith || order.trainerName || '').toLowerCase().includes(t)
+        || getBookingRef(order).toLowerCase().includes(t);
+};
+
+const sortOrdersBy = (list, sortBy) => {
+    const arr = [...list];
+    if (sortBy === 'oldest') arr.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    else if (sortBy === 'status') arr.sort((a, b) => stageIndexOf(a) - stageIndexOf(b));
+    else arr.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    return arr;
+};
+
+// Search + status filter + sort + which cards are collapsed — shared by both
+// the Pre-Show Delivery and At-Show Reorders lists so a facility with
+// thousands of orders can navigate either one the same way.
+const useOrderListControls = (orders) => {
+    const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [sortBy, setSortBy] = useState('newest');
+    const [collapsedIds, setCollapsedIds] = useState(() => new Set());
+
+    const filtered = useMemo(() => {
+        let list = orders.filter(o => orderMatchesSearch(o, search));
+        if (statusFilter !== 'all') list = list.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === statusFilter);
+        return sortOrdersBy(list, sortBy);
+    }, [orders, search, statusFilter, sortBy]);
+
+    const toggleCollapse = (id) => setCollapsedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+    });
+    const expandAll = () => setCollapsedIds(new Set());
+    const collapseAll = () => setCollapsedIds(new Set(orders.map(o => o.id)));
+
+    return { search, setSearch, statusFilter, setStatusFilter, sortBy, setSortBy, filtered, collapsedIds, toggleCollapse, expandAll, collapseAll };
+};
+
+const OrdersToolbar = ({ search, onSearch, statusFilter, onStatusFilter, sortBy, onSortBy, onExpandAll, onCollapseAll }) => (
+    <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[180px] max-w-xs">
+            <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+            <Input
+                value={search}
+                onChange={(e) => onSearch(e.target.value)}
+                placeholder="Search name or order #..."
+                className="pl-8 h-8 text-xs"
+            />
+        </div>
+        <Select value={statusFilter} onValueChange={onStatusFilter}>
+            <SelectTrigger className="h-8 w-[10.5rem] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+                <SelectItem value="all" className="text-xs">All statuses</SelectItem>
+                {SUPPLY_STAGES.map(s => (
+                    <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
+                ))}
+            </SelectContent>
+        </Select>
+        <Select value={sortBy} onValueChange={onSortBy}>
+            <SelectTrigger className="h-8 w-[9.5rem] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+                <SelectItem value="newest" className="text-xs">Newest first</SelectItem>
+                <SelectItem value="oldest" className="text-xs">Oldest first</SelectItem>
+                <SelectItem value="status" className="text-xs">By status</SelectItem>
+            </SelectContent>
+        </Select>
+        <div className="flex items-center gap-1 sm:ml-auto">
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onExpandAll}>Expand all</Button>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onCollapseAll}>Collapse all</Button>
+        </div>
+    </div>
+);
+
 const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName }) => {
-    const pending = orders.filter(o => !isDelivered(o));
-    const done = orders.filter(o => isDelivered(o));
-    // Count of orders sitting in each non-final stage, so the manager can see at a
-    // glance how many are still waiting to be picked vs already on the cart.
+    const { search, setSearch, statusFilter, setStatusFilter, sortBy, setSortBy, filtered, collapsedIds, toggleCollapse, expandAll, collapseAll } = useOrderListControls(orders);
+    const pending = filtered.filter(o => !isDelivered(o));
+    const done = filtered.filter(o => isDelivered(o));
+    // Counts stay based on ALL orders (not the filtered view) so the header
+    // remains a true summary of the whole list, not just what's on screen.
     const countAt = (key) => orders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length;
+    const deliveredTotal = orders.filter(isDelivered).length;
 
     // Header row: manual refresh + a note that the list updates on its own while live.
     const RefreshBar = () => (
@@ -2428,7 +2549,7 @@ const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive,
                         {stage.label}: {countAt(stage.key)}
                     </Badge>
                 ))}
-                <Badge variant="outline">Delivered: {done.length}</Badge>
+                <Badge variant="outline">Delivered: {deliveredTotal}</Badge>
             </div>
             <div className="flex items-center gap-2">
                 {isLive && (
@@ -2463,16 +2584,28 @@ const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive,
     return (
         <div className="space-y-4">
             <RefreshBar />
-            {pending.length > 0 && (
-                <div className="space-y-2">
-                    {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
-                </div>
-            )}
-            {done.length > 0 && (
-                <div className="space-y-2">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
-                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
-                </div>
+            <OrdersToolbar
+                search={search} onSearch={setSearch}
+                statusFilter={statusFilter} onStatusFilter={setStatusFilter}
+                sortBy={sortBy} onSortBy={setSortBy}
+                onExpandAll={expandAll} onCollapseAll={collapseAll}
+            />
+            {filtered.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">No orders match your search or filter.</p>
+            ) : (
+                <>
+                    {pending.length > 0 && (
+                        <div className="space-y-2">
+                            {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
+                        </div>
+                    )}
+                    {done.length > 0 && (
+                        <div className="space-y-2">
+                            <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
+                            {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );
@@ -2483,8 +2616,9 @@ const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive,
 // at-show reorder, just without the live-polling/refresh chrome since it's
 // derived straight from local booking state.
 const PreShowDeliveryPanel = ({ orders, onFulfill, showName }) => {
-    const pending = orders.filter(o => !isDelivered(o));
-    const done = orders.filter(o => isDelivered(o));
+    const { search, setSearch, statusFilter, setStatusFilter, sortBy, setSortBy, filtered, collapsedIds, toggleCollapse, expandAll, collapseAll } = useOrderListControls(orders);
+    const pending = filtered.filter(o => !isDelivered(o));
+    const done = filtered.filter(o => isDelivered(o));
 
     if (orders.length === 0) {
         return (
@@ -2501,12 +2635,21 @@ const PreShowDeliveryPanel = ({ orders, onFulfill, showName }) => {
     }
 
     return (
-        <div className="space-y-2">
-            {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
+        <div className="space-y-3">
+            <OrdersToolbar
+                search={search} onSearch={setSearch}
+                statusFilter={statusFilter} onStatusFilter={setStatusFilter}
+                sortBy={sortBy} onSortBy={setSortBy}
+                onExpandAll={expandAll} onCollapseAll={collapseAll}
+            />
+            {filtered.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-8">No orders match your search or filter.</p>
+            )}
+            {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
             {done.length > 0 && (
                 <>
                     <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
-                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} />)}
+                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
                 </>
             )}
         </div>
@@ -3310,6 +3453,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
     };
 
+    // Patch fields on a booking and show the change instantly — used by the Hay &
+    // Shavings status dropdowns. This dashboard keeps its own copy of bookings (see
+    // changeBookingStatus below), so calling onUpdateBookingFields directly would
+    // save the new status but leave it invisible here until the page reloaded.
+    const updateBookingFieldsLocal = async (bookingId, patch) => {
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...patch } : b));
+        if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, patch);
+    };
+
     // Commit a whole patch from the Edit Booking dialog (contact fields, nights,
     // and a freshly-rebuilt items[]/amount/totalAmount — see AddBookingDialog's
     // edit mode). Status gets the same explicit DB save + stall-release side
@@ -3390,6 +3542,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     createdAt: b.createdAt,
                     fulfillmentStatus: b.fulfillmentStatus || 'new',
                     stageTimestamps: b.stageTimestamps || {},
+                    itemStatuses: b.itemStatuses || {},
                     items,
                     totalAmount: items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0),
                 };
@@ -4639,7 +4792,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </p>
                         <PreShowDeliveryPanel
                             orders={preShowDeliveryOrders}
-                            onFulfill={onUpdateBookingFields}
+                            onFulfill={updateBookingFieldsLocal}
                             showName={show.project_name}
                         />
                     </div>
@@ -4649,7 +4802,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         </h3>
                         <SupplyOrdersPanel
                             orders={liveSupplyOrders}
-                            onFulfill={onUpdateBookingFields}
+                            onFulfill={updateBookingFieldsLocal}
                             onRefresh={() => refreshLiveOrders({ silent: false })}
                             isRefreshing={isRefreshingOrders}
                             isLive={publishStatus === 'published'}

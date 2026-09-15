@@ -42,11 +42,16 @@ export function getAssignedRvSpotsForBooking(booking, rvAreas) {
 }
 
 // Pin one spot to a booking (or clear with null). Returns NEW rvAreas.
+// Stamps assignedAt (mirrors assignStallToBooking) so the exhibitor's
+// reservation page can show when their camp spot was placed; reassigning
+// resets the stamp to reflect the current spot, not history.
 export function assignRvSpotToBooking(rvAreas, spotId, bookingId) {
     return (rvAreas || []).map(area => ({
         ...area,
         spots: (area.spots || []).map(spot =>
-            spot.id === spotId ? { ...spot, bookingId: bookingId || null } : spot
+            spot.id === spotId
+                ? { ...spot, bookingId: bookingId || null, assignedAt: bookingId ? new Date().toISOString() : null }
+                : spot
         ),
     }));
 }
@@ -61,7 +66,7 @@ export function unassignBookingRvSpots(rvAreas, bookingId) {
     return (rvAreas || []).map(area => ({
         ...area,
         spots: (area.spots || []).map(spot =>
-            spot.bookingId === bookingId ? { ...spot, bookingId: null } : spot
+            spot.bookingId === bookingId ? { ...spot, bookingId: null, assignedAt: null } : spot
         ),
     }));
 }

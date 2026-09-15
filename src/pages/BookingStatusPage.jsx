@@ -18,6 +18,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { cn } from '@/lib/utils';
 import { startStallCheckout } from '@/lib/housingCheckout';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
+import { getItemStatus, getItemStage } from '@/lib/supplyStatus';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -69,6 +70,17 @@ const BookingStatusPage = () => {
         };
         document.addEventListener('visibilitychange', onVisible);
         return () => document.removeEventListener('visibilitychange', onVisible);
+    }, [load]);
+
+    // Robert (video, 2026-09-14): exhibitors leave this page open at the show
+    // to track delivery status "in real time" — poll every 60s while the tab
+    // is visible so status/timestamps update on their own, not just on
+    // refocus or manual Refresh.
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (document.visibilityState === 'visible') load({ silent: true });
+        }, 60000);
+        return () => clearInterval(interval);
     }, [load]);
 
     // Returning from Stripe (success_url carries ?session_id=…) → confirm + refresh.
@@ -252,15 +264,21 @@ const BookingStatusPage = () => {
                                                 : 'Stalls have not been assigned yet. The organizer will assign them before the show.'}
                                         </p>
                                     ) : (
-                                        <div className="flex flex-wrap gap-1.5">
+                                        <div className="flex flex-wrap gap-3">
                                             {assignedStalls.map(s => (
-                                                <Badge
-                                                    key={s.stallId}
-                                                    className="bg-emerald-600 text-white font-mono text-sm px-3 py-1.5"
-                                                    title={`${s.barnName} · Stall ${s.stallNumber}`}
-                                                >
-                                                    {s.barnName}: {s.stallNumber}
-                                                </Badge>
+                                                <div key={s.stallId} className="flex flex-col items-start gap-0.5">
+                                                    <Badge
+                                                        className="bg-emerald-600 text-white font-mono text-sm px-3 py-1.5"
+                                                        title={`${s.barnName} · Stall ${s.stallNumber}`}
+                                                    >
+                                                        {s.barnName}: {s.stallNumber}
+                                                    </Badge>
+                                                    {s.assignedAt && (
+                                                        <span className="text-[11px] text-muted-foreground pl-0.5">
+                                                            Assigned {format(parseISO(s.assignedAt), 'MMM d, h:mm a')}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             ))}
                                         </div>
                                     )}
@@ -277,15 +295,21 @@ const BookingStatusPage = () => {
                                                 Specific RV spot numbers not assigned yet — the organizer will assign them before the show.
                                             </p>
                                         ) : (
-                                            <div className="flex flex-wrap gap-1.5">
+                                            <div className="flex flex-wrap gap-3">
                                                 {assignedRvSpots.map(s => (
-                                                    <Badge
-                                                        key={s.spotId}
-                                                        className="bg-cyan-600 text-white font-mono text-sm px-3 py-1.5"
-                                                        title={`${s.areaName} · Spot ${s.spotNumber}`}
-                                                    >
-                                                        {s.areaName}: {s.spotNumber}
-                                                    </Badge>
+                                                    <div key={s.spotId} className="flex flex-col items-start gap-0.5">
+                                                        <Badge
+                                                            className="bg-cyan-600 text-white font-mono text-sm px-3 py-1.5"
+                                                            title={`${s.areaName} · Spot ${s.spotNumber}`}
+                                                        >
+                                                            {s.areaName}: {s.spotNumber}
+                                                        </Badge>
+                                                        {s.assignedAt && (
+                                                            <span className="text-[11px] text-muted-foreground pl-0.5">
+                                                                Assigned {format(parseISO(s.assignedAt), 'MMM d, h:mm a')}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 ))}
                                             </div>
                                         )}
@@ -322,12 +346,30 @@ const BookingStatusPage = () => {
                                                 <span className="font-semibold tabular-nums">{money(it.amount)}</span>
                                             </div>
                                         ))}
-                                        {supplyItems.map((it, i) => (
-                                            <div key={`su-${i}`} className="flex justify-between">
-                                                <span>🛒 {it.name}</span>
-                                                <span className="font-semibold tabular-nums">{money(it.amount)}</span>
-                                            </div>
-                                        ))}
+                                        {supplyItems.map((it, i) => {
+                                            const { status, stageTimestamps } = getItemStatus(booking, it.refId);
+                                            const stage = getItemStage(booking, it.refId);
+                                            const StageIcon = stage.icon;
+                                            const stamp = stageTimestamps?.[status];
+                                            return (
+                                                <div key={`su-${i}`} className="space-y-1">
+                                                    <div className="flex justify-between">
+                                                        <span>🛒 {it.name}</span>
+                                                        <span className="font-semibold tabular-nums">{money(it.amount)}</span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className={cn('inline-flex items-center gap-1 pl-1.5 pr-2 py-0.5 rounded-full text-white text-xs font-medium', stage.color)}>
+                                                            <StageIcon className="h-3 w-3" /> {stage.label}
+                                                        </span>
+                                                        {stamp && (
+                                                            <span className="text-xs text-muted-foreground">
+                                                                {format(parseISO(stamp), 'MMM d, h:mm a')}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 )}
 

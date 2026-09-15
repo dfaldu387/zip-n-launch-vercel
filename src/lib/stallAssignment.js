@@ -203,11 +203,12 @@ export function planAutoAssign(bookings, barns) {
 export function applyPlanToBarns(barns, plan) {
     if (!plan?.length) return barns;
     const byStallId = new Map(plan.map(p => [p.stallId, p.bookingId]));
+    const now = new Date().toISOString();
     return (barns || []).map(barn => ({
         ...barn,
         stalls: (barn.stalls || []).map(stall =>
             byStallId.has(stall.id)
-                ? { ...stall, bookingId: byStallId.get(stall.id) }
+                ? { ...stall, bookingId: byStallId.get(stall.id), assignedAt: now }
                 : stall
         ),
     }));
@@ -216,11 +217,17 @@ export function applyPlanToBarns(barns, plan) {
 // Manual override helpers ────────────────────────────────────────────
 
 // Assign a single specific stall to a booking (used by ManageStallsDialog).
+// Stamps assignedAt so the exhibitor's reservation page can show when they
+// were placed — Robert: "keep track of things really well." Reassigning to a
+// different stall resets the stamp to now, since it should reflect where
+// they currently are, not assignment history.
 export function assignStallToBooking(barns, stallId, bookingId) {
     return (barns || []).map(barn => ({
         ...barn,
         stalls: (barn.stalls || []).map(stall =>
-            stall.id === stallId ? { ...stall, bookingId: bookingId || null } : stall
+            stall.id === stallId
+                ? { ...stall, bookingId: bookingId || null, assignedAt: bookingId ? new Date().toISOString() : null }
+                : stall
         ),
     }));
 }
@@ -235,7 +242,7 @@ export function unassignBookingStalls(barns, bookingId) {
     return (barns || []).map(barn => ({
         ...barn,
         stalls: (barn.stalls || []).map(stall =>
-            stall.bookingId === bookingId ? { ...stall, bookingId: null } : stall
+            stall.bookingId === bookingId ? { ...stall, bookingId: null, assignedAt: null } : stall
         ),
     }));
 }
