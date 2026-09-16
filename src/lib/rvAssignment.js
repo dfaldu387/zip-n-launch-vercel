@@ -59,6 +59,23 @@ export function assignRvSpotToBooking(rvAreas, spotId, bookingId) {
 // Clear a single spot.
 export const unassignRvSpot = (rvAreas, spotId) => assignRvSpotToBooking(rvAreas, spotId, null);
 
+// Batch-apply a set of {spotId, bookingId} placements in one pass — mirrors
+// applyPlanToBarns in stallAssignment.js. Used to relocate a whole booking's
+// (or group's) RV spots in a single save instead of one assign call per spot.
+export function applyPlanToRvAreas(rvAreas, plan) {
+    if (!plan?.length) return rvAreas;
+    const bySpotId = new Map(plan.map(p => [p.spotId, p.bookingId]));
+    const now = new Date().toISOString();
+    return (rvAreas || []).map(area => ({
+        ...area,
+        spots: (area.spots || []).map(spot =>
+            bySpotId.has(spot.id)
+                ? { ...spot, bookingId: bySpotId.get(spot.id), assignedAt: now }
+                : spot
+        ),
+    }));
+}
+
 // Clear EVERY spot pinned to a booking (mirrors unassignBookingStalls in
 // stallAssignment.js) — used when a booking is cancelled or deleted, so its
 // RV spots go back to available instead of staying stuck "taken" forever.

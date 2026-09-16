@@ -17,7 +17,7 @@ import {
 } from '@/lib/stallAssignment';
 import {
     ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking,
-    assignRvSpotToBooking, unassignRvSpot,
+    assignRvSpotToBooking, unassignRvSpot, applyPlanToRvAreas,
 } from '@/lib/rvAssignment';
 import { printStallingChartPdf, downloadStallingChartPdf } from '@/lib/stallingChartPrint';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
@@ -507,12 +507,21 @@ const AssignBoard = ({
         fillGroupFrom(group, barn, startIdx);
     };
 
-    // Clear every stall a set of bookings currently holds. Shared by whole-group removal
-    // and single-exhibitor removal.
-    const clearBookingIds = (bookingIds) => (barns || []).map(b => ({
-        ...b,
-        stalls: (b.stalls || []).map(s => bookingIds.has(s.bookingId) ? { ...s, bookingId: null } : s),
-    }));
+    // Clear every stall/spot a set of bookings currently holds. Shared by whole-group
+    // removal (stalls only) and single-exhibitor removal (stalls or RV).
+    const clearBookingIds = (bookingIds) => mode === 'rv'
+        ? rvWithSpots.map(a => ({
+            ...a,
+            spots: (a.spots || []).map(s => bookingIds.has(s.bookingId) ? { ...s, bookingId: null } : s),
+        }))
+        : (barns || []).map(b => ({
+            ...b,
+            stalls: (b.stalls || []).map(s => bookingIds.has(s.bookingId) ? { ...s, bookingId: null } : s),
+        }));
+
+    // Write a cleared barns/rvAreas array back to the right side of the shared
+    // project_data, whichever mode is active.
+    const applyContainers = (next) => mode === 'rv' ? onApplyRvAreas?.(next) : onApplyBarns?.(next);
 
     // Relocate one or more bookings that are already (partly or fully) on the chart:
     // free every stall they currently hold, then re-place their FULL requested counts
@@ -522,31 +531,36 @@ const AssignBoard = ({
     // would silently strand exhibitors with no stall at all, so nothing is changed and
     // everyone stays exactly where they were. Shared by "move a whole group" (rows =
     // every exhibitor in it) and "move one exhibitor's own stalls" (rows = just them).
-    const moveRowsTo = (rows, label, barn, startIdx) => {
+    const moveRowsTo = (rows, label, container, startIdx) => {
         const bookingIds = new Set(rows.map(r => r.booking.id));
-        const clearedBarns = clearBookingIds(bookingIds);
+        const cleared = clearBookingIds(bookingIds);
         const queue = [];
         [...rows].sort((a, b) => b.requested - a.requested).forEach(r => {
             for (let i = 0; i < r.requested; i++) queue.push(r.booking.id);
         });
         const total = queue.length;
-        const targetBarn = clearedBarns.find(b => b.id === barn.id);
-        const units = targetBarn?.stalls || [];
+        const unitsField = mode === 'rv' ? 'spots' : 'stalls';
+        const targetContainer = cleared.find(c => c.id === container.id);
+        const units = targetContainer?.[unitsField] || [];
         const plan = [];
         for (let i = startIdx; i < units.length && queue.length; i++) {
-            const s = units[i];
-            if ((s.type || 'stall') === 'stall' && !s.bookingId) plan.push({ stallId: s.id, bookingId: queue.shift() });
+            const u = units[i];
+            if ((u.type || 'stall') === 'stall' && !u.bookingId) plan.push({ id: u.id, bookingId: queue.shift() });
         }
         if (queue.length > 0) {
             toast({
                 title: 'Not enough room from there',
-                description: `"${label}" needs ${total} stalls; only ${plan.length} are free forward from that spot. Nothing was moved — pick a stall further from the end of the row, or with more empty boxes ahead of it.`,
+                description: `"${label}" needs ${total} ${cfg.unitWord}${total === 1 ? '' : 's'}; only ${plan.length} are free forward from that spot. Nothing was moved — pick a ${cfg.unitWord} further along, or with more empty ${cfg.unitWord}s ahead of it.`,
                 variant: 'destructive',
             });
             return false;
         }
-        onApplyBarns?.(applyPlanToBarns(clearedBarns, plan));
-        toast({ title: `"${label}" moved`, description: `${plan.length} stall${plan.length === 1 ? '' : 's'} relocated.` });
+        if (mode === 'rv') {
+            onApplyRvAreas?.(applyPlanToRvAreas(cleared, plan.map(p => ({ spotId: p.id, bookingId: p.bookingId }))));
+        } else {
+            onApplyBarns?.(applyPlanToBarns(cleared, plan.map(p => ({ stallId: p.id, bookingId: p.bookingId }))));
+        }
+        toast({ title: `"${label}" moved`, description: `${plan.length} ${cfg.unitWord}${plan.length === 1 ? '' : 's'} relocated.` });
         return true;
     };
 
@@ -567,7 +581,7 @@ const AssignBoard = ({
         const group = groupById[groupRemoval.groupId];
         if (group) {
             const bookingIds = new Set(group.rows.map(r => r.booking.id));
-            onApplyBarns?.(clearBookingIds(bookingIds));
+            applyContainers(clearBookingIds(bookingIds));
         }
         setGroupRemoval(null);
     };
@@ -578,7 +592,7 @@ const AssignBoard = ({
 
     const confirmRemoveBooking = () => {
         if (!bookingRemoval) return;
-        onApplyBarns?.(clearBookingIds(new Set([bookingRemoval.bookingId])));
+        applyContainers(clearBookingIds(new Set([bookingRemoval.bookingId])));
         setBookingRemoval(null);
     };
 
@@ -637,19 +651,21 @@ const AssignBoard = ({
     };
 
     const handleUnitClick = (unit) => {
-        // One exhibitor's own stalls are picked to be relocated → same rule as a group
-        // move, just scoped to their single row.
-        if (mode === 'stalls' && moveBookingId) {
+        // One exhibitor's own stalls/spots are picked to be relocated → same rule as a
+        // group move, just scoped to their single row. Works in both Stalls and RV mode.
+        if (moveBookingId) {
             const row = needRows.find(r => r.booking.id === moveBookingId);
             if (!row) { setMoveBookingId(null); return; }
             if ((unit.type || 'stall') !== 'stall') return;
             if (unit.bookingId && unit.bookingId !== moveBookingId) {
-                toast({ title: 'Start on an empty stall', description: 'Click a free stall (or one already theirs) for the new spot.' });
+                toast({ title: `Start on an empty ${cfg.unitWord}`, description: `Click a free ${cfg.unitWord} (or one already theirs) for the new spot.` });
                 return;
             }
-            const barn = (barns || []).find(b => (b.stalls || []).some(s => s.id === unit.id));
-            if (!barn) return;
-            moveBookingTo(row, barn, (barn.stalls || []).findIndex(s => s.id === unit.id));
+            const unitsField = mode === 'rv' ? 'spots' : 'stalls';
+            const sourceList = mode === 'rv' ? rvWithSpots : barns;
+            const container = (sourceList || []).find(c => (c[unitsField] || []).some(u => u.id === unit.id));
+            if (!container) return;
+            moveBookingTo(row, container, (container[unitsField] || []).findIndex(u => u.id === unit.id));
             return;
         }
         // A whole group is picked to be relocated → clear its old stalls and refill from here.
@@ -870,6 +886,11 @@ const AssignBoard = ({
                     {/* Left rail — bookings, grouped (Stalls mode) */}
                     {railOpen && (
                         <div className="lg:col-span-4 space-y-3">
+                            {moveBookingId && bookingById[moveBookingId] && (
+                                <div className="rounded-md border border-primary bg-primary/5 p-2 text-xs">
+                                    Moving <span className="font-semibold">{bookingById[moveBookingId].exhibitorName}</span>'s {cfg.unitWord}s — click an empty {cfg.unitWord} (or one already theirs) for the new spot.
+                                </div>
+                            )}
                             {mode === 'stalls' ? (
                                 <>
                                     {selectedGroup && (
@@ -882,11 +903,6 @@ const AssignBoard = ({
                                     {moveGroupId && groupById[moveGroupId] && (
                                         <div className="rounded-md border border-primary bg-primary/5 p-2 text-xs">
                                             Moving <span className="font-semibold">{groupById[moveGroupId].name}</span> — click an empty stall (or one already in this group) for its new spot. The old stalls free automatically.
-                                        </div>
-                                    )}
-                                    {moveBookingId && bookingById[moveBookingId] && (
-                                        <div className="rounded-md border border-primary bg-primary/5 p-2 text-xs">
-                                            Moving <span className="font-semibold">{bookingById[moveBookingId].exhibitorName}</span>'s stalls — click an empty stall (or one already theirs) for the new spot.
                                         </div>
                                     )}
                                     {groups.map(g => {
@@ -970,7 +986,10 @@ const AssignBoard = ({
                                         ) : toAssign.map(r => (
                                             <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                 assigned={r.assigned} requested={r.requested}
-                                                selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]} />
+                                                selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]}
+                                                onMove={() => pickMoveBooking(r.booking.id)}
+                                                onRemove={() => requestRemoveBooking(r)}
+                                                moving={moveBookingId === r.booking.id} />
                                         ))}
                                     </div>
                                     {doneRows.length > 0 && (
@@ -979,7 +998,10 @@ const AssignBoard = ({
                                             {doneRows.map(r => (
                                                 <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                     assigned={r.assigned} requested={r.requested}
-                                                    selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]} />
+                                                    selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]}
+                                                    onMove={() => pickMoveBooking(r.booking.id)}
+                                                    onRemove={() => requestRemoveBooking(r)}
+                                                    moving={moveBookingId === r.booking.id} />
                                             ))}
                                         </div>
                                     )}
@@ -1065,9 +1087,9 @@ const AssignBoard = ({
                 isOpen={!!bookingRemoval}
                 onClose={() => setBookingRemoval(null)}
                 onConfirm={confirmRemoveBooking}
-                title={`Remove "${bookingRemoval?.name || ''}"'s stalls?`}
-                description={`This frees ${bookingRemoval?.count || 0} stall${bookingRemoval?.count === 1 ? '' : 's'} held by "${bookingRemoval?.name || 'this exhibitor'}". Their booking stays — only the stall assignment is cleared.`}
-                confirmText="Remove stalls"
+                title={`Remove "${bookingRemoval?.name || ''}"'s ${cfg.unitWord}s?`}
+                description={`This frees ${bookingRemoval?.count || 0} ${cfg.unitWord}${bookingRemoval?.count === 1 ? '' : 's'} held by "${bookingRemoval?.name || 'this exhibitor'}". Their booking stays — only the assignment is cleared.`}
+                confirmText={`Remove ${cfg.unitWord}s`}
                 cancelText="Keep it"
             />
 
@@ -1332,7 +1354,9 @@ const ContainerChart = ({
                                     return (
                                         <UnitCell key={unit.id} unit={unit}
                                             size={size}
-                                            cellText={isStalls ? layerCell(layer, { unit, index: layerIndex }) : null}
+                                            cellText={isStalls
+                                                ? layerCell(layer, { unit, index: layerIndex })
+                                                : (unit.bookingId ? { lines: [{ text: owner?.exhibitorName || 'Booked' }], num: unit.number, tone: 'booked' } : null)}
                                             color={unit.bookingId ? (colorByBooking[unit.bookingId] || '#2563eb') : undefined}
                                             ownerName={owner?.exhibitorName || 'Booked'}
                                             isSelectedOwner={!!selectedBookingId && unit.bookingId === selectedBookingId}
