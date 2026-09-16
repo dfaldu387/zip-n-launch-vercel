@@ -4817,6 +4817,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         bookings={bookings}
                         barns={barns}
                         rvAreas={rvAreas}
+                        extraStallFees={extraStallFees}
                         showName={show.project_name || 'Show'}
                     />
                 </TabsContent>

@@ -7,9 +7,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users } from 'lucide-react';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
-import { getBookingDisplayStatus } from '@/lib/bookingPricing';
+import { getBookingDisplayStatus, computeBookingTotal } from '@/lib/bookingPricing';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { getSupplyStage, SUPPLY_STAGES } from '@/lib/supplyStatus';
+
+const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
 // ── Phase 1: Master List ──
 // A spreadsheet-style roster of everyone who booked (stalls + RV + pre-ordered
@@ -71,12 +73,21 @@ const fmtDateTime = (iso) => {
 };
 
 // Build one flat row per booking with everything the table + export need.
-const buildRow = (booking, barns) => {
+const buildRow = (booking, barns, extraStallFees) => {
     const requested = getRequestedStallCount(booking);
     const assigned = getAssignedStallsForBooking(booking, barns);
     const supplies = getSupplies(booking);
     const horseNamesArr = getHorseNames(booking);
     const supplyStage = getSupplyStage(booking);
+    // Live-priced, same as the invoice/balance-due figures elsewhere in this
+    // page — never the stored totalAmount, which freezes at booking time and
+    // goes stale after a fee change (see bookingPricing.js).
+    const pricedStalls = assigned.map(s => ({
+        ...s,
+        pricePerNight: barns.find(b => b.id === s.barnId)?.pricePerNight || 0,
+        barnName: barns.find(b => b.id === s.barnId)?.name,
+    }));
+    const amount = computeBookingTotal(booking, pricedStalls, extraStallFees);
     return {
         booking,
         ref: getBookingRef(booking),
@@ -106,6 +117,7 @@ const buildRow = (booking, barns) => {
         horseNamesArr,
         horseNamesStr: horseNamesArr.join(', '),
         status: getBookingDisplayStatus(booking),
+        amount,
     };
 };
 
@@ -143,9 +155,10 @@ const COLUMNS = [
     { key: 'suppliesStr', label: 'Supplies / Pre-Orders', align: 'left' },
     { key: 'horses', label: 'Horses', align: 'center' },
     { key: 'status', label: 'Status', align: 'left' },
+    { key: 'amount', label: 'Amount', align: 'right' },
 ];
 
-const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = 'Show' }) => {
+const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show' }) => {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [assignFilter, setAssignFilter] = useState('all'); // all | assigned | partial | unassigned
@@ -160,8 +173,8 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
     });
 
     const rows = useMemo(
-        () => (bookings || []).filter(Boolean).map(b => buildRow(b, barns)),
-        [bookings, barns]
+        () => (bookings || []).filter(Boolean).map(b => buildRow(b, barns, extraStallFees)),
+        [bookings, barns, extraStallFees]
     );
 
     const trainers = useMemo(() => {
@@ -204,7 +217,8 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
         rv: t.rv + r.rv,
         supplies: t.supplies + r.supplyCount,
         horses: t.horses + r.horses,
-    }), { stalls: 0, assigned: 0, rv: 0, supplies: 0, horses: 0 }), [filtered]);
+        amount: t.amount + r.amount,
+    }), { stalls: 0, assigned: 0, rv: 0, supplies: 0, horses: 0, amount: 0 }), [filtered]);
 
     const toggleSort = (key) => setSort(prev =>
         prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
@@ -221,7 +235,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
             'Trainer/Group', 'Trainer Email', 'Trainer Phone',
             'Arrival', 'Departure',
             'Stalls', 'Assigned', 'Assigned Stalls', 'RV',
-            'Supplies / Pre-Orders', 'Supply Status', 'Horses', 'Horse Names', 'Status',
+            'Supplies / Pre-Orders', 'Supply Status', 'Horses', 'Horse Names', 'Status', 'Amount',
         ];
         const lines = [
             '﻿' + csvCell(`${showName} — Master List`), // BOM so Excel reads UTF-8 accents correctly
@@ -235,9 +249,10 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                 r.trainer, r.trainerEmail, r.trainerPhone,
                 r.arrivalLabel, r.departureLabel,
                 r.stalls, r.assignedCount, r.stallNumbers, r.rv,
-                r.suppliesStr, r.supplyStatus, r.horses, r.horseNamesStr, r.status,
+                r.suppliesStr, r.supplyStatus, r.horses, r.horseNamesStr, r.status, fmtMoney(r.amount),
             ].map(csvCell).join(','));
         }
+        lines.push([...Array(header.length - 2).fill(''), 'Total:', fmtMoney(totals.amount)].map(csvCell).join(','));
         const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -275,6 +290,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                 <td>${r.suppliesStr ? `${esc(r.suppliesStr)}${r.supplyStatus ? ` <span class="muted">(${esc(r.supplyStatus)})</span>` : ''}` : '—'}</td>
                 <td>${r.horseNamesStr ? esc(r.horseNamesStr) : (r.horses ? `${r.horses} horse${r.horses !== 1 ? 's' : ''}` : '—')}</td>
                 <td class="cap">${esc(r.status.replace('_', ' '))}</td>
+                <td class="c">${esc(fmtMoney(r.amount))}</td>
             </tr>`;
         }).join('');
         const html = `<!doctype html><html><head><title>${esc(showName)} — Master List</title>
@@ -296,10 +312,10 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
             </style></head><body>
             <h1>${esc(showName)} — Stalls, RV &amp; Supplies Worklist</h1>
             <p class="sub">Generated ${esc(human)}</p>
-            <p class="sub">${filtered.length} bookings · ${totals.stalls} stalls · ${totals.rv} RV · ${totals.supplies} supplies · ${totals.horses} horses</p>
+            <p class="sub">${filtered.length} bookings · ${totals.stalls} stalls · ${totals.rv} RV · ${totals.supplies} supplies · ${totals.horses} horses · ${esc(fmtMoney(totals.amount))} total</p>
             <table><thead><tr>
                 <th>✔</th><th>Exhibitor / Contact</th><th class="c">Stalls</th><th class="c">RV</th>
-                <th>Supplies / Pre-Orders</th><th>Horses</th><th>Status</th>
+                <th>Supplies / Pre-Orders</th><th>Horses</th><th>Status</th><th class="c">Amount</th>
             </tr></thead><tbody>${rowsHtml}</tbody></table>
             </body></html>`;
         const w = window.open('', '_blank');
@@ -373,9 +389,10 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                 {COLUMNS.map(col => (
                                     <th key={col.key}
                                         className={cn('px-3 py-2 font-medium select-none cursor-pointer',
-                                            col.align === 'center' ? 'text-center' : 'text-left')}
+                                            col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : 'text-left')}
                                         onClick={() => toggleSort(col.key)}>
-                                        <span className={cn('inline-flex items-center gap-1', col.align === 'center' && 'justify-center')}>
+                                        <span className={cn('inline-flex items-center gap-1',
+                                            col.align === 'center' ? 'justify-center' : col.align === 'right' && 'justify-end')}>
                                             {col.label} <SortIcon colKey={col.key} />
                                         </span>
                                     </th>
@@ -466,6 +483,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                                 {r.status.replace('_', ' ')}
                                             </Badge>
                                         </td>
+                                        <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtMoney(r.amount)}</td>
                                     </tr>
                                     {isOpen && (
                                         <tr className="border-b bg-muted/30">
@@ -533,6 +551,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                                         {(r.arrivalLabel || r.departureLabel) ? <span>Dates: <span className="font-medium text-foreground">{r.arrivalLabel || '?'} – {r.departureLabel || '?'}</span></span> : null}
                                                         {r.booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{r.booking.source}</span></span> : null}
                                                         {r.booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtDateTime(r.booking.createdAt)}</span></span> : null}
+                                                        <span>Amount: <span className="font-semibold text-foreground">{fmtMoney(r.amount)}</span></span>
                                                     </div>
                                                 </div>
                                             </td>
@@ -552,6 +571,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], showName = '
                                     <td className="px-3 py-2 tabular-nums">{totals.supplies ? `${totals.supplies} items` : ''}</td>
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.horses}</td>
                                     <td className="px-3 py-2" />
+                                    <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(totals.amount)}</td>
                                 </tr>
                             </tfoot>
                         )}
