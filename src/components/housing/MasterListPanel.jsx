@@ -9,7 +9,7 @@ import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardLi
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 import { getBookingDisplayStatus, computeBookingTotal } from '@/lib/bookingPricing';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
-import { getSupplyStage, SUPPLY_STAGES } from '@/lib/supplyStatus';
+import { getSupplyStage, getSupplyLastUpdate, SUPPLY_STAGES } from '@/lib/supplyStatus';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -95,6 +95,7 @@ const buildRow = (booking, barns, extraStallFees) => {
         supplyStatus: supplies.length > 0 ? supplyStage.label : '',
         supplyStageKey: supplies.length > 0 ? supplyStage.key : '',
         supplyStageColor: supplyStage.color,
+        supplyUpdatedAt: supplies.length > 0 ? getSupplyLastUpdate(booking) : null,
         name: booking.exhibitorName || '—',
         trainer: booking.trainerName || '',
         trainerEmail: booking.trainerEmail || '',
@@ -538,6 +539,9 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
                                                                     </Badge>
                                                                 ))}
                                                                 <Badge className={cn(r.supplyStageColor, 'text-white text-[10px]')}>{r.supplyStatus}</Badge>
+                                                                {r.supplyUpdatedAt ? (
+                                                                    <span className="text-[10px] text-muted-foreground">as of {fmtDateTime(r.supplyUpdatedAt)}</span>
+                                                                ) : null}
                                                             </div>
                                                         </div>
                                                     )}

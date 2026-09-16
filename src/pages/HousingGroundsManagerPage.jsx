@@ -2199,6 +2199,34 @@ const fmtOrderedAt = (iso) => {
     }
 };
 
+// Timestamp under each stage the item has ever reached — Robert: "maybe you
+// click Received, clicked Out for Delivery, clicked Delivered, and it just
+// puts the timestamp in each location," visible as one line so the delivery
+// timeline is obvious at a glance (and answers "when did this actually get
+// delivered" without digging). The dot/line fill tracks the CURRENT stage,
+// but the timestamp text is keyed off whether that stage was ever recorded —
+// correcting the status backward (e.g. Delivered → Received) must not hide a
+// timestamp that already happened, only change which stage is current.
+const ItemStageProgressLine = ({ stageTimestamps, currentIndex }) => (
+    <div className="flex items-start gap-1 pl-4 pt-0.5">
+        {SUPPLY_STAGES.map((s, i) => {
+            const reached = i <= currentIndex;
+            const ts = stageTimestamps?.[s.key];
+            return (
+                <div key={s.key} className="flex items-center">
+                    {i > 0 && <div className={cn('h-px w-3 sm:w-5', reached ? s.color : 'bg-muted')} />}
+                    <div className="flex flex-col items-center gap-0.5 w-12 sm:w-16" title={s.label}>
+                        <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', reached ? s.color : 'bg-muted-foreground/30')} />
+                        <span className="text-[9px] leading-tight text-muted-foreground text-center truncate w-full">
+                            {ts ? fmtOrderedAt(ts) : s.label}
+                        </span>
+                    </div>
+                </div>
+            );
+        })}
+    </div>
+);
+
 // One line item's own status control — Robert: "we might go out and deliver
 // the Shavings, but might not get to the Hay quite yet," so each item (not
 // just the order as a whole) gets its own Ordered/Received/Out for
@@ -2215,9 +2243,12 @@ const ItemStatusRow = ({ order, item, onFulfill, showName }) => {
         if (targetIndex === currentIndex || targetIndex === -1) return;
         const target = SUPPLY_STAGES[targetIndex];
         const now = new Date().toISOString();
+        // Robert: timestamp every stage so a customer question can be answered
+        // with "ordered at X, received at Y, out for delivery at Z, delivered
+        // at W." Moving a stage backward (a correction) only changes which
+        // stage is current — it never erases a timestamp already recorded.
         const stamps = { ...stageTimestamps };
         if (targetIndex > currentIndex) stamps[target.key] = now;
-        else delete stamps[stage.key];
 
         const reachedDelivered = target.key === 'delivered' && targetIndex > currentIndex;
         if (reachedDelivered) setIsNotifying(true);
@@ -2263,24 +2294,27 @@ const ItemStatusRow = ({ order, item, onFulfill, showName }) => {
     };
 
     return (
-        <div className="flex items-center justify-between gap-2 text-sm py-1">
-            <div className="flex items-center gap-2 min-w-0">
-                <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
-                <span className="truncate">{item.name}</span>
+        <div className="py-1">
+            <div className="flex items-center justify-between gap-2 text-sm">
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
+                    <span className="truncate">{item.name}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                    <span className="tabular-nums text-muted-foreground">{fmtMoney(item.amount)}</span>
+                    <Select value={stage.key} disabled={isNotifying} onValueChange={setStage}>
+                        <SelectTrigger className={cn('h-7 w-[10rem] text-xs text-white border-none focus:ring-0', stage.color)}>
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {SUPPLY_STAGES.map(s => (
+                                <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-                <span className="tabular-nums text-muted-foreground">{fmtMoney(item.amount)}</span>
-                <Select value={stage.key} disabled={isNotifying} onValueChange={setStage}>
-                    <SelectTrigger className={cn('h-7 w-[10rem] text-xs text-white border-none focus:ring-0', stage.color)}>
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {SUPPLY_STAGES.map(s => (
-                            <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </div>
+            <ItemStageProgressLine stageTimestamps={stageTimestamps} currentIndex={currentIndex === -1 ? 0 : currentIndex} />
         </div>
     );
 };
@@ -2310,7 +2344,6 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
             if (curIdx === targetIndex) continue;
             const stamps = { ...stageTimestamps };
             if (targetIndex > curIdx) stamps[target.key] = now;
-            else delete stamps[SUPPLY_STAGES[curIdx]?.key];
             nextItemStatuses[it.refId] = { status: target.key, stageTimestamps: stamps };
             if (target.key === 'delivered' && targetIndex > curIdx) anyAdvancedToDelivered = true;
         }

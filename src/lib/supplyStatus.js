@@ -56,6 +56,23 @@ export const isDelivered = (order) => stageIndexOf(order) === SUPPLY_STAGES.leng
 
 export const getSupplyStage = (order) => SUPPLY_STAGES[stageIndexOf(order)];
 
+// Most recent stage timestamp across every supply item on the order — for
+// Robert: "in our master list, give us the ability to look... when these
+// changes happen." Used where the Master List can only show one status per
+// order (the row is scoped per booking, not per item) but still wants to
+// show how fresh that status is.
+export const getSupplyLastUpdate = (order) => {
+    const supplyItems = (order?.items || []).filter(it => it?.type === 'supply' && it.refId);
+    let latest = null;
+    for (const it of supplyItems) {
+        const { stageTimestamps } = getItemStatus(order, it.refId);
+        for (const iso of Object.values(stageTimestamps || {})) {
+            if (iso && (!latest || new Date(iso) > new Date(latest))) latest = iso;
+        }
+    }
+    return latest || order?.createdAt || null;
+};
+
 // Pre-ordered supplies (shavings / hay / feed) on a booking — one entry per
 // supply line item. item.name already reads like "Shavings × 3"; strip the
 // trailing "× n" so it can be re-rendered consistently as "Shavings ×3" with
