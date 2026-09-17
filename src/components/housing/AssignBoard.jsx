@@ -291,7 +291,7 @@ const UnitCell = ({
     );
 };
 
-const DEFAULT_CHART_PUBLISH = { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true };
+const DEFAULT_CHART_PUBLISH = { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true, showInventory: false };
 
 const AssignBoard = ({
     bookings = [], barns = [], rvAreas = [], supplies = [], onApplyBarns, onApplyRvAreas, onSetBookingGroup, meta = {},
@@ -1168,6 +1168,16 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
                     <Checkbox checked={draft.perBarnPages} onCheckedChange={(v) => setDraft(d => ({ ...d, perBarnPages: !!v }))} />
                     Show each barn as its own section
                 </label>
+
+                <div className="space-y-1">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={!!draft.showInventory} onCheckedChange={(v) => setDraft(d => ({ ...d, showInventory: !!v }))} />
+                        Show inventory (e.g. "12 of 20 stalls booked")
+                    </label>
+                    <p className="text-[11px] text-muted-foreground pl-6">
+                        Off by default — turn on if you want visitors to see how full the show is.
+                    </p>
+                </div>
 
                 <DialogFooter>
                     <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>

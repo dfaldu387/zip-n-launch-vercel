@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Loader2, Home, ArrowLeft, MapPin } from 'lucide-react';
+import { Loader2, Home, Car, ArrowLeft, MapPin } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
 
 // Read-only public stalling / RV chart — a simplified, wayfinding-focused view of
@@ -85,11 +86,26 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
     );
 };
 
+// Same pill toggle the organizer uses in Assign Stalls, so switching between
+// Stalls and RV / Camping feels familiar to a returning organizer too.
+const ViewToggle = ({ view, onChange }) => (
+    <div className="inline-flex rounded-full border bg-muted p-0.5">
+        {[{ id: 'stalls', label: 'Stalls', Icon: Home }, { id: 'rv', label: 'RV / Camping', Icon: Car }].map(v => (
+            <button key={v.id} type="button" onClick={() => onChange(v.id)}
+                className={cn('flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors',
+                    view === v.id ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground')}>
+                <v.Icon className="h-4 w-4" /> {v.label}
+            </button>
+        ))}
+    </div>
+);
+
 const PublicStallingChartPage = () => {
     const { showId } = useParams();
     const [data, setData] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
+    const [view, setView] = useState('stalls');
 
     useEffect(() => {
         const load = async () => {
@@ -142,24 +158,40 @@ const PublicStallingChartPage = () => {
     }
 
     const hasBarns = (data.barns || []).length > 0;
-    const hasRv = (data.rvAreas || []).some(a => (a.spots || []).length > 0);
+    const rvAreasWithSpots = (data.rvAreas || []).filter(a => (a.spots || []).length > 0);
+    const hasRv = rvAreasWithSpots.length > 0;
+    // Only worth switching views when there's actually both to switch between.
+    const showToggle = hasBarns && hasRv;
+    const activeView = showToggle ? view : (hasRv && !hasBarns ? 'rv' : 'stalls');
 
     return (
         <div className="min-h-screen py-10 px-4 sm:px-6">
             <div className="max-w-5xl mx-auto space-y-6">
-                <div>
-                    <Button asChild variant="ghost" size="sm" className="mb-2 -ml-2">
-                        <Link to={`/event-detail/${showId}`}><ArrowLeft className="h-4 w-4 mr-1.5" /> Back to event</Link>
-                    </Button>
-                    <h1 className="text-2xl font-bold">{data.showName} — Stalling Chart</h1>
-                    <p className="text-sm text-muted-foreground">Find your stall below.</p>
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                        <Button asChild variant="ghost" size="sm" className="mb-2 -ml-2">
+                            <Link to={`/event-detail/${showId}`}><ArrowLeft className="h-4 w-4 mr-1.5" /> Back to event</Link>
+                        </Button>
+                        <h1 className="text-2xl font-bold">{data.showName} — Stalling Chart</h1>
+                        <p className="text-sm text-muted-foreground">
+                            {activeView === 'rv' ? 'Find your RV / camping spot below.' : 'Find your stall below.'}
+                        </p>
+                        {data.inventory && (
+                            <p className="text-sm font-medium mt-1">
+                                {activeView === 'rv'
+                                    ? `${data.inventory.rvTaken} of ${data.inventory.rvTotal} RV spots booked`
+                                    : `${data.inventory.stallsTaken} of ${data.inventory.stallsTotal} stalls booked`}
+                            </p>
+                        )}
+                    </div>
+                    {showToggle && <ViewToggle view={view} onChange={setView} />}
                 </div>
 
                 {!hasBarns && !hasRv && (
                     <p className="text-muted-foreground">Nothing to show yet.</p>
                 )}
 
-                {(data.barns || []).map(barn => (
+                {activeView === 'stalls' && (data.barns || []).map(barn => (
                     <motion.div key={barn.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                         <UnitGrid
                             name={barn.name}
@@ -173,10 +205,10 @@ const PublicStallingChartPage = () => {
                     </motion.div>
                 ))}
 
-                {(data.rvAreas || []).filter(a => (a.spots || []).length > 0).map(area => (
+                {activeView === 'rv' && rvAreasWithSpots.map(area => (
                     <motion.div key={area.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                         <UnitGrid
-                            name={`${area.name} (RV / Camping)`}
+                            name={area.name}
                             units={area.spots || []}
                             layoutCols={area.spotCount}
                             stallCount={area.spotCount}
