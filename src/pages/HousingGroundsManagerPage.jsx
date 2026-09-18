@@ -3845,6 +3845,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const ACTIVE_STATUSES = new Set(['confirmed', 'checked_in', 'checked_out']);
         const POWER_AMPS = { '50amp': 50, '30amp': 30, '35amp': 35, '25amp': 25, 'none': 0 };
 
+        // Same stall-focused set as the Bookings tab and the top stat bar — live
+        // at-show hay/shavings reorders aren't stall/RV bookings and shouldn't
+        // count toward booking totals, no-show rate, or revenue here.
+        const relevantBookings = bookings.filter(b => !isLiveSupply(b));
+
         let realizedRevenue = 0;
         let stallRevenue = 0;
         let rvRevenue = 0;
@@ -3852,7 +3857,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         let supportRevenue = 0;
         let facilityFeeRevenue = 0; // extra stall fees that apply to every barn
         let cancelledCount = 0;
-        let totalBookingsCount = bookings.length;
+        let totalBookingsCount = relevantBookings.length;
 
         // Realized cost / profit — priced live off the current Cost fields, the
         // same way revenue is priced live off current Amount fields (see below).
@@ -3900,7 +3905,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             demandByRefId.get(refId).count += 1;
         };
 
-        for (const b of bookings) {
+        for (const b of relevantBookings) {
             if (b.status === 'cancelled') { cancelledCount += 1; continue; }
             const isActive = ACTIVE_STATUSES.has(b.status);
 
@@ -3912,6 +3917,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             // slices still add up to it exactly.
             const nights = Number(b.nights) || 1;
             const assignedForBooking = getAssignedStallsForBooking(b, barns);
+
+            // One booking can carry two line items for the same barn/RV area (a
+            // Flat Fee item plus a Nightly Fee item — see buildBarnStallOptionItems).
+            // Demand should still count once per booking per zone, so "Peak Demand"
+            // reads as booking counts and can never exceed the No-Show/Cancel total.
+            const demandedInThisBooking = new Set();
 
             // Per-item breakdown. Revenue sums count only realized (active) bookings
             // so the "Revenue by Source" slices always add up to Realized Revenue.
@@ -3932,7 +3943,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         const bs = barnStats.get(it.refId);
                         if (bs) { bs.revenue += liveStallAmt; bs.bookings += 1; }
                     }
-                    if (barn) recordDemand(barn.id, barn.name, 'stall');
+                    if (barn && !demandedInThisBooking.has(barn.id)) {
+                        demandedInThisBooking.add(barn.id);
+                        recordDemand(barn.id, barn.name, 'stall');
+                    }
                 } else if (it.type === 'stall_fee') {
                     // Circuit / flat fees stamped onto the booking. Counted as stall
                     // money, and against a barn when the fee was scoped to exactly one
@@ -3954,7 +3968,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     if (it.type === 'rv') {
                         const area = rvAreas.find(x => x.id === it.refId);
                         if (area) {
-                            recordDemand(area.id, area.name, 'rv');
+                            if (!demandedInThisBooking.has(area.id)) {
+                                demandedInThisBooking.add(area.id);
+                                recordDemand(area.id, area.name, 'rv');
+                            }
                             const rs = rvTypeStats.get(rvTypeKey(area));
                             if (rs && isActive) { rs.occupied += Number(it.qty) || 0; rs.revenue += itAmt; }
                             if (isActive) {
@@ -4001,8 +4018,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             const ampPer = POWER_AMPS[area.powerType] || 0;
             ampsCapacity += ampPer * (area.spotCount || 0);
         }
-        for (const b of bookings) {
-            if (b.status === 'cancelled') continue;
+        for (const b of relevantBookings) {
+            if (!ACTIVE_STATUSES.has(b.status)) continue;
             for (const it of b.items || []) {
                 if (it.type !== 'rv') continue;
                 const area = rvAreas.find(x => x.id === it.refId);
@@ -4172,15 +4189,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         },
         {
             id: 'booking', label: 'Booking & Stall Management', icon: ClipboardList,
+            count: stallBookings.length,
             items: [
                 { value: 'bookings', label: `Bookings (${stallBookings.length})` },
                 { value: 'masterlist', label: 'Master List' },
                 { value: 'assign', label: 'Assign Stalls' },
-                { value: 'charts', label: 'Charts' },
+                { value: 'charts', label: 'Charts (Trends)' },
             ],
         },
         {
             id: 'supplies', label: 'Hay, Shavings & Barn Services', icon: ShoppingCart,
+            count: preShowDeliveryOrders.length + liveSupplyOrders.length,
             items: [
                 { value: 'supplyorders', label: `Hay & Shavings (${preShowDeliveryOrders.length + liveSupplyOrders.length})` },
             ],
@@ -4224,6 +4243,33 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         const Icon = cat.icon;
                         const isActiveCategory = cat.items.some(i => i.value === activeSection);
                         const activeLabel = cat.items.find(i => i.value === activeSection)?.label;
+                        const badge = cat.count > 0 && (
+                            <span className={cn(
+                                'inline-flex items-center justify-center rounded-full px-1.5 h-4 min-w-4 text-[10px] font-semibold',
+                                isActiveCategory ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-primary/10 text-primary'
+                            )}>
+                                {cat.count}
+                            </span>
+                        );
+
+                        // Single-item categories: a dropdown with one entry is just a slower button.
+                        if (cat.items.length === 1) {
+                            return (
+                                <Button
+                                    key={cat.id}
+                                    type="button"
+                                    variant={isActiveCategory ? 'default' : 'outline'}
+                                    size="sm"
+                                    className="h-9 text-xs gap-1.5"
+                                    onClick={() => setActiveSection(cat.items[0].value)}
+                                >
+                                    <Icon className="h-3.5 w-3.5" />
+                                    {cat.label}
+                                    {badge}
+                                </Button>
+                            );
+                        }
+
                         return (
                             <DropdownMenu key={cat.id}>
                                 <DropdownMenuTrigger asChild>
@@ -4235,6 +4281,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     >
                                         <Icon className="h-3.5 w-3.5" />
                                         {cat.label}
+                                        {badge}
                                         {isActiveCategory && cat.items.length > 1 && (
                                             <span className="opacity-80 font-normal hidden sm:inline">· {activeLabel}</span>
                                         )}
