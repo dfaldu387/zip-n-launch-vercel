@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, Suspense, lazy, createContext, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
@@ -115,10 +115,50 @@ const STAT_COLOR_PALETTE = [
     { bg: 'bg-violet-50 dark:bg-violet-950/20', border: 'border-violet-200 dark:border-violet-800', text: 'text-violet-700 dark:text-violet-300' },
 ];
 
+// Read-only look for a disabled fieldset: keep values dark enough to read (the base
+// inputs fade to 50% and the fieldset fades again, which made them nearly invisible).
+const READONLY_FIELDS = 'opacity-100 [&_input:disabled]:opacity-100 [&_textarea:disabled]:opacity-100 [&_[role=combobox]:disabled]:opacity-100 [&_input:disabled]:bg-muted/50 [&_textarea:disabled]:bg-muted/50 [&_[role=combobox]:disabled]:bg-muted/50 [&_input:disabled]:text-foreground [&_textarea:disabled]:text-foreground [&_[role=combobox]:disabled]:text-foreground';
+
+// True while the setup is Published or Locked. Lets deep components hide their own
+// lock buttons instead of showing a second, confusing "Locked" state.
+const ReadOnlyContext = createContext(false);
+
+// 'YYYY-MM-DD' -> 'Sep 18, 2026'. Parsed by hand so the time zone can't shift the day.
+// (The native date box follows the browser language, so it can show day-first.)
+const formatDateLong = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+    if (!m) return '';
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+        .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+// Whole days from today to an ISO date (negative = already past).
+const daysUntil = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+    if (!m) return null;
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const target = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return Math.round((target - start) / 86400000);
+};
+
+// Warning line under the Move-in / Move-out dates, or null when all is fine.
+const getWindowHint = (moveInDate, moveOutDate) => {
+    const out = daysUntil(moveOutDate);
+    if (out === null) return null;
+    if (out < 0) return { tone: 'red', text: 'Move-out date has passed — exhibitors can no longer book this window.' };
+    if (out === 0) return { tone: 'red', text: 'Booking window closes today.' };
+    if (out <= 3) return { tone: 'amber', text: `Booking window closes in ${out} day${out === 1 ? '' : 's'}.` };
+    return null;
+};
+
 // Shown above both Livestock Housing and RV & Camping — it's one global window
 // (not per-type), just surfaced in both places so it's visible no matter which
 // section someone scrolls to first.
-const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => (
+const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+    const readOnly = useContext(ReadOnlyContext);
+    const hint = getWindowHint(moveInDate, moveOutDate);
+    return (
     <Card className="border-l-4 border-l-indigo-500">
         <CardContent className="py-4">
             <div className="flex flex-wrap items-end justify-between gap-4">
@@ -128,7 +168,7 @@ const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, se
                         <span className="text-sm font-semibold">Move-in / Move-out</span>
                     </div>
                     <div className="space-y-1">
-                        <Label className="text-xs">Move-in date</Label>
+                        <Label className="text-xs">Move-in date{moveInDate && <span className="ml-1 font-normal text-muted-foreground">· {formatDateLong(moveInDate)}</span>}</Label>
                         <Input
                             type="date"
                             value={moveInDate}
@@ -139,7 +179,7 @@ const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, se
                         />
                     </div>
                     <div className="space-y-1">
-                        <Label className="text-xs">Move-out date</Label>
+                        <Label className="text-xs">Move-out date{moveOutDate && <span className="ml-1 font-normal text-muted-foreground">· {formatDateLong(moveOutDate)}</span>}</Label>
                         <Input
                             type="date"
                             value={moveOutDate}
@@ -150,23 +190,31 @@ const MoveInOutCard = ({ moveInDate, moveOutDate, datesLocked, setMoveInDate, se
                         />
                     </div>
                 </div>
-                <Button
-                    type="button"
-                    variant={datesLocked ? 'default' : 'outline'}
-                    size="sm"
-                    className={cn('h-8 text-xs gap-1', datesLocked && 'bg-amber-500 hover:bg-amber-600 text-white')}
-                    onClick={() => setDatesLocked(v => !v)}
-                >
-                    <Lock className="h-3.5 w-3.5" />
-                    {datesLocked ? 'Locked — click to edit' : 'Lock dates'}
-                </Button>
+                {!readOnly && (
+                    <Button
+                        type="button"
+                        variant={datesLocked ? 'default' : 'outline'}
+                        size="sm"
+                        className={cn('h-8 text-xs gap-1', datesLocked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+                        onClick={() => setDatesLocked(v => !v)}
+                    >
+                        <Lock className="h-3.5 w-3.5" />
+                        {datesLocked ? 'Locked — click to edit' : 'Lock dates'}
+                    </Button>
+                )}
             </div>
             <p className="text-[11px] text-muted-foreground mt-2">
                 Exhibitors can only choose arrival &amp; departure dates inside this window when booking.
             </p>
+            {hint && (
+                <p className={cn('text-xs font-medium mt-1.5', hint.tone === 'red' ? 'text-red-600' : 'text-amber-600')}>
+                    ⚠ {hint.text}
+                </p>
+            )}
         </CardContent>
     </Card>
-);
+    );
+};
 
 // Fee-detail options — kept in sync with FeeStructureStep so the questions
 // (Unit Type) look and read identically on both pages.
@@ -390,7 +438,10 @@ const AddStockControl = ({ onAdd, disabled }) => {
 
 // Per-section lock toggle — freeze one Barn / RV area / supply as you finish it so
 // it can't be adjusted by accident. Independent of the page-wide "Locked" lifecycle.
-const SectionLockToggle = ({ locked, onToggle }) => (
+const SectionLockToggle = ({ locked, onToggle }) => {
+    const readOnly = useContext(ReadOnlyContext);
+    if (readOnly) return null;
+    return (
     <Button
         type="button"
         variant={locked ? 'default' : 'outline'}
@@ -402,7 +453,8 @@ const SectionLockToggle = ({ locked, onToggle }) => (
         <Lock className="h-3.5 w-3.5" />
         {locked ? 'Locked' : 'Lock'}
     </Button>
-);
+    );
+};
 
 // Thin occupancy bar used by the per-area analytics tables. Green until it gets
 // tight, amber past 80%, red when full — readable at a glance across a long list.
@@ -851,6 +903,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     const shape = describeGrid(barn.stalls || [], cols);
     // When locked the grid "holds still" — no painting, no row/col changes, no aisle edits.
     const locked = barn.layoutLocked || false;
+    const readOnly = useContext(ReadOnlyContext);
     // Section lock — freezes the whole barn (inventory + its fees) once the organizer
     // is done with it. Separate from layoutLocked (which only holds the grid still).
     const sectionLocked = barn.locked || false;
@@ -1013,7 +1066,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
             </CardHeader>
             {expanded && (
                 <CardContent className="pt-2">
-                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && READONLY_FIELDS)}>
                     <MoveInOutCard
                         moveInDate={moveInDate}
                         moveOutDate={moveOutDate}
@@ -1036,7 +1089,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                         {barn.useCustomDates && (
                             <div className="flex flex-wrap items-end gap-4 pt-1">
                                 <div className="space-y-1">
-                                    <Label className="text-xs">Move-in date</Label>
+                                    <Label className="text-xs">Move-in date{barn.moveInDate && <span className="ml-1 font-normal text-muted-foreground">· {formatDateLong(barn.moveInDate)}</span>}</Label>
                                     <Input
                                         type="date"
                                         value={barn.moveInDate || ''}
@@ -1046,7 +1099,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                     />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label className="text-xs">Move-out date</Label>
+                                    <Label className="text-xs">Move-out date{barn.moveOutDate && <span className="ml-1 font-normal text-muted-foreground">· {formatDateLong(barn.moveOutDate)}</span>}</Label>
                                     <Input
                                         type="date"
                                         value={barn.moveOutDate || ''}
@@ -1114,7 +1167,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                 {showLayout ? '▾' : '▸'} Barn Layout ({booked}/{totalStalls} booked)
                                 {locked && <Lock className="h-3 w-3 text-amber-600" />}
                             </button>
-                            {showLayout && (
+                            {showLayout && !readOnly && (
                                 <Button
                                     type="button"
                                     variant={locked ? 'default' : 'outline'}
@@ -1443,7 +1496,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
             </CardHeader>
             {expanded && variant === 'inventory' && (
                 <CardContent className="pt-2">
-                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && READONLY_FIELDS)}>
                     <MoveInOutCard
                         moveInDate={moveInDate}
                         moveOutDate={moveOutDate}
@@ -1504,7 +1557,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
             )}
             {expanded && variant === 'fees' && (
                 <CardContent className="pt-2">
-                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && 'opacity-70')}>
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && READONLY_FIELDS)}>
                     <p className="text-xs text-muted-foreground">
                         Pricing for this area now lives in the RV Fees list below — add a fee and pick this area under "Applies to".
                     </p>
@@ -4213,14 +4266,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     ], [stallBookings.length, preShowDeliveryOrders.length, liveSupplyOrders.length]);
 
     return (
+        <ReadOnlyContext.Provider value={isLocked}>
         <div className="space-y-6">
             {/* Read-only banner (Locked or Published) */}
             {isLocked && (
                 <div className="flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
                     {publishStatus === 'published' ? <Globe className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
                     {publishStatus === 'published'
-                        ? <span>This setup is <strong>Published</strong> (live for booking). Switch back to <strong>Draft</strong> to make changes.</span>
-                        : <span>This setup is <strong>Locked</strong>. Switch back to <strong>Draft</strong> to make changes.</span>}
+                        ? <span><strong>Published — read-only.</strong> Exhibitors can book now. Switch to <strong>Draft</strong> (top of page) to edit.</span>
+                        : <span><strong>Locked — read-only.</strong> Switch to <strong>Draft</strong> (top of page) to edit.</span>}
                 </div>
             )}
 
@@ -4335,25 +4389,33 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
                         <div className="h-5 w-px bg-border" />
 
-                        <Button size="sm" onClick={handleSave} disabled={isSaving} className="h-7 rounded-full px-3">
-                            {isSaving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
-                            {isSaving ? 'Saving…' : 'Save All'}
-                        </Button>
-                        <span className="hidden md:inline text-[11px] text-muted-foreground whitespace-nowrap">
-                            {isSaving
-                                ? 'Saving…'
-                                : isDirty
-                                    ? 'Unsaved changes…'
-                                    : lastSavedAt
-                                        ? `Saved ${lastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                                        : 'Auto-save on'}
-                        </span>
+                        {isLocked ? (
+                            <span className="hidden md:inline text-[11px] text-muted-foreground whitespace-nowrap">
+                                {publishStatus === 'published' ? 'Published — read-only' : 'Locked — read-only'}
+                            </span>
+                        ) : (
+                            <>
+                                <Button size="sm" onClick={handleSave} disabled={isSaving} className="h-7 rounded-full px-3">
+                                    {isSaving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+                                    {isSaving ? 'Saving…' : 'Save All'}
+                                </Button>
+                                <span className="hidden md:inline text-[11px] text-muted-foreground whitespace-nowrap">
+                                    {isSaving
+                                        ? 'Saving…'
+                                        : isDirty
+                                            ? 'Unsaved changes…'
+                                            : lastSavedAt
+                                                ? `Saved ${lastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                                : 'Auto-save on'}
+                                </span>
+                            </>
+                        )}
                     </div>
                 </div>
 
                 {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
                 <TabsContent value="inventory" className="mt-4">
-                          <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && 'opacity-70')}>
+                          <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && READONLY_FIELDS)}>
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Building2 className="h-5 w-5 text-primary" />
@@ -4361,10 +4423,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <Badge variant="outline" className="text-xs">{barns.length} area{barns.length !== 1 ? 's' : ''} · {totalStalls} stall{totalStalls !== 1 ? 's' : ''}</Badge>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <Button onClick={addBarn} variant="outline" size="sm">
+                                    <Button onClick={addBarn} variant="outline" size="sm" title={isLocked ? 'Switch to Draft to add barns' : undefined}>
                                         <Plus className="h-4 w-4 mr-1.5" /> Add Barn
                                     </Button>
-                                    <Button onClick={autoGenerateBarns} variant="outline" size="sm">
+                                    <Button onClick={autoGenerateBarns} variant="outline" size="sm" title={isLocked ? 'Switch to Draft to auto-generate barns' : undefined}>
                                         <Wand2 className="h-4 w-4 mr-1.5" /> Auto-Generate
                                     </Button>
                                 </div>
@@ -4488,7 +4550,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
                 {/* ── Fees Tab — all area fee details consolidated in one place ── */}
                 <TabsContent value="fees" className="mt-4">
-                          <fieldset disabled={isLocked} className={cn('space-y-5', isLocked && 'opacity-70')}>
+                          <fieldset disabled={isLocked} className={cn('space-y-5', isLocked && READONLY_FIELDS)}>
                             <div className="flex items-center gap-2">
                                 <DollarSign className="h-5 w-5 text-emerald-600" />
                                 <h3 className="text-base font-semibold">Fees</h3>
@@ -5614,6 +5676,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 cancelText="Not yet"
             />
         </div>
+        </ReadOnlyContext.Provider>
     );
 };
 
