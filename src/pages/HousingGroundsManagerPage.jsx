@@ -3222,6 +3222,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const payoutsEnabled = profile?.stripe_connect_payouts_enabled === true;
     const [payoutSetupOpen, setPayoutSetupOpen] = useState(false);
     const [payoutSetupLoading, setPayoutSetupLoading] = useState(false);
+    const [payoutDashboardLoading, setPayoutDashboardLoading] = useState(false);
 
     // Onboarding was likely started on an earlier visit and finished on Stripe's
     // site — account.updated usually syncs this within seconds, but catch up
@@ -3252,10 +3253,46 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         window.location.href = data.url;
     };
 
+    // Robert's "people could go in and change their bank accounts" ask (2026-09-20):
+    // once payouts are already connected, this opens Stripe's own Express Dashboard
+    // in a new tab — the page Stripe provides for viewing payouts and updating bank
+    // details — instead of re-running first-time onboarding.
+    const openPayoutDashboard = async () => {
+        setPayoutDashboardLoading(true);
+        const { data, error } = await invokeAsUser('stripe-connect-onboarding', { mode: 'dashboard' });
+        setPayoutDashboardLoading(false);
+        if (error || !data?.url) {
+            toast({
+                variant: 'destructive',
+                title: 'Could not open Stripe dashboard',
+                description: error?.message || 'Please try again.',
+            });
+            return;
+        }
+        window.open(data.url, '_blank', 'noopener,noreferrer');
+    };
+
+    // Robert's "published before check stall and all other setting is added" catch
+    // (2026-09-20): a show could hit Published with zero stall fees set up — nothing
+    // stopped it, so exhibitors would see a $0 or broken price on the public booking
+    // page. Same count the "Stall Fees" badge in the Fees tab shows.
+    const stallFeeCount = extraStallFees.length + manualFeesByCategory('stall').length;
+    const BILLING_MODE_LABELS = { invoice_after: 'Invoice after confirmation', at_booking: 'Bill at booking' };
+
     // Guard the lifecycle toggle: going *to* Published asks first; everything else applies now.
     const requestStatusChange = (nextStatus) => {
         if (nextStatus === publishStatus) return;
         if (nextStatus === 'published') {
+            // Hard block — no bypass, matches the payout gate below. A show with no
+            // stall fees has no price for exhibitors to book at, so it isn't ready.
+            if (stallFeeCount === 0) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Add a stall fee before publishing',
+                    description: 'This show has no stall fees set up yet — add at least one (a barn’s nightly rate, a flat fee, etc.) in the Fees tab first, so exhibitors have a price to book at.',
+                });
+                return;
+            }
             if (!payoutsEnabled) { setPayoutSetupOpen(true); return; }
             setConfirmPublish(true);
             return;
@@ -4597,21 +4634,34 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 <p className="text-[11px] text-muted-foreground">
                                     Online card payment (Stripe) is wired up in a later step — this setting decides which flow the public booking page will use.
                                 </p>
-                                {/* Platform commission disclosure — same fact stated at payout setup
-                                    (see payoutSetupOpen dialog below), repeated here since this is
-                                    where an organizer reviewing billing will actually look for it. */}
-                                {payoutsEnabled ? (
-                                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                                        <CheckCircle2 className="h-3 w-3 shrink-0" />
-                                        Payouts connected — you keep 95% of each online payment; EquiPatterns retains a 5% platform fee.
-                                    </p>
-                                ) : (
-                                    <p className="text-[11px] text-amber-700 dark:text-amber-400">
-                                        Online payments need a connected payout account first. EquiPatterns retains a 5% platform fee from each payment — you receive the other 95%, deposited by Stripe.{' '}
-                                        <button type="button" onClick={() => setPayoutSetupOpen(true)} className="underline font-medium">Set up payouts</button>
-                                    </p>
-                                )}
                             </div>
+                          </fieldset>
+                          {/* Payout account status + "Manage bank account" — deliberately OUTSIDE the
+                              fieldset above (and the one reopened below). This isn't show data to
+                              lock; it's the organizer's own Stripe account, so it has to stay
+                              clickable even once the show is Locked/Published (Robert's "change their
+                              bank accounts" ask, 2026-09-20 — the old placement inside the fieldset
+                              made this uncontrollable dead text on any published show, which is what
+                              he hit). Kept right under Billing, its original spot, instead of at the
+                              bottom of the tab. */}
+                          <div className="rounded-lg border bg-muted/20 p-3">
+                              {payoutsEnabled ? (
+                                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400 flex items-center gap-1 flex-wrap">
+                                      <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                      Payouts connected — you keep 95% of each online payment; EquiPatterns retains a 5% platform fee.
+                                      <button type="button" onClick={openPayoutDashboard} disabled={payoutDashboardLoading}
+                                          className="underline font-medium inline-flex items-center gap-1 disabled:opacity-60">
+                                          {payoutDashboardLoading ? 'Opening…' : <>Manage bank account <ExternalLink className="h-3 w-3" /></>}
+                                      </button>
+                                  </p>
+                              ) : (
+                                  <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                                      Online payments need a connected payout account first. EquiPatterns retains a 5% platform fee from each payment — you receive the other 95%, deposited by Stripe.{' '}
+                                      <button type="button" onClick={() => setPayoutSetupOpen(true)} className="underline font-medium">Set up payouts</button>
+                                  </p>
+                              )}
+                          </div>
+                          <fieldset disabled={isLocked} className={cn('space-y-5', isLocked && READONLY_FIELDS)}>
 
                             {/* Stall Fees — every charge on a stall booking. Pick which barns a fee
                                 covers (one, several, or all); tick more than one and it's the same
@@ -5654,13 +5704,20 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 </TabsContent>
             </Tabs>
 
-            {/* Second step before going live on the public Events page. */}
+            {/* Second step before going live on the public Events page. Includes a quick
+                readiness recap (stall fees + billing mode) so the last thing an organizer
+                sees before publishing is confirmation those are actually set the way they
+                want — not just a generic "are you sure?". */}
             <ConfirmationDialog
                 isOpen={confirmPublish}
                 onClose={() => setConfirmPublish(false)}
                 onConfirm={() => { setConfirmPublish(false); setPublishStatus('published'); }}
                 title="Publish to the event page?"
-                description={`This makes Housing & Grounds for "${show.project_name || 'this show'}" live on the public Events page — anyone can view it and book stalls. You can switch back to Draft to take it down.`}
+                description={<>
+                    This makes Housing & Grounds for "{show.project_name || 'this show'}" live on the public Events page — anyone can view it and book stalls. You can switch back to Draft to take it down.
+                    <br /><br />
+                    Ready to go: {stallFeeCount} stall fee{stallFeeCount === 1 ? '' : 's'} set up · Billing: {BILLING_MODE_LABELS[billingMode] || billingMode}.
+                </>}
                 confirmText="Yes, publish"
                 cancelText="Cancel"
             />

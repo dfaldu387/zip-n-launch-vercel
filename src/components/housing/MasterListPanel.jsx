@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +13,12 @@ import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { getSupplyStage, getSupplyLastUpdate, SUPPLY_STAGES } from '@/lib/supplyStatus';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+
+// EquiPatterns' cut of every online payment (matches stalls-create-checkout /
+// stalls-create-invoice edge functions and the Billing disclosure text in the
+// Fees tab). Applied only to money actually received — never to the price owed
+// on a still-Pending booking, so this sheet never shows money that isn't real yet.
+const PLATFORM_FEE_RATE = 0.05;
 
 // ── Phase 1: Master List ──
 // A spreadsheet-style roster of everyone who booked (stalls + RV + pre-ordered
@@ -88,6 +95,16 @@ const buildRow = (booking, barns, extraStallFees) => {
         barnName: barns.find(b => b.id === s.barnId)?.name,
     }));
     const amount = computeBookingTotal(booking, pricedStalls, extraStallFees);
+    // Money actually received, not the price owed. A real Stripe payment records
+    // its own paidAmount (partial or full); a booking hand-marked Paid without one
+    // is treated as paid in full. Anything else (Pending, cancelled, etc.) is $0 —
+    // this sheet never counts a payment that hasn't happened yet.
+    const paymentStatus = booking.paymentStatus || 'unpaid';
+    const paidAmount = paymentStatus === 'paid' ? (Number(booking.paidAmount) || amount)
+        : paymentStatus === 'partial' ? (Number(booking.paidAmount) || 0)
+        : 0;
+    const platformFee = paidAmount * PLATFORM_FEE_RATE;
+    const clubAmount = paidAmount - platformFee;
     return {
         booking,
         ref: getBookingRef(booking),
@@ -119,6 +136,9 @@ const buildRow = (booking, barns, extraStallFees) => {
         horseNamesStr: horseNamesArr.join(', '),
         status: getBookingDisplayStatus(booking),
         amount,
+        paidAmount,
+        clubAmount,
+        platformFee,
     };
 };
 
@@ -128,11 +148,6 @@ const STATUS_STYLES = {
     confirmed: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
     checked_in: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
     cancelled: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
-};
-
-const csvCell = (v) => {
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 // A generation timestamp for every export, so a printed/emailed copy is traceable.
@@ -157,6 +172,7 @@ const COLUMNS = [
     { key: 'horses', label: 'Horses', align: 'center' },
     { key: 'status', label: 'Status', align: 'left' },
     { key: 'amount', label: 'Amount', align: 'right' },
+    { key: 'paidAmount', label: 'Paid', align: 'right' },
 ];
 
 const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show' }) => {
@@ -219,7 +235,10 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
         supplies: t.supplies + r.supplyCount,
         horses: t.horses + r.horses,
         amount: t.amount + r.amount,
-    }), { stalls: 0, assigned: 0, rv: 0, supplies: 0, horses: 0, amount: 0 }), [filtered]);
+        paidAmount: t.paidAmount + r.paidAmount,
+        clubAmount: t.clubAmount + r.clubAmount,
+        platformFee: t.platformFee + r.platformFee,
+    }), { stalls: 0, assigned: 0, rv: 0, supplies: 0, horses: 0, amount: 0, paidAmount: 0, clubAmount: 0, platformFee: 0 }), [filtered]);
 
     const toggleSort = (key) => setSort(prev =>
         prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
@@ -229,38 +248,58 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
         return sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
     };
 
-    const exportCsv = () => {
-        const { human, file } = exportStamp();
-        const header = [
-            'Reference', 'Order Type', 'Exhibitor', 'Email', 'Phone',
-            'Trainer/Group', 'Trainer Email', 'Trainer Phone',
-            'Arrival', 'Departure',
-            'Stalls', 'Assigned', 'Assigned Stalls', 'RV',
-            'Supplies / Pre-Orders', 'Supply Status', 'Horses', 'Horse Names', 'Status', 'Amount',
+    // Real .xlsx (not a CSV pretending to be one) — reuses the same SheetJS library
+    // already used for budget exports elsewhere. Robert's ask (2026-09-20 video):
+    // "it would show who's paid, how much the club has made, or the individual...
+    // should be seeing in their bank account" — so alongside the price owed, every
+    // row gets what was ACTUALLY paid, and that split 95% club / 5% EquiPatterns.
+    const exportExcel = () => {
+        const { file } = exportStamp();
+        const rowsOut = filtered.map(r => ({
+            Reference: r.ref,
+            'Order Type': r.kind,
+            Exhibitor: r.name,
+            Email: r.email,
+            Phone: r.phone,
+            'Trainer/Group': r.trainer,
+            'Trainer Email': r.trainerEmail,
+            'Trainer Phone': r.trainerPhone,
+            Arrival: r.arrivalLabel,
+            Departure: r.departureLabel,
+            Stalls: r.stalls,
+            Assigned: r.assignedCount,
+            'Assigned Stalls': r.stallNumbers,
+            RV: r.rv,
+            'Supplies / Pre-Orders': r.suppliesStr,
+            'Supply Status': r.supplyStatus,
+            Horses: r.horses,
+            'Horse Names': r.horseNamesStr,
+            Status: r.status,
+            'Amount Owed': r.amount,
+            'Amount Paid': r.paidAmount,
+            'Club Gets (95%)': r.clubAmount,
+            'Platform Fee (5%)': r.platformFee,
+        }));
+        rowsOut.push({
+            Reference: '', 'Order Type': '', Exhibitor: 'TOTAL', Email: '', Phone: '',
+            'Trainer/Group': '', 'Trainer Email': '', 'Trainer Phone': '', Arrival: '', Departure: '',
+            Stalls: totals.stalls, Assigned: totals.assigned, 'Assigned Stalls': '', RV: totals.rv,
+            'Supplies / Pre-Orders': '', 'Supply Status': '', Horses: totals.horses, 'Horse Names': '', Status: '',
+            'Amount Owed': totals.amount, 'Amount Paid': totals.paidAmount,
+            'Club Gets (95%)': totals.clubAmount, 'Platform Fee (5%)': totals.platformFee,
+        });
+
+        const ws = XLSX.utils.json_to_sheet(rowsOut);
+        ws['!cols'] = [
+            { wch: 10 }, { wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 14 },
+            { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 10 }, { wch: 10 },
+            { wch: 7 }, { wch: 9 }, { wch: 16 }, { wch: 6 },
+            { wch: 24 }, { wch: 14 }, { wch: 7 }, { wch: 24 }, { wch: 10 },
+            { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 },
         ];
-        const lines = [
-            '﻿' + csvCell(`${showName} — Master List`), // BOM so Excel reads UTF-8 accents correctly
-            'Generated:,' + csvCell(human),
-            '', // blank spacer row before the table header
-            header.join(','),
-        ];
-        for (const r of filtered) {
-            lines.push([
-                r.ref, r.kind, r.name, r.email, r.phone,
-                r.trainer, r.trainerEmail, r.trainerPhone,
-                r.arrivalLabel, r.departureLabel,
-                r.stalls, r.assignedCount, r.stallNumbers, r.rv,
-                r.suppliesStr, r.supplyStatus, r.horses, r.horseNamesStr, r.status, fmtMoney(r.amount),
-            ].map(csvCell).join(','));
-        }
-        lines.push([...Array(header.length - 2).fill(''), 'Total:', fmtMoney(totals.amount)].map(csvCell).join(','));
-        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${showName.replace(/[^\w-]+/g, '_')}_master_list_${file}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Master List');
+        XLSX.writeFile(wb, `${showName.replace(/[^\w-]+/g, '_')}_master_list_${file}.xlsx`);
     };
 
     // Escape values before injecting into the print window's HTML.
@@ -367,13 +406,23 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
                     </SelectContent>
                 </Select>
                 <div className="flex-1" />
-                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={exportCsv} disabled={filtered.length === 0}>
-                    <Download className="h-3.5 w-3.5 mr-1.5" /> CSV
+                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={exportExcel} disabled={filtered.length === 0}>
+                    <Download className="h-3.5 w-3.5 mr-1.5" /> Excel
                 </Button>
                 <Button variant="outline" size="sm" className="h-8 text-xs" onClick={printList} disabled={filtered.length === 0}>
                     <Printer className="h-3.5 w-3.5 mr-1.5" /> Print
                 </Button>
             </div>
+
+            {/* Money at a glance — what's actually been paid, and the 95%/5% split, without
+                opening the Excel file. Only counts real payments (see buildRow above). */}
+            {filtered.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground px-1">
+                    <span>Paid so far: <span className="font-semibold text-foreground">{fmtMoney(totals.paidAmount)}</span></span>
+                    <span>Club gets (95%): <span className="font-semibold text-emerald-700 dark:text-emerald-400">{fmtMoney(totals.clubAmount)}</span></span>
+                    <span>Platform fee (5%): <span className="font-medium">{fmtMoney(totals.platformFee)}</span></span>
+                </div>
+            )}
 
             {rows.length === 0 ? (
                 <Card>
@@ -485,6 +534,10 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
                                             </Badge>
                                         </td>
                                         <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtMoney(r.amount)}</td>
+                                        <td className={cn('px-3 py-2 text-right tabular-nums font-medium',
+                                            r.paidAmount > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground')}>
+                                            {fmtMoney(r.paidAmount)}
+                                        </td>
                                     </tr>
                                     {isOpen && (
                                         <tr className="border-b bg-muted/30">
@@ -556,6 +609,13 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
                                                         {r.booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{r.booking.source}</span></span> : null}
                                                         {r.booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtDateTime(r.booking.createdAt)}</span></span> : null}
                                                         <span>Amount: <span className="font-semibold text-foreground">{fmtMoney(r.amount)}</span></span>
+                                                        {r.paidAmount > 0 && (
+                                                            <>
+                                                                <span>Paid: <span className="font-semibold text-emerald-700 dark:text-emerald-400">{fmtMoney(r.paidAmount)}</span></span>
+                                                                <span>Club gets (95%): <span className="font-medium text-foreground">{fmtMoney(r.clubAmount)}</span></span>
+                                                                <span>Platform fee (5%): <span className="font-medium text-foreground">{fmtMoney(r.platformFee)}</span></span>
+                                                            </>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </td>
@@ -576,6 +636,7 @@ const MasterListPanel = ({ bookings = [], barns = [], rvAreas = [], extraStallFe
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.horses}</td>
                                     <td className="px-3 py-2" />
                                     <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(totals.amount)}</td>
+                                    <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(totals.paidAmount)}</td>
                                 </tr>
                             </tfoot>
                         )}

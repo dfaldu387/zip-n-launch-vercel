@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe } from 'lucide-react';
+import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe, Search } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
     assignStallToBooking, unassignStall, applyPlanToBarns,
@@ -52,16 +52,26 @@ const NO_GROUP = '__none__';
 const rvCols = (area) => Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
 
 // Which group a booking belongs to: an explicit manual group wins, otherwise the
-// trainer / ranch name it booked under, otherwise the exhibitor's own name — so a
-// solo booking still reads as a (one-person) group instead of showing nothing.
+// trainer / ranch name it booked under. A booking with neither returns '' and falls
+// into the "On their own" list (see `solo` below) instead of becoming a fake
+// one-person group that looked identical to a real trainer group on screen.
 // NO_GROUP is the explicit "keep this one on its own" override and stays blank.
 const groupNameOf = (b) => {
     const manual = (b.stallGroup || '').trim();
     if (manual === NO_GROUP) return '';
     if (manual) return manual;
-    const trainer = (b.trainerName || '').trim();
-    if (trainer) return trainer;
-    return (b.exhibitorName || '').trim();
+    return (b.trainerName || '').trim();
+};
+
+// Left-rail search + assigned/unassigned filter, shared by every list the rail renders
+// (grouped rows, "on their own" rows, and the RV to-assign/fully-assigned rows).
+const matchesRailFilter = (r, query, status) => {
+    if (status === 'unassigned' && r.assigned >= r.requested) return false;
+    if (status === 'assigned' && r.assigned < r.requested) return false;
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const hay = `${r.booking.exhibitorName || ''} ${r.booking.trainerName || ''} ${r.booking.stallGroup || ''}`.toLowerCase();
+    return hay.includes(q);
 };
 
 // Hex + alpha, so a stall with nothing to show under the current layer still hints
@@ -325,6 +335,12 @@ const AssignBoard = ({
         next.has(id) ? next.delete(id) : next.add(id);
         return next;
     });
+    const [collapsedGroups, setCollapsedGroups] = useState(() => new Set()); // trainer/group ids folded shut, so a show with hundreds of stalls doesn't turn the left rail into a wall of rows
+    const toggleGroupCollapsed = (id) => setCollapsedGroups(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+    });
 
     // Selecting a booking, selecting a group (to place), moving a whole group and moving
     // one exhibitor's own stalls are all mutually exclusive.
@@ -454,6 +470,23 @@ const AssignBoard = ({
 
     const groupById = useMemo(() => Object.fromEntries(groups.map(g => [g.id, g])), [groups]);
     const selectedGroup = groups.find(g => g.id === selectedGroupId) || null;
+
+    // Left-rail search box + assigned/unassigned dropdown. Filters which rows show —
+    // never changes the real grouping, so "Assign group" / "Move" / "Delete" still act
+    // on the whole group even while a search narrows what's visible.
+    const [railQuery, setRailQuery] = useState('');
+    const [railStatus, setRailStatus] = useState('all'); // 'all' | 'unassigned' | 'assigned'
+    const visibleGroups = useMemo(() => groups
+        .map(g => ({ ...g, visibleRows: g.rows.filter(r => matchesRailFilter(r, railQuery, railStatus)) }))
+        .filter(g => g.visibleRows.length > 0),
+        [groups, railQuery, railStatus]);
+    const visibleIndividuals = useMemo(() => individuals.filter(r => matchesRailFilter(r, railQuery, railStatus)), [individuals, railQuery, railStatus]);
+    const visibleToAssign = useMemo(() => toAssign.filter(r => matchesRailFilter(r, railQuery, railStatus)), [toAssign, railQuery, railStatus]);
+    const visibleDoneRows = useMemo(() => doneRows.filter(r => matchesRailFilter(r, railQuery, railStatus)), [doneRows, railQuery, railStatus]);
+    const railHasResults = mode === 'stalls'
+        ? (visibleGroups.length > 0 || visibleIndividuals.length > 0)
+        : (visibleToAssign.length > 0 || visibleDoneRows.length > 0);
+    const railFiltering = railQuery.trim() !== '' || railStatus !== 'all';
 
     const handleSetGroup = (bookingId, value) => {
         if (!onSetBookingGroup) return;
@@ -891,6 +924,30 @@ const AssignBoard = ({
                                     Moving <span className="font-semibold">{bookingById[moveBookingId].exhibitorName}</span>'s {cfg.unitWord}s — click an empty {cfg.unitWord} (or one already theirs) for the new spot.
                                 </div>
                             )}
+                            <div className="flex items-center gap-2">
+                                <div className="relative flex-1 min-w-0">
+                                    <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                                    <input
+                                        value={railQuery}
+                                        onChange={(e) => setRailQuery(e.target.value)}
+                                        placeholder="Search by name…"
+                                        className="w-full h-8 rounded-md border bg-background pl-7 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                                    />
+                                </div>
+                                <Select value={railStatus} onValueChange={setRailStatus}>
+                                    <SelectTrigger className="h-8 w-[112px] text-xs shrink-0">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        <SelectItem value="unassigned">Unassigned</SelectItem>
+                                        <SelectItem value="assigned">Assigned</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {railFiltering && !railHasResults && (
+                                <p className="text-xs text-muted-foreground text-center py-4">No matches — try a different name or filter.</p>
+                            )}
                             {mode === 'stalls' ? (
                                 <>
                                     {selectedGroup && (
@@ -905,24 +962,29 @@ const AssignBoard = ({
                                             Moving <span className="font-semibold">{groupById[moveGroupId].name}</span> — click an empty stall (or one already in this group) for its new spot. The old stalls free automatically.
                                         </div>
                                     )}
-                                    {groups.map(g => {
+                                    {visibleGroups.map(g => {
                                         const remaining = g.totalRequested - g.totalAssigned;
                                         const done = remaining <= 0;
                                         const sel = selectedGroupId === g.id;
                                         const moving = moveGroupId === g.id;
+                                        const closed = collapsedGroups.has(g.id);
+                                        const filtered = g.visibleRows.length !== g.rows.length;
                                         return (
                                             <div key={g.id} className={cn('rounded-lg border p-2 space-y-1.5', (sel || moving) && 'ring-2 ring-primary')} style={{ borderLeft: `4px solid ${colorByGroup[g.id]}` }}>
                                                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                                                    <div className="min-w-0">
+                                                    <button type="button" onClick={() => toggleGroupCollapsed(g.id)}
+                                                        className="min-w-0 text-left"
+                                                        title={closed ? 'Show this group' : 'Hide this group'}>
                                                         <p className="text-sm font-semibold truncate flex items-center gap-1.5">
+                                                            {closed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
                                                             <span className="inline-block h-2.5 w-2.5 rounded-sm shrink-0" style={{ background: colorByGroup[g.id] }} />
                                                             {g.name}
                                                         </p>
-                                                        <p className="text-[11px] text-muted-foreground">
-                                                            {g.rows.length} exhibitor{g.rows.length > 1 ? 's' : ''} ·{' '}
+                                                        <p className="text-[11px] text-muted-foreground pl-5">
+                                                            {filtered ? `${g.visibleRows.length} of ${g.rows.length}` : `${g.rows.length}`} exhibitor{g.rows.length > 1 ? 's' : ''} ·{' '}
                                                             <span className={cn(done ? 'text-emerald-600' : 'text-amber-600', 'font-medium tabular-nums')}>{g.totalAssigned}/{g.totalRequested}</span> stalls
                                                         </p>
-                                                    </div>
+                                                    </button>
                                                     <div className="flex items-center gap-1 shrink-0">
                                                         {!done && (
                                                             <Button variant={sel ? 'default' : 'outline'} size="sm" className="h-7 text-xs"
@@ -946,26 +1008,28 @@ const AssignBoard = ({
                                                         )}
                                                     </div>
                                                 </div>
-                                                <div className="space-y-1 pl-1">
-                                                    {g.rows.map(r => (
-                                                        <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
-                                                            assigned={r.assigned} requested={r.requested}
-                                                            selected={selectedBookingId === r.booking.id} onSelect={pickBooking}
-                                                            groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null}
-                                                            onMove={() => pickMoveBooking(r.booking.id)}
-                                                            onRemove={() => requestRemoveBooking(r)}
-                                                            moving={moveBookingId === r.booking.id} />
-                                                    ))}
-                                                </div>
+                                                {!closed && (
+                                                    <div className="space-y-1 pl-1">
+                                                        {g.visibleRows.map(r => (
+                                                            <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
+                                                                assigned={r.assigned} requested={r.requested}
+                                                                selected={selectedBookingId === r.booking.id} onSelect={pickBooking}
+                                                                groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null}
+                                                                onMove={() => pickMoveBooking(r.booking.id)}
+                                                                onRemove={() => requestRemoveBooking(r)}
+                                                                moving={moveBookingId === r.booking.id} />
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
-                                    {individuals.length > 0 && (
+                                    {visibleIndividuals.length > 0 && (
                                         <div className="space-y-1.5">
                                             <p className="text-xs font-semibold uppercase text-muted-foreground flex items-center gap-1.5">
-                                                <Users className="h-3.5 w-3.5" /> On their own ({individuals.length})
+                                                <Users className="h-3.5 w-3.5" /> On their own ({visibleIndividuals.length}{railFiltering && visibleIndividuals.length !== individuals.length ? ` of ${individuals.length}` : ''})
                                             </p>
-                                            {individuals.map(r => (
+                                            {visibleIndividuals.map(r => (
                                                 <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                     assigned={r.assigned} requested={r.requested}
                                                     selected={selectedBookingId === r.booking.id} onSelect={pickBooking}
@@ -980,10 +1044,10 @@ const AssignBoard = ({
                             ) : (
                                 <>
                                     <div className="space-y-1.5">
-                                        <p className="text-xs font-semibold uppercase text-muted-foreground">To assign ({toAssign.length})</p>
+                                        <p className="text-xs font-semibold uppercase text-muted-foreground">To assign ({visibleToAssign.length}{railFiltering && visibleToAssign.length !== toAssign.length ? ` of ${toAssign.length}` : ''})</p>
                                         {toAssign.length === 0 ? (
                                             <p className="text-xs text-emerald-600 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Everyone is assigned.</p>
-                                        ) : toAssign.map(r => (
+                                        ) : visibleToAssign.map(r => (
                                             <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                 assigned={r.assigned} requested={r.requested}
                                                 selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]}
@@ -992,10 +1056,10 @@ const AssignBoard = ({
                                                 moving={moveBookingId === r.booking.id} />
                                         ))}
                                     </div>
-                                    {doneRows.length > 0 && (
+                                    {visibleDoneRows.length > 0 && (
                                         <div className="space-y-1.5">
-                                            <p className="text-xs font-semibold uppercase text-muted-foreground">Fully assigned ({doneRows.length})</p>
-                                            {doneRows.map(r => (
+                                            <p className="text-xs font-semibold uppercase text-muted-foreground">Fully assigned ({visibleDoneRows.length}{railFiltering && visibleDoneRows.length !== doneRows.length ? ` of ${doneRows.length}` : ''})</p>
+                                            {visibleDoneRows.map(r => (
                                                 <BookingChip key={r.booking.id} booking={r.booking} color={colorByBooking[r.booking.id]}
                                                     assigned={r.assigned} requested={r.requested}
                                                     selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]}

@@ -66,6 +66,7 @@ const HorseShowManagerPage = lazy(() => import('@/pages/HorseShowManagerPage'));
 const CreateShowPage = lazy(() => import('@/pages/CreateShowPage'));
 const ShowStructurePage = lazy(() => import('@/pages/ShowStructurePage'));
 const HousingGroundsManagerPage = lazy(() => import('@/pages/HousingGroundsManagerPage'));
+const PublicShowStatusPage = lazy(() => import('@/pages/PublicShowStatusPage'));
 const EmployeeArenaSchedulingManagerPage = lazy(() => import('@/pages/EmployeeArenaSchedulingManagerPage'));
 const AwardsPresenterManagerPage = lazy(() => import('@/pages/AwardsPresenterManagerPage'));
 const EmployeeManagementPage = lazy(() => import('@/pages/EmployeeManagementPage'));
@@ -275,6 +276,7 @@ function App() {
                   <Route path="/horse-show-manager/financials/:showId" element={<MembershipRoute><ShowFinancialDashboardPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/housing-grounds-manager" element={<MembershipRoute><HousingGroundsManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/housing-grounds-manager/:showId" element={<MembershipRoute><HousingGroundsManagerPage /></MembershipRoute>} />
+                  <Route path="/horse-show-manager/public-status" element={<MembershipRoute><PublicShowStatusPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/check-in/:showId" element={<MembershipRoute><CheckInPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-scheduling" element={<MembershipRoute><EmployeeArenaSchedulingManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-scheduling/:showId" element={<MembershipRoute><EmployeeArenaSchedulingManagerPage /></MembershipRoute>} />

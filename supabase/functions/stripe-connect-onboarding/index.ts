@@ -9,6 +9,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 // Returns a fresh Stripe-hosted onboarding URL every time: an Account Link is
 // single-use and expires, so the frontend must call this again rather than
 // caching the url from a previous call.
+//
+// mode: 'dashboard' (Robert's "change their bank accounts" ask, 2026-09-20) skips
+// onboarding entirely and instead returns a one-time Stripe Express Dashboard login
+// link for an ALREADY-connected account — that's Stripe's own page for viewing
+// payouts and updating bank/debit-card details. Errors if no account exists yet;
+// dashboard mode never creates one. Omitting mode (or passing 'onboarding') keeps
+// the original first-time setup behavior unchanged.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,7 +38,8 @@ async function stripePost(endpoint: string, params: Record<string, string>): Pro
 }
 
 interface OnboardingRequest {
-  returnUrl: string;
+  returnUrl?: string;
+  mode?: "onboarding" | "dashboard";
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -55,8 +63,9 @@ serve(async (req: Request): Promise<Response> => {
       });
     }
 
-    const { returnUrl }: OnboardingRequest = await req.json();
-    if (!returnUrl) throw new Error("Missing returnUrl");
+    const { returnUrl, mode }: OnboardingRequest = await req.json();
+    const wantsDashboard = mode === "dashboard";
+    if (!wantsDashboard && !returnUrl) throw new Error("Missing returnUrl");
 
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -71,6 +80,16 @@ serve(async (req: Request): Promise<Response> => {
     if (profileError) throw new Error(profileError.message);
 
     let accountId = profile?.stripe_connect_account_id;
+
+    if (wantsDashboard) {
+      if (!accountId) throw new Error("No connected payout account yet — set one up first.");
+      const loginLink = await stripePost(`accounts/${accountId}/login_links`, {});
+      if (loginLink.error) throw new Error(loginLink.error.message);
+      return new Response(JSON.stringify({ url: loginLink.url, accountId }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
 
     if (!accountId) {
       const account = await stripePost("accounts", {

@@ -10,7 +10,7 @@ import {
   DollarSign, LayoutGrid, Building2, Radio, Award,
   Plus, Loader2, FolderOpen, Hash, Calendar, ChevronRight,
   Search, MapPin, Trash2, Shield, Crown, ArrowLeft,
-  Users, UserPlus, X, Mail, Bed, Ticket,
+  Users, UserPlus, X, Mail, Bed, Ticket, Globe,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -130,6 +130,7 @@ const sections = [
       { icon: Building2, label: 'Housing & Grounds Manager', link: '/horse-show-manager/housing-grounds-manager', line: 4 },
       { icon: Bed, label: 'Book Stalls', link: '/book-stalls', line: 5 },
       { icon: Ticket, label: 'My Booking', link: '/find-booking', line: 5 },
+      { icon: Globe, label: 'Public Status — All Shows', link: '/horse-show-manager/public-status', line: 6 },
     ],
   },
 ];
