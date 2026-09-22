@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { BookOpen, Users, BarChart2, DollarSign, Settings, Layers, Code, HardDrive, FileText, Bot, PenTool, Gauge, FileImage, Receipt, Image, Calendar, Megaphone } from 'lucide-react';
+import { BookOpen, Users, BarChart2, DollarSign, Settings, Layers, Code, HardDrive, FileText, Bot, PenTool, Gauge, FileImage, Receipt, Image, Calendar, Megaphone, ArrowRightLeft } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/lib/supabaseClient';
@@ -36,6 +36,7 @@ const AdminPage = () => {
     { name: 'Scoresheet Upload', path: '/admin/scoresheet-upload', icon: FileImage, description: 'Upload scoresheet images and link to patterns.' },
     { name: 'Pattern Review', path: '/admin/pattern-review', icon: FileText, description: 'Review and approve submitted patterns.' },
     { name: 'Billing & Revenue', path: '/admin/billing-report', icon: Receipt, description: 'View all subscriptions, purchases, and revenue.' },
+    { name: 'Transactions', path: '/admin/transactions', icon: ArrowRightLeft, description: 'Every stall/RV payment across every show, who paid, and the 95%/5% split.' },
     { name: 'Site Branding', path: '/admin/site-branding', icon: Image, description: 'Upload homepage background image and site logo.' },
     { name: 'Marketing Content', path: '/admin/marketing-content', icon: Megaphone, description: 'Manage homepage ads, announcements, and promotional content.' },
   ];

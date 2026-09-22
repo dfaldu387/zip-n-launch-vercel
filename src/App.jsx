@@ -118,6 +118,7 @@ const ScoresheetUploadPage = lazy(() => import('@/pages/ScoresheetUploadPage'));
 const PricingPage = lazy(() => import('@/pages/PricingPage'));
 const BillingHistoryPage = lazy(() => import('@/pages/BillingHistoryPage'));
 const AdminBillingReportPage = lazy(() => import('@/pages/AdminBillingReportPage'));
+const AdminTransactionsPage = lazy(() => import('@/pages/AdminTransactionsPage'));
 const EquipmentManagementPage = lazy(() => import('@/pages/EquipmentManagementPage'));
 const DisciplinePlannerPage = lazy(() => import('@/pages/DisciplinePlannerPage'));
 const ArenaSessionsPage = lazy(() => import('@/pages/ArenaSessionsPage'));
@@ -235,6 +236,7 @@ function App() {
                   <Route path="/admin/show-management" element={<AdminRoute><AdminShowManagementPage /></AdminRoute>} />
                   <Route path="/admin/events" element={<AdminRoute><AdminEventsManagementPage /></AdminRoute>} />
                   <Route path="/admin/billing-report" element={<AdminRoute><AdminBillingReportPage /></AdminRoute>} />
+                  <Route path="/admin/transactions" element={<AdminRoute><AdminTransactionsPage /></AdminRoute>} />
                   <Route path="/horse-show-manager/equipment" element={<MembershipRoute requiredPermission="equipment:manage"><EquipmentManagementPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/discipline-planner" element={<MembershipRoute requiredPermission="equipment:manage"><DisciplinePlannerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/arena-sessions" element={<MembershipRoute requiredPermission="equipment:manage"><ArenaSessionsPage /></MembershipRoute>} />
