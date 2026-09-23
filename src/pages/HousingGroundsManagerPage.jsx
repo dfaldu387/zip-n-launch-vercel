@@ -2311,6 +2311,7 @@ const ItemStatusRow = ({ order, item, onFulfill, showName }) => {
                 ...(order.itemStatuses || {}),
                 [item.refId]: { status: target.key, stageTimestamps: stamps },
             },
+            _activityMessage: `${item.name} marked ${target.label}`,
         });
 
         if (!reachedDelivered) return;
@@ -2409,6 +2410,7 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
             fulfillmentStatus: target.key,
             stageTimestamps: { ...(order.stageTimestamps || {}), [target.key]: now },
             fulfilledAt: target.key === 'delivered' ? now : null,
+            _activityMessage: `All items marked ${target.label}`,
         });
 
         if (!anyAdvancedToDelivered) return;
@@ -3556,8 +3558,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // items[] + totalAmount, so it behaves exactly like an online booking. Update
     // local state for instant display, then persist immediately so it isn't lost.
     const addBooking = async (booking) => {
-        setBookings(prev => [...prev, booking]);
-        if (onAddBookingImmediate) await onAddBookingImmediate(booking);
+        const withLog = { ...booking, activityLog: [{ at: booking.createdAt || new Date().toISOString(), message: 'Booking created' }] };
+        setBookings(prev => [...prev, withLog]);
+        if (onAddBookingImmediate) await onAddBookingImmediate(withLog);
     };
 
     // Assign a single stall to a booking from the inline dropdown (legacy manual
@@ -3567,22 +3570,76 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const assignSingleStall = async (booking, stallId) => {
         let next = unassignBookingStalls(barns, booking.id);
         if (stallId) next = assignStallToBooking(next, stallId, booking.id);
+        logStallAssignmentChanges(barns, next);
         setBarns(next);
         updateBooking(booking.id, 'stallId', stallId || '');
         if (onUpdateBarns) await onUpdateBarns(next);
+    };
+
+    // Diff two barns arrays' stall.bookingId pins and log what changed for each
+    // affected booking — the Assign Stalls board writes straight to barns/stalls,
+    // not to the booking, so this is the one place that can see "who moved."
+    const logStallAssignmentChanges = (prevBarns, nextBarns) => {
+        const prevByStall = new Map();
+        for (const barn of prevBarns || []) {
+            for (const s of barn.stalls || []) prevByStall.set(s.id, { bookingId: s.bookingId || null, label: `${barn.name} ${s.number}` });
+        }
+        for (const barn of nextBarns || []) {
+            for (const s of barn.stalls || []) {
+                const prev = prevByStall.get(s.id);
+                const prevBookingId = prev?.bookingId || null;
+                const nextBookingId = s.bookingId || null;
+                if (prevBookingId === nextBookingId) continue;
+                const label = `${barn.name} ${s.number}`;
+                if (nextBookingId) logActivity(nextBookingId, `Stall ${label} assigned`);
+                if (prevBookingId) logActivity(prevBookingId, `Stall ${label} unassigned`);
+            }
+        }
+    };
+
+    // Same idea for RV spots (materialized R1, R2, … — see rvAssignment.js).
+    const logRvAssignmentChanges = (prevAreas, nextAreas) => {
+        const prevBySpot = new Map();
+        for (const area of prevAreas || []) {
+            for (const s of area.spots || []) prevBySpot.set(s.id, s.bookingId || null);
+        }
+        for (const area of nextAreas || []) {
+            for (const s of area.spots || []) {
+                const prevBookingId = prevBySpot.get(s.id) || null;
+                const nextBookingId = s.bookingId || null;
+                if (prevBookingId === nextBookingId) continue;
+                if (nextBookingId) logActivity(nextBookingId, `RV spot ${s.number} assigned`);
+                if (prevBookingId) logActivity(prevBookingId, `RV spot ${s.number} unassigned`);
+            }
+        }
     };
 
     const updateBooking = (bookingId, field, value) => {
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
     };
 
+    // Append one line to a booking's Activity Log (Master List's expanded row).
+    // It rides along on whatever save path the triggering action already uses —
+    // same as a plain field edit, it's swept up by the next full persist — so it
+    // adds no new persistence path of its own. Always applied AFTER any
+    // server-returned overwrite (see changeBookingStatus) so it isn't lost.
+    const logActivity = (bookingId, message) => {
+        setBookings(prev => prev.map(b => b.id === bookingId
+            ? { ...b, activityLog: [...(b.activityLog || []), { at: new Date().toISOString(), message }] }
+            : b));
+    };
+
     // Patch fields on a booking and show the change instantly — used by the Hay &
     // Shavings status dropdowns. This dashboard keeps its own copy of bookings (see
     // changeBookingStatus below), so calling onUpdateBookingFields directly would
     // save the new status but leave it invisible here until the page reloaded.
+    // A caller can piggyback a human-readable `_activityMessage` on the patch —
+    // it's logged and stripped before the patch is applied/persisted.
     const updateBookingFieldsLocal = async (bookingId, patch) => {
-        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...patch } : b));
-        if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, patch);
+        const { _activityMessage, ...fields } = patch;
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...fields } : b));
+        if (_activityMessage) logActivity(bookingId, _activityMessage);
+        if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, fields);
     };
 
     // Commit a whole patch from the Edit Booking dialog (contact fields, nights,
@@ -3592,6 +3649,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const saveBookingEdit = async (bookingId, patch) => {
         const current = bookings.find(b => b.id === bookingId);
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...patch } : b));
+        logActivity(bookingId, 'Booking details updated (stalls/RV/supplies or pricing)');
         if (patch.status && current && patch.status !== (current.status || 'pending')) {
             await changeBookingStatus(bookingId, patch.status);
         }
@@ -3608,6 +3666,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
         if (result?.barns) setBarns(result.barns);
         if (result?.bookings) setBookings(result.bookings);
+        // Logged AFTER the possible result.bookings overwrite above, so a status
+        // change always shows in the log even though the server response doesn't
+        // know about this client-only field.
+        logActivity(bookingId, `Status changed to ${newStatus.replace('_', ' ')}`);
 
         // Tell the exhibitor once, right when the organizer actually confirms —
         // not on every later edit, so re-saving a confirmed booking doesn't resend it.
@@ -3629,6 +3691,63 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const removeBooking = async (bookingId) => {
         setBookings(prev => prev.filter(b => b.id !== bookingId));
         if (onRemoveBookingImmediate) await onRemoveBookingImmediate(bookingId);
+    };
+
+    // Shared by the Bookings tab and the Master List's Actions column so both
+    // download the exact same PDF instead of two copies of this logic drifting apart.
+    const downloadBookingInvoice = async (booking) => {
+        const assignedStalls = getAssignedStallsForBooking(booking, barns)
+            .map(s => {
+                const barn = barns.find(b => b.id === s.barnId);
+                return { barnId: s.barnId, barnName: barn?.name, number: s.number, pricePerNight: barn?.pricePerNight || 0 };
+            });
+        const pricedStalls = assignedStalls;
+        const total = computeBookingTotal(booking, pricedStalls, extraStallFees);
+        const paid = Number(booking.paidAmount ?? (booking.paymentStatus === 'paid' ? total : 0));
+        await downloadInvoicePdf({
+            booking,
+            show: {
+                id: show.id,
+                name: show.project_name,
+                startDate: pd?.showDetails?.general?.startDate || pd?.startDate,
+                endDate: pd?.showDetails?.general?.endDate || pd?.endDate,
+                venueFacility: pd?.showDetails?.venue?.facilityName,
+            },
+            assignedStalls,
+            extraStallFees,
+            options: {
+                organizerContact: pd?.showDetails?.general?.managerContactEmail,
+                // Without this the PDF always printed "Total" and never showed
+                // what had already been paid — so an exhibitor who had paid in
+                // full received an invoice for the whole amount again.
+                amountPaid: paid,
+            },
+        });
+    };
+
+    const emailBookingInvoice = async (booking) => {
+        setInvoicingId(booking.id);
+        try {
+            const res = await sendStallInvoice({ showId: show.id, bookingId: booking.id });
+            // The exhibitor is emailed the payable invoice by Stripe — the admin
+            // only triggers it, they don't pay. We copy the pay link to the
+            // clipboard as a backup the admin can forward manually, but we never
+            // open the payment page here (that looked like the admin was being
+            // asked to pay).
+            let copied = false;
+            if (res.hostedInvoiceUrl) {
+                try { await navigator.clipboard.writeText(res.hostedInvoiceUrl); copied = true; } catch { /* ignore */ }
+            }
+            toast({
+                title: 'Invoice emailed to exhibitor',
+                description: `${fmtMoney(res.amount)} invoice sent to ${res.email}. They can pay online from the email.${copied ? ' Pay link also copied to your clipboard.' : ''}`,
+            });
+            logActivity(booking.id, `Invoice for ${fmtMoney(res.amount)} emailed to ${res.email}`);
+        } catch (e) {
+            toast({ title: 'Could not send invoice', description: e.message, variant: 'destructive' });
+        } finally {
+            setInvoicingId(null);
+        }
     };
 
     // Live at-show hay/shavings reorders are supplies-only (no stalls/dates) — keep
@@ -4280,8 +4399,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         {
             id: 'booking', label: 'Booking & Stall Management', icon: ClipboardList,
             count: stallBookings.length,
+            // The old "Bookings" tab (plain list, edit/delete/invoice) is retired —
+            // Master List now covers everything it did (Robert: "get rid of
+            // bookings... put it all onto a master list"). Its TabsContent and the
+            // BookingRow component are left in the file, just unreachable from here,
+            // in case anything needs a second look later.
             items: [
-                { value: 'bookings', label: `Bookings (${stallBookings.length})` },
                 { value: 'masterlist', label: 'Master List' },
                 { value: 'assign', label: 'Assign Stalls' },
                 { value: 'charts', label: 'Charts (Trends)' },
@@ -4315,18 +4438,23 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 </div>
             )}
 
-            {/* KPIs — the cards shown depend on the section picked in the dropdown above */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                {sectionStats.map((stat, i) => {
-                    const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
-                    return (
-                        <div key={stat.label} className={cn('rounded-xl border p-4', palette.bg, palette.border)}>
-                            <p className="text-xs font-medium text-muted-foreground uppercase">{stat.label}</p>
-                            <p className={cn('text-2xl font-bold', palette.text)}>{stat.value}</p>
-                        </div>
-                    );
-                })}
-            </div>
+            {/* KPIs — the cards shown depend on the section picked in the dropdown above.
+                Master List has its own, fuller stat bar (Total Bookings/Exhibitors/
+                Horses/Stalls/RV, Supplies, Revenue Summary) right above its table, so
+                this generic row would just repeat the same numbers a second time. */}
+            {activeSection !== 'masterlist' && (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                    {sectionStats.map((stat, i) => {
+                        const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
+                        return (
+                            <div key={stat.label} className={cn('rounded-xl border p-4', palette.bg, palette.border)}>
+                                <p className="text-xs font-medium text-muted-foreground uppercase">{stat.label}</p>
+                                <p className={cn('text-2xl font-bold', palette.text)}>{stat.value}</p>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             {sectionSelectContainer && createPortal(
                 <div className="flex flex-wrap gap-2">
@@ -4884,32 +5012,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         size="sm"
                                         className="h-7 px-2 text-xs"
                                         title="Download invoice PDF"
-                                        onClick={async () => {
-                                            const assignedStalls = getAssignedStallsForBooking(booking, barns)
-                                                .map(s => {
-                                                    const barn = barns.find(b => b.id === s.barnId);
-                                                    return { barnId: s.barnId, barnName: barn?.name, number: s.number, pricePerNight: barn?.pricePerNight || 0 };
-                                                });
-                                            await downloadInvoicePdf({
-                                                booking,
-                                                show: {
-                                                    id: show.id,
-                                                    name: show.project_name,
-                                                    startDate: pd?.showDetails?.general?.startDate || pd?.startDate,
-                                                    endDate: pd?.showDetails?.general?.endDate || pd?.endDate,
-                                                    venueFacility: pd?.showDetails?.venue?.facilityName,
-                                                },
-                                                assignedStalls,
-                                                extraStallFees,
-                                                options: {
-                                                    organizerContact: pd?.showDetails?.general?.managerContactEmail,
-                                                    // Without this the PDF always printed "Total" and never showed
-                                                    // what had already been paid — so an exhibitor who had paid in
-                                                    // full received an invoice for the whole amount again.
-                                                    amountPaid: bPaid,
-                                                },
-                                            });
-                                        }}
+                                        onClick={() => downloadBookingInvoice(booking)}
                                     >
                                         <FileText className="h-3 w-3 mr-1" /> Invoice
                                     </Button>
@@ -4920,29 +5023,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             className="h-7 px-2 text-xs border-emerald-400/60 text-emerald-700 dark:text-emerald-300"
                                             disabled={invoicingId === booking.id}
                                             title={`Email a Stripe invoice for ${fmtMoney(bDue)} to ${booking.email}`}
-                                            onClick={async () => {
-                                                setInvoicingId(booking.id);
-                                                try {
-                                                    const res = await sendStallInvoice({ showId: show.id, bookingId: booking.id });
-                                                    // The exhibitor is emailed the payable invoice by Stripe — the
-                                                    // admin only triggers it, they don't pay. We copy the pay link to
-                                                    // the clipboard as a backup the admin can forward manually, but we
-                                                    // never open the payment page here (that looked like the admin
-                                                    // was being asked to pay).
-                                                    let copied = false;
-                                                    if (res.hostedInvoiceUrl) {
-                                                        try { await navigator.clipboard.writeText(res.hostedInvoiceUrl); copied = true; } catch { /* ignore */ }
-                                                    }
-                                                    toast({
-                                                        title: 'Invoice emailed to exhibitor',
-                                                        description: `${fmtMoney(res.amount)} invoice sent to ${res.email}. They can pay online from the email.${copied ? ' Pay link also copied to your clipboard.' : ''}`,
-                                                    });
-                                                } catch (e) {
-                                                    toast({ title: 'Could not send invoice', description: e.message, variant: 'destructive' });
-                                                } finally {
-                                                    setInvoicingId(null);
-                                                }
-                                            }}
+                                            onClick={() => emailBookingInvoice(booking)}
                                         >
                                             {invoicingId === booking.id
                                                 ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Sending…</>
@@ -5011,6 +5092,21 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         rvAreas={rvAreas}
                         extraStallFees={extraStallFees}
                         showName={show.project_name || 'Show'}
+                        onUpdateField={(bookingId, field, value) => updateBooking(bookingId, field, value)}
+                        onStatusChange={changeBookingStatus}
+                        onRemove={removeBooking}
+                        onDownloadInvoice={downloadBookingInvoice}
+                        onEmailInvoice={emailBookingInvoice}
+                        invoicingId={invoicingId}
+                        onLogActivity={logActivity}
+                        addBookingSlot={(
+                            <AddBookingDialog
+                                inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
+                                suppliesSold={suppliesSold}
+                                defaultNights={showNights}
+                                onAdd={addBooking}
+                            />
+                        )}
                     />
                 </TabsContent>
 
@@ -5022,10 +5118,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         rvAreas={rvAreas}
                         supplies={supplies}
                         onApplyBarns={async (newBarns) => {
+                            logStallAssignmentChanges(barns, newBarns);
                             setBarns(newBarns);
                             if (onUpdateBarns) await onUpdateBarns(newBarns);
                         }}
                         onApplyRvAreas={async (newRvAreas) => {
+                            logRvAssignmentChanges(rvAreas, newRvAreas);
                             setRvAreas(newRvAreas);
                             if (onUpdateRvAreas) await onUpdateRvAreas(newRvAreas);
                         }}
