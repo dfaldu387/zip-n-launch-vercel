@@ -24,6 +24,13 @@ const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 // Same rate as stalls-create-checkout — keep the two in sync if this changes.
 const PLATFORM_COMMISSION_RATE = 0.05;
 
+// Same estimate/gross-up as stalls-create-checkout — keep in sync if either changes.
+const STRIPE_PCT = 0.029;
+const STRIPE_FLAT_CENTS = 30;
+function grossUpForCustomerFee(amountCents: number): number {
+  return Math.ceil((amountCents + STRIPE_FLAT_CENTS) / (1 - STRIPE_PCT));
+}
+
 // ───── Live booking pricing (mirrors src/lib/bookingPricing.js) ─────
 //
 // Ported from the same fix applied to bookingPricing.js and the
@@ -290,6 +297,16 @@ serve(async (req: Request): Promise<Response> => {
     const amountCents = Math.round(due * 100);
     if (amountCents <= 0) throw new Error("Nothing is due on this booking");
 
+    // Who covers Stripe's card-processing fee: the show's payout (default —
+    // for a direct charge like this, Stripe already deducts its real fee from
+    // the connected account's own balance, so "show absorbs" needs no extra
+    // math) or the customer, billed the estimated fee as its own line item.
+    const processingFeeMode = project.project_data?.stallingService?.processingFeeMode || "show";
+    const feeCents =
+      connectedAccountId && processingFeeMode === "customer"
+        ? grossUpForCustomerFee(amountCents) - amountCents
+        : 0;
+
     // 1) Customer (create fresh per invoice — guests have no stored customer).
     //    Direct charge: when the show has payouts enabled, the customer and
     //    invoice live ON the connected account, not the platform account, so
@@ -344,6 +361,17 @@ serve(async (req: Request): Promise<Response> => {
         description:
           `${project.project_name || "Show"} — Stalls balance for ` +
           `${booking.exhibitorName || "exhibitor"}`,
+      }, connectedAccountId);
+      if (r.error) throw new Error(r.error.message);
+    }
+
+    if (feeCents > 0) {
+      const r = await stripePost("invoiceitems", {
+        customer: customer.id,
+        invoice: invoice.id,
+        amount: String(feeCents),
+        currency: "usd",
+        description: "Card processing fee (estimated)",
       }, connectedAccountId);
       if (r.error) throw new Error(r.error.message);
     }

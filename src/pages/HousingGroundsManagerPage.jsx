@@ -3121,6 +3121,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const [billingMode, setBillingMode] = useState(() => pd.stallingService?.billingMode || 'invoice_after');
     const [invoicingId, setInvoicingId] = useState(null); // booking currently being emailed a Stripe invoice
 
+    // Who covers Stripe's card-processing fee on an online payment, once
+    // payouts are connected — 'show' (default, matches every show's behavior
+    // before this setting existed) or 'customer' (charged extra at checkout).
+    // Read by stalls-create-checkout / stalls-create-invoice.
+    const [processingFeeMode, setProcessingFeeMode] = useState(() => pd.stallingService?.processingFeeMode || 'show');
+
     // What the public Event page shows of the stalling chart — a separate, deliberately
     // narrower choice than the internal layers above (see stallLayers.PUBLIC_LAYER_IDS).
     const [chartPublish, setChartPublish] = useState(() => pd.stallingService?.chartPublish || {
@@ -4273,10 +4279,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [bookings, barns, extraStallFees, rvAreas, extraRvFees, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish }, opts);
+        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish]);
+    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish]);
 
     const handleSave = () => persist();
 
@@ -4290,7 +4296,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish]);
+    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish]);
 
     // KPI row at the top of the dashboard — the cards shown change with whichever
     // section is picked in the dropdown, so each section highlights numbers that
@@ -4763,6 +4769,50 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     Online card payment (Stripe) is wired up in a later step — this setting decides which flow the public booking page will use.
                                 </p>
                             </div>
+
+                            {/* Processing-fee payer — only matters once payouts are connected;
+                                before that, every payment stays 100% on the platform account
+                                and this setting has nothing to apply to. */}
+                            {payoutsEnabled && (
+                                <div className="rounded-lg border bg-muted/20 p-3 space-y-2.5">
+                                    <div className="flex items-center gap-2">
+                                        <DollarSign className="h-4 w-4 text-emerald-600" />
+                                        <h4 className="text-sm font-semibold">Card processing fee</h4>
+                                        <span className="text-[11px] text-muted-foreground">Who covers Stripe's processing cost</span>
+                                    </div>
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                        {[
+                                            { id: 'show', title: 'Show absorbs the fee', desc: 'Deducted from your payout — the exhibitor pays exactly the listed total.' },
+                                            { id: 'customer', title: 'Customer pays the fee', desc: 'Added on top at checkout, so your payout is not reduced.' },
+                                        ].map(opt => {
+                                            const active = processingFeeMode === opt.id;
+                                            return (
+                                                <button
+                                                    key={opt.id}
+                                                    type="button"
+                                                    onClick={() => setProcessingFeeMode(opt.id)}
+                                                    className={cn(
+                                                        'text-left rounded-lg border p-3 transition',
+                                                        active
+                                                            ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500'
+                                                            : 'border-border hover:border-emerald-400/60 hover:bg-muted/40'
+                                                    )}
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={cn('h-3.5 w-3.5 rounded-full border-2 shrink-0',
+                                                            active ? 'border-emerald-500 bg-emerald-500' : 'border-muted-foreground/40')} />
+                                                        <span className="text-sm font-medium">{opt.title}</span>
+                                                    </div>
+                                                    <p className="text-[11px] text-muted-foreground mt-1 ml-5">{opt.desc}</p>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        EquiPatterns' 5% platform fee is the same either way — this only changes who covers Stripe's own card fee.
+                                    </p>
+                                </div>
+                            )}
                           </fieldset>
                           {/* Payout account status + "Manage bank account" — deliberately OUTSIDE the
                               fieldset above (and the one reopened below). This isn't show data to
@@ -5136,7 +5186,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         chartPublish={chartPublish}
                         onApplyChartPublish={async (next) => {
                             setChartPublish(next);
-                            await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish: next });
+                            await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish: next });
                             setLastSavedAt(new Date());
                             setIsDirty(false);
                         }}
@@ -6152,7 +6202,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShow, toast]);
 
-    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, chartPublish }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, { silent = false } = {}) => {
         if (!selectedShow) return;
         setIsSaving(true);
         try {
@@ -6175,6 +6225,7 @@ const HousingGroundsManagerPage = () => {
                     moveOutDate: moveOutDate ?? selectedShow.project_data?.stallingService?.moveOutDate ?? '',
                     datesLocked: datesLocked ?? selectedShow.project_data?.stallingService?.datesLocked ?? false,
                     billingMode: billingMode ?? selectedShow.project_data?.stallingService?.billingMode ?? 'invoice_after',
+                    processingFeeMode: processingFeeMode ?? selectedShow.project_data?.stallingService?.processingFeeMode ?? 'show',
                     chartPublish: chartPublish ?? selectedShow.project_data?.stallingService?.chartPublish ?? { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true },
                 },
                 fees: [...manualFees, ...housingFees],

@@ -1209,8 +1209,29 @@ const PublicBookingPage = () => {
             }
         }
 
+        // If this show has chosen "customer pays the processing fee," add the
+        // estimated Stripe card fee as its own line — an estimate only, shown
+        // so the total here matches what's actually charged at checkout.
+        // stalls-create-checkout / stalls-create-invoice apply the same
+        // STRIPE_PCT/STRIPE_FLAT_CENTS formula server-side, authoritatively.
+        if (show?.processingFeeMode === 'customer' && subtotal > 0) {
+            const subtotalCents = Math.round(subtotal * 100);
+            const grossedCents = Math.ceil((subtotalCents + 30) / (1 - 0.029));
+            const feeAmount = (grossedCents - subtotalCents) / 100;
+            items.push({
+                type: 'fee',
+                refId: 'processing-fee',
+                name: 'Card processing fee (estimated)',
+                detail: 'Charged by Stripe, not EquiPatterns or the show.',
+                qty: 1,
+                unitPrice: feeAmount,
+                amount: feeAmount,
+            });
+            subtotal += feeAmount;
+        }
+
         return { lineItems: items, subtotal, nights };
-    }, [inventory, selection, details.arrivalDate, details.departureDate, details.horseCount]);
+    }, [inventory, selection, details.arrivalDate, details.departureDate, details.horseCount, show?.processingFeeMode]);
 
     const hasSelection = orderSummary.lineItems.length > 0;
 
@@ -1311,6 +1332,14 @@ const PublicBookingPage = () => {
             const horseList = (details.horseNames || '')
                 .split(',').map(s => s.trim()).filter(Boolean);
 
+            // The processing-fee line in orderSummary is a display-only estimate —
+            // real bookings/totals never include it. It isn't a stall/RV/supply
+            // item, isn't owed to the show, and the server independently applies
+            // its own version of this fee at checkout time (stalls-create-checkout
+            // / stalls-create-invoice); persisting it here would double it.
+            const bookableItems = orderSummary.lineItems.filter(item => item.type !== 'fee');
+            const bookableSubtotal = bookableItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+
             // Map to a shape that's also compatible with the existing admin BookingRow
             // (which reads exhibitorName, horseName, trainerName, nights, status)
             const bookingPayload = {
@@ -1326,15 +1355,15 @@ const PublicBookingPage = () => {
                 arrivalDate: details.arrivalDate,
                 departureDate: details.departureDate,
                 nights: orderSummary.nights,
-                items: orderSummary.lineItems,
+                items: bookableItems,
                 // Per-RV Length/Plate, keyed the same way the picker captured it
                 // (pooled "All RV Areas" id or a real area id) — kept at the
                 // booking level since a pooled selection can't be attributed to
                 // one real area's line item.
                 rvOptions: selection.rvOptions || {},
                 preferences: details.preferences || '',
-                amount: orderSummary.subtotal,
-                totalAmount: orderSummary.subtotal,
+                amount: bookableSubtotal,
+                totalAmount: bookableSubtotal,
                 stallId: '',
                 notes: details.preferences || '',
                 status: 'pending',

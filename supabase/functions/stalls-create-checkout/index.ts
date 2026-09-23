@@ -26,6 +26,21 @@ const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
 // change this one constant, no other code needs to move).
 const PLATFORM_COMMISSION_RATE = 0.05;
 
+// Estimated US card rate, used only to gross up the charge when a show has
+// chosen "customer pays the processing fee" (project_data.stallingService.
+// processingFeeMode === 'customer'). Stripe's real fee varies by card/country
+// and is only known after the charge settles — this is a standard estimate,
+// same approach other marketplaces use. Duplicated in stalls-create-invoice
+// (Deno functions can't share src/lib imports).
+const STRIPE_PCT = 0.029;
+const STRIPE_FLAT_CENTS = 30;
+
+// Gross up `amountCents` so that after Stripe takes its estimated cut, the
+// original `amountCents` still lands in full for the platform to split.
+function grossUpForCustomerFee(amountCents: number): number {
+  return Math.ceil((amountCents + STRIPE_FLAT_CENTS) / (1 - STRIPE_PCT));
+}
+
 // ───── Live booking pricing (mirrors src/lib/invoiceGenerator.js) ─────
 
 // Stalls assigned to a booking, each stamped with its barn's CURRENT price/night.
@@ -247,11 +262,20 @@ serve(async (req: Request): Promise<Response> => {
       `${project.project_name || "Show"} — ${isStalling ? "Stalls" : "Order"} for ` +
       `${booking.exhibitorName || "exhibitor"}`;
 
+    // Who covers Stripe's card-processing fee: the show's payout (default,
+    // matches every show's behavior before this setting existed) or the
+    // customer, charged extra on top at checkout.
+    const processingFeeMode = project.project_data?.stallingService?.processingFeeMode || "show";
+    const chargeCents =
+      connectedAccountId && processingFeeMode === "customer"
+        ? grossUpForCustomerFee(amountCents)
+        : amountCents;
+
     const params: Record<string, string> = {
       mode: "payment",
       "line_items[0][price_data][currency]": "usd",
       "line_items[0][price_data][product_data][name]": label,
-      "line_items[0][price_data][unit_amount]": String(amountCents),
+      "line_items[0][price_data][unit_amount]": String(chargeCents),
       "line_items[0][quantity]": "1",
       success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: cancelUrl,
@@ -266,6 +290,9 @@ serve(async (req: Request): Promise<Response> => {
     // Destination charge: platform still collects the payment, then Stripe
     // automatically moves (amount − fee) to the show manager's connected
     // account. The exhibitor never sees any of this — same checkout page either way.
+    // application_fee_amount is always 5% of the ORIGINAL due amount (not the
+    // grossed-up charge), so the show's net payout is the same 95% of what's
+    // actually owed either way — only who fronts Stripe's own cut changes.
     if (connectedAccountId) {
       params["payment_intent_data[application_fee_amount]"] = String(
         Math.round(amountCents * PLATFORM_COMMISSION_RATE)
