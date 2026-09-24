@@ -14,7 +14,7 @@ import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users, FileText, Loader2, Pencil, Trash2, Check, X, MoreVertical, StickyNote, History } from 'lucide-react';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 import { ensureAllRvSpots, getAssignedRvSpotsForBooking } from '@/lib/rvAssignment';
-import { getBookingDisplayStatus, computeBookingTotal } from '@/lib/bookingPricing';
+import { computeBookingTotal } from '@/lib/bookingPricing';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { getSupplyStage, getSupplyLastUpdate, getItemStatus, SUPPLY_STAGES } from '@/lib/supplyStatus';
 
@@ -120,11 +120,19 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
     // is treated as paid in full. Anything else (Pending, cancelled, etc.) is $0 —
     // this sheet never counts a payment that hasn't happened yet.
     const paymentStatus = booking.paymentStatus || 'unpaid';
+    const isCheck = paymentStatus === 'check';
     const paidAmount = paymentStatus === 'paid' ? (Number(booking.paidAmount) || amount)
         : paymentStatus === 'partial' ? (Number(booking.paidAmount) || 0)
+        : isCheck ? (Number(booking.paidAmount) || Number(booking.checkAmount) || 0)
         : 0;
-    const platformFee = paidAmount * PLATFORM_FEE_RATE;
-    const clubAmount = paidAmount - platformFee;
+    // Robert (2026-09-23): a check never passes through Stripe, so nothing is
+    // taken out of it automatically — the show holds 100% of that money and still
+    // owes EquiPatterns the same 5%. It is kept OUT of the Stripe split
+    // (platformFee / clubAmount) and tracked as checkFee, to bill the show at the end.
+    const platformFee = isCheck ? 0 : paidAmount * PLATFORM_FEE_RATE;
+    const clubAmount = isCheck ? 0 : paidAmount - platformFee;
+    const checkAmount = isCheck ? paidAmount : 0;
+    const checkFee = checkAmount * PLATFORM_FEE_RATE;
     return {
         booking,
         ref: getBookingRef(booking),
@@ -157,22 +165,40 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
         horses: getHorseCount(booking),
         horseNamesArr,
         horseNamesStr: horseNamesArr.join(', '),
-        status: getBookingDisplayStatus(booking),
+        // Robert: booking status is separate from payment — a paid booking
+        // that hasn't been confirmed yet still reads Pending.
+        status: booking.status || 'pending',
         amount,
         paidAmount,
         clubAmount,
         platformFee,
+        paymentStatus,
+        checkNumber: booking.checkNumber || '',
+        checkAmount,
+        checkFee,
     };
 };
 
-const BOOKING_STATUSES = ['confirmed', 'pending', 'cancelled', 'checked_in', 'checked_out'];
+// Payment is its own status, separate from the booking status (Robert 2026-09-23):
+// Unpaid / Paid by check (typed in by the manager) / Paid (card — only ever set by
+// the exhibitor paying the emailed invoice online, never by hand). 'partial' is what
+// an online pay-the-difference payment leaves behind; it still displays.
+const PAYMENT_LABELS = { unpaid: 'Unpaid', check: 'Paid by check', paid: 'Paid', partial: 'Partial' };
+const PAYMENT_STYLES = {
+    unpaid: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
+    check: 'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+    paid: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+    partial: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+};
+
+const BOOKING_STATUSES = ['pending', 'confirmed', 'cancelled', 'checked_in', 'checked_out'];
 
 const STATUS_STYLES = {
     pending: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-    paid: 'bg-teal-500/15 text-teal-700 dark:text-teal-300',
     confirmed: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
-    checked_in: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
     cancelled: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
+    checked_in: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
+    checked_out: 'bg-slate-500/15 text-slate-700 dark:text-slate-300',
 };
 
 // A generation timestamp for every export, so a printed/emailed copy is traceable.
@@ -193,9 +219,10 @@ const COLUMNS = [
     { key: 'stalls', label: 'Stalls', align: 'center' },
     { key: 'assignedCount', label: 'Assigned', align: 'center' },
     { key: 'rv', label: 'RV', align: 'center' },
-    { key: 'suppliesStr', label: 'Supplies / Pre-Orders', align: 'left' },
+    { key: 'suppliesStr', label: 'Supplies', align: 'left' },
     { key: 'horses', label: 'Horses', align: 'center' },
     { key: 'status', label: 'Status', align: 'left' },
+    { key: 'paymentStatus', label: 'Payment', align: 'left' },
     { key: 'amount', label: 'Amount', align: 'right' },
     { key: 'paidAmount', label: 'Paid', align: 'right' },
 ];
@@ -204,7 +231,7 @@ const COLUMNS = [
 // can hold local draft/confirm state without re-rendering the whole table.
 const MasterListRow = ({
     r, isOpen, onToggleExpand,
-    onUpdateField, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
+    onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
 }) => {
     const booking = r.booking;
     const partial = r.assignedCount > 0 && r.assignedCount < r.stalls;
@@ -216,6 +243,7 @@ const MasterListRow = ({
     // until then). Delete needs a second click to confirm.
     const [isEditing, setIsEditing] = useState(false);
     const [draft, setDraft] = useState(null);
+    const [payError, setPayError] = useState('');
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [deleting, setDeleting] = useState(false);
 
@@ -241,15 +269,46 @@ const MasterListRow = ({
             trainerName: booking.trainerName || '',
             status: booking.status || 'pending',
             paymentStatus: booking.paymentStatus || 'unpaid',
-            paidAmount: r.paidAmount,
+            checkNumber: booking.checkNumber || '',
+            checkAmount: r.paymentStatus === 'check' ? r.paidAmount : '',
         });
+        setPayError('');
         setConfirmDelete(false);
         setIsEditing(true);
         if (!isOpen) onToggleExpand();
     };
-    const cancelEdit = () => { setDraft(null); setIsEditing(false); };
+    const cancelEdit = () => { setDraft(null); setIsEditing(false); setPayError(''); };
     const saveEdit = () => {
         if (!draft) { setIsEditing(false); return; }
+        // Paid by check needs both the check number and the amount — that's what
+        // the show is billed from at the end, so neither may be left blank.
+        const currentPay = booking.paymentStatus || 'unpaid';
+        const checkAmountNum = Number(draft.checkAmount) || 0;
+        const checkNumberTrim = String(draft.checkNumber || '').trim();
+        if (draft.paymentStatus === 'check' && (!checkNumberTrim || checkAmountNum <= 0)) {
+            setPayError('Enter the check number and the amount paid.');
+            return;
+        }
+        const checkChanged = draft.paymentStatus === 'check'
+            && (currentPay !== 'check'
+                || checkAmountNum !== r.paidAmount
+                || checkNumberTrim !== (booking.checkNumber || ''));
+        if (checkChanged) {
+            const now = new Date().toISOString();
+            onRecordPayment?.(booking.id, {
+                paymentStatus: 'check',
+                checkNumber: checkNumberTrim,
+                checkAmount: checkAmountNum,
+                paidAmount: checkAmountNum,
+                paidAt: now,
+                checkRecordedAt: booking.checkRecordedAt || now,
+            }, `Payment: paid by check #${checkNumberTrim} — ${fmtMoney(checkAmountNum)}`);
+        } else if (draft.paymentStatus === 'unpaid' && currentPay !== 'unpaid') {
+            onRecordPayment?.(booking.id, {
+                paymentStatus: 'unpaid', paidAmount: 0, paidAt: null,
+                checkNumber: '', checkAmount: 0, checkRecordedAt: null,
+            }, `Payment reset to Unpaid (was ${(PAYMENT_LABELS[currentPay] || currentPay).toLowerCase()})`);
+        }
         // Status gets its own dedicated log line (via onStatusChange), so it's
         // left out of this summary to avoid saying the same thing twice.
         const changedLabels = [];
@@ -262,14 +321,7 @@ const MasterListRow = ({
             changedLabels.push('trainer/group');
         }
         if (draft.status !== (booking.status || 'pending')) onStatusChange?.(booking.id, draft.status);
-        if (draft.paymentStatus !== (booking.paymentStatus || 'unpaid')) {
-            onUpdateField(booking.id, 'paymentStatus', draft.paymentStatus);
-            changedLabels.push('payment status');
-        }
-        if (Number(draft.paidAmount || 0) !== r.paidAmount) {
-            onUpdateField(booking.id, 'paidAmount', Number(draft.paidAmount || 0));
-            changedLabels.push('paid amount');
-        }
+        // Payment changes are saved (and logged) on their own above, at once.
         if (changedLabels.length) onLogActivity?.(booking.id, `Updated: ${changedLabels.join(', ')}`);
         setDraft(null);
         setIsEditing(false);
@@ -358,7 +410,6 @@ const MasterListRow = ({
                                     {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
                                 </Badge>
                             ))}
-                            <Badge className={cn(r.supplyStageColor, 'text-white text-[10px]')}>{r.supplyStatus}</Badge>
                         </div>
                     ) : <span className="text-muted-foreground">—</span>}
                 </td>
@@ -372,6 +423,14 @@ const MasterListRow = ({
                     <Badge className={cn('text-[10px] capitalize', STATUS_STYLES[r.status] || '')}>
                         {r.status.replace('_', ' ')}
                     </Badge>
+                </td>
+                <td className="px-3 py-2">
+                    <Badge className={cn('text-[10px] whitespace-nowrap', PAYMENT_STYLES[r.paymentStatus] || PAYMENT_STYLES.unpaid)}>
+                        {PAYMENT_LABELS[r.paymentStatus] || r.paymentStatus}
+                    </Badge>
+                    {r.paymentStatus === 'check' && r.checkNumber && (
+                        <div className="text-[10px] text-muted-foreground mt-0.5">Check #{r.checkNumber}</div>
+                    )}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtMoney(r.amount)}</td>
                 <td className={cn('px-3 py-2 text-right tabular-nums font-medium',
@@ -428,12 +487,12 @@ const MasterListRow = ({
             />
             {isOpen && (
                 <tr className="border-b bg-muted/30">
-                    <td colSpan={11} className="px-4 py-3 text-xs">
+                    <td colSpan={12} className="px-4 py-3 text-xs">
                         <div className="space-y-2.5">
                             {/* Edit form — Exhibitor / Trainer / Status / Payment / Paid amount */}
                             {isEditing && draft && (
                                 <div className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50/60 dark:bg-amber-900/10 p-2.5 space-y-2">
-                                    <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-5">
+                                    <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
                                         <div>
                                             <p className="font-medium text-muted-foreground mb-1">Exhibitor</p>
                                             <Input value={draft.exhibitorName} onChange={(e) => setDraftField('exhibitorName', e.target.value)} className="h-7 text-xs" />
@@ -455,25 +514,52 @@ const MasterListRow = ({
                                         </div>
                                         <div>
                                             <p className="font-medium text-muted-foreground mb-1">Payment</p>
-                                            <Select value={draft.paymentStatus} onValueChange={(v) => setDraftField('paymentStatus', v)}>
+                                            <Select value={draft.paymentStatus} onValueChange={(v) => { setDraftField('paymentStatus', v); setPayError(''); }}>
                                                 <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="unpaid" className="text-xs">Unpaid</SelectItem>
-                                                    <SelectItem value="partial" className="text-xs">Partial</SelectItem>
-                                                    <SelectItem value="paid" className="text-xs">Paid</SelectItem>
+                                                    <SelectItem value="check" className="text-xs">Paid by check</SelectItem>
+                                                    {/* Card payments come only from the exhibitor paying the
+                                                        emailed invoice online — shown when already set, never pickable. */}
+                                                    {(booking.paymentStatus === 'paid') && (
+                                                        <SelectItem value="paid" disabled className="text-xs">Paid (online)</SelectItem>
+                                                    )}
+                                                    {(booking.paymentStatus === 'partial') && (
+                                                        <SelectItem value="partial" disabled className="text-xs">Partial (online)</SelectItem>
+                                                    )}
                                                 </SelectContent>
                                             </Select>
+                                            {draft.paymentStatus !== 'check' && (
+                                                <p className="text-[10px] text-muted-foreground mt-1">
+                                                    “Paid” is set automatically when the exhibitor pays the emailed invoice online.
+                                                </p>
+                                            )}
                                         </div>
-                                        <div>
-                                            <p className="font-medium text-muted-foreground mb-1">Paid amount</p>
-                                            <Input
-                                                type="number" min="0" step="0.01"
-                                                value={draft.paidAmount}
-                                                onChange={(e) => setDraftField('paidAmount', e.target.value)}
-                                                className="h-7 text-xs"
-                                            />
-                                        </div>
+                                        {draft.paymentStatus === 'check' && (
+                                            <>
+                                                <div>
+                                                    <p className="font-medium text-muted-foreground mb-1">Check number</p>
+                                                    <Input
+                                                        value={draft.checkNumber}
+                                                        onChange={(e) => { setDraftField('checkNumber', e.target.value); setPayError(''); }}
+                                                        placeholder="e.g. 1042"
+                                                        className="h-7 text-xs"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-muted-foreground mb-1">Amount paid</p>
+                                                    <Input
+                                                        type="number" min="0" step="0.01"
+                                                        value={draft.checkAmount}
+                                                        onChange={(e) => { setDraftField('checkAmount', e.target.value); setPayError(''); }}
+                                                        placeholder="0.00"
+                                                        className="h-7 text-xs"
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
+                                    {payError && <p className="text-rose-600 text-[11px]">{payError}</p>}
                                     <div className="flex items-center gap-1.5 pt-0.5">
                                         <Button size="sm" className="h-7 text-xs" onClick={saveEdit}>
                                             <Check className="h-3.5 w-3.5 mr-1" /> Save
@@ -553,7 +639,15 @@ const MasterListRow = ({
                                             <tbody>
                                                 {r.supplies.map((s, i) => (
                                                     <tr key={i} className="border-t">
-                                                        <td className="px-2 py-1">{s.name}</td>
+                                                        <td className="px-2 py-1">
+                                                            <span>{s.name}</span>
+                                                            {/* Robert: tag each line as pre-ordered or ordered at the show. */}
+                                                            {r.booking.orderType === 'live-supply' ? (
+                                                                <Badge variant="outline" className="ml-2 text-[9px] font-normal border-amber-400 text-amber-600">At show</Badge>
+                                                            ) : (
+                                                                <Badge variant="outline" className="ml-2 text-[9px] font-normal border-sky-400 text-sky-600">Pre-order</Badge>
+                                                            )}
+                                                        </td>
                                                         <td className="px-2 py-1 text-center tabular-nums">{s.qty}</td>
                                                         <td className="px-2 py-1">
                                                             <Badge className={cn(s.stageColor, 'text-white text-[10px]')}>{s.stageLabel}</Badge>
@@ -614,7 +708,8 @@ const MasterListRow = ({
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
                                 <span>Ref: <span className="font-mono font-medium text-foreground">#{r.ref}</span></span>
                                 <span>Type: <span className="font-medium text-foreground">{r.kind}</span></span>
-                                <span>Payment: <span className="capitalize font-medium text-foreground">{(r.booking.paymentStatus || 'unpaid').replace('_', ' ')}</span></span>
+                                <span>Payment: <span className="font-medium text-foreground">{PAYMENT_LABELS[r.paymentStatus] || r.paymentStatus}</span></span>
+                                {r.paymentStatus === 'check' && r.checkNumber ? <span>Check #: <span className="font-medium text-foreground">{r.checkNumber}</span></span> : null}
                                 {r.booking.paidAt ? <span>Paid: <span className="font-medium text-foreground">{fmtDateTime(r.booking.paidAt)}</span></span> : null}
                                 {(r.arrivalLabel || r.departureLabel) ? <span>Dates: <span className="font-medium text-foreground">{r.arrivalLabel || '?'} – {r.departureLabel || '?'}</span></span> : null}
                                 {r.booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{r.booking.source}</span></span> : null}
@@ -623,8 +718,14 @@ const MasterListRow = ({
                                 {r.paidAmount > 0 && (
                                     <>
                                         <span>Paid: <span className="font-semibold text-emerald-700 dark:text-emerald-400">{fmtMoney(r.paidAmount)}</span></span>
-                                        <span>Club gets (95%): <span className="font-medium text-foreground">{fmtMoney(r.clubAmount)}</span></span>
-                                        <span>Platform fee (5%): <span className="font-medium text-foreground">{fmtMoney(r.platformFee)}</span></span>
+                                        {r.paymentStatus === 'check' ? (
+                                            <span>Platform fee owed by show (5%): <span className="font-medium text-foreground">{fmtMoney(r.checkFee)}</span></span>
+                                        ) : (
+                                            <>
+                                                <span>Club gets (95%): <span className="font-medium text-foreground">{fmtMoney(r.clubAmount)}</span></span>
+                                                <span>Platform fee (5%): <span className="font-medium text-foreground">{fmtMoney(r.platformFee)}</span></span>
+                                            </>
+                                        )}
                                     </>
                                 )}
                             </div>
@@ -657,11 +758,12 @@ const MasterListRow = ({
 
 const MasterListPanel = ({
     bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show',
-    onUpdateField, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
+    onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
     addBookingSlot,
 }) => {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
+    const [paymentFilter, setPaymentFilter] = useState('all'); // all | unpaid | check | paid
     const [assignFilter, setAssignFilter] = useState('all'); // all | assigned | partial | unassigned
     const [supplyFilter, setSupplyFilter] = useState('all'); // all | none | <SUPPLY_STAGES key>
     const [sort, setSort] = useState({ key: 'name', dir: 'asc' });
@@ -696,6 +798,7 @@ const MasterListPanel = ({
                 if (!hay.includes(q)) return false;
             }
             if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+            if (paymentFilter !== 'all' && r.paymentStatus !== paymentFilter) return false;
             if (assignFilter !== 'all') {
                 if (assignFilter === 'assigned' && !(r.stalls > 0 && r.assignedCount >= r.stalls)) return false;
                 if (assignFilter === 'partial' && !(r.assignedCount > 0 && r.assignedCount < r.stalls)) return false;
@@ -715,7 +818,7 @@ const MasterListPanel = ({
             return String(av).localeCompare(String(bv)) * mult;
         });
         return list;
-    }, [rows, search, statusFilter, assignFilter, supplyFilter, sort]);
+    }, [rows, search, statusFilter, paymentFilter, assignFilter, supplyFilter, sort]);
 
     const totals = useMemo(() => filtered.reduce((t, r) => ({
         stalls: t.stalls + r.stalls,
@@ -729,9 +832,13 @@ const MasterListPanel = ({
         paidAmount: t.paidAmount + r.paidAmount,
         clubAmount: t.clubAmount + r.clubAmount,
         platformFee: t.platformFee + r.platformFee,
+        checkCount: t.checkCount + (r.paymentStatus === 'check' ? 1 : 0),
+        checkAmount: t.checkAmount + r.checkAmount,
+        checkFee: t.checkFee + r.checkFee,
     }), {
         stalls: 0, assigned: 0, extraStalls: 0, rv: 0, rvAssigned: 0, supplies: 0, horses: 0,
         amount: 0, paidAmount: 0, clubAmount: 0, platformFee: 0,
+        checkCount: 0, checkAmount: 0, checkFee: 0,
     }), [filtered]);
 
     // "Exhibitors" is distinct people, not bookings — the same person can have
@@ -784,7 +891,7 @@ const MasterListPanel = ({
             'Assigned Stalls': r.stallNumbers,
             RV: r.rv,
             'Assigned RV Spots': r.rvSpotNumbers,
-            'Supplies / Pre-Orders': r.suppliesStr,
+            'Supplies': r.suppliesStr,
             'Supply Status': r.supplyStatus,
             Horses: r.horses,
             'Horse Names': r.horseNamesStr,
@@ -793,14 +900,19 @@ const MasterListPanel = ({
             'Amount Paid': r.paidAmount,
             'Club Gets (95%)': r.clubAmount,
             'Platform Fee (5%)': r.platformFee,
+            Payment: PAYMENT_LABELS[r.paymentStatus] || r.paymentStatus,
+            'Check #': r.checkNumber,
+            'Check Amount': r.checkAmount,
+            'Check Fee Owed (5%)': r.checkFee,
         }));
         rowsOut.push({
             Reference: '', 'Order Type': '', Exhibitor: 'TOTAL', Email: '', Phone: '',
             'Trainer/Group': '', 'Trainer Email': '', 'Trainer Phone': '', Arrival: '', Departure: '',
             Stalls: totals.stalls, Assigned: totals.assigned, 'Assigned Stalls': '', RV: totals.rv,
-            'Assigned RV Spots': '', 'Supplies / Pre-Orders': '', 'Supply Status': '', Horses: totals.horses, 'Horse Names': '', Status: '',
+            'Assigned RV Spots': '', 'Supplies': '', 'Supply Status': '', Horses: totals.horses, 'Horse Names': '', Status: '',
             'Amount Owed': totals.amount, 'Amount Paid': totals.paidAmount,
             'Club Gets (95%)': totals.clubAmount, 'Platform Fee (5%)': totals.platformFee,
+            Payment: '', 'Check #': '', 'Check Amount': totals.checkAmount, 'Check Fee Owed (5%)': totals.checkFee,
         });
 
         const ws = XLSX.utils.json_to_sheet(rowsOut);
@@ -810,6 +922,7 @@ const MasterListPanel = ({
             { wch: 7 }, { wch: 9 }, { wch: 16 }, { wch: 6 }, { wch: 16 },
             { wch: 24 }, { wch: 14 }, { wch: 7 }, { wch: 24 }, { wch: 10 },
             { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 },
+            { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 16 },
         ];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Master List');
@@ -872,7 +985,7 @@ const MasterListPanel = ({
             <p class="sub">${filtered.length} bookings · ${totals.stalls} stalls · ${totals.rv} RV · ${totals.supplies} supplies · ${totals.horses} horses · ${esc(fmtMoney(totals.amount))} total</p>
             <table><thead><tr>
                 <th>✔</th><th>Exhibitor / Contact</th><th class="c">Stalls</th><th class="c">RV</th>
-                <th>Supplies / Pre-Orders</th><th>Horses</th><th>Status</th><th class="c">Amount</th>
+                <th>Supplies</th><th>Horses</th><th>Status</th><th class="c">Amount</th>
             </tr></thead><tbody>${rowsHtml}</tbody></table>
             </body></html>`;
         const w = window.open('', '_blank');
@@ -940,6 +1053,15 @@ const MasterListPanel = ({
                             <p className="text-[11px] text-muted-foreground">Platform Fee (5%)</p>
                             <p className="text-lg font-semibold leading-tight">{fmtMoney(totals.platformFee)}</p>
                         </div>
+                        {/* Checks never go through Stripe, so the 5% isn't taken automatically —
+                            this is what EquiPatterns bills the show for at the end of the event. */}
+                        <div className="rounded-lg border bg-card px-3 py-2 min-w-[220px]">
+                            <p className="text-[11px] text-muted-foreground mb-1">Check Payments ({totals.checkCount})</p>
+                            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+                                <span>Collected: <span className="font-semibold">{fmtMoney(totals.checkAmount)}</span></span>
+                                <span>Fee owed by show (5%): <span className="font-semibold text-amber-600">{fmtMoney(totals.checkFee)}</span></span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
@@ -956,10 +1078,19 @@ const MasterListPanel = ({
                     <SelectContent>
                         <SelectItem value="all" className="text-xs">All statuses</SelectItem>
                         <SelectItem value="pending" className="text-xs">Pending</SelectItem>
-                        <SelectItem value="paid" className="text-xs">Paid</SelectItem>
                         <SelectItem value="confirmed" className="text-xs">Confirmed</SelectItem>
-                        <SelectItem value="checked_in" className="text-xs">Checked in</SelectItem>
                         <SelectItem value="cancelled" className="text-xs">Cancelled</SelectItem>
+                        <SelectItem value="checked_in" className="text-xs">Checked in</SelectItem>
+                        <SelectItem value="checked_out" className="text-xs">Checked out</SelectItem>
+                    </SelectContent>
+                </Select>
+                <Select value={paymentFilter} onValueChange={setPaymentFilter}>
+                    <SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue placeholder="Payment" /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all" className="text-xs">All payments</SelectItem>
+                        <SelectItem value="unpaid" className="text-xs">Unpaid</SelectItem>
+                        <SelectItem value="check" className="text-xs">Paid by check</SelectItem>
+                        <SelectItem value="paid" className="text-xs">Paid</SelectItem>
                     </SelectContent>
                 </Select>
                 <Select value={assignFilter} onValueChange={setAssignFilter}>
@@ -1025,6 +1156,7 @@ const MasterListPanel = ({
                                     isOpen={expandedIds.has(r.booking.id)}
                                     onToggleExpand={() => toggleExpanded(r.booking.id)}
                                     onUpdateField={onUpdateField}
+                                    onRecordPayment={onRecordPayment}
                                     onStatusChange={onStatusChange}
                                     onRemove={onRemove}
                                     onDownloadInvoice={onDownloadInvoice}
@@ -1043,6 +1175,7 @@ const MasterListPanel = ({
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.rv}</td>
                                     <td className="px-3 py-2 tabular-nums">{totals.supplies ? `${totals.supplies} items` : ''}</td>
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.horses}</td>
+                                    <td className="px-3 py-2" />
                                     <td className="px-3 py-2" />
                                     <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(totals.amount)}</td>
                                     <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(totals.paidAmount)}</td>
@@ -1064,9 +1197,9 @@ const MasterListPanel = ({
                     </div>
                     <div className="flex items-center gap-2">
                         <span className="font-medium text-foreground">Payment:</span>
-                        <Badge className="text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300">Unpaid</Badge>
-                        <Badge className="text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300">Partial</Badge>
-                        <Badge className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">Paid</Badge>
+                        {['unpaid', 'check', 'paid'].map(k => (
+                            <Badge key={k} className={cn('text-[10px]', PAYMENT_STYLES[k])}>{PAYMENT_LABELS[k]}</Badge>
+                        ))}
                     </div>
                     <div className="flex items-center gap-2">
                         <span className="font-medium text-foreground">Supply:</span>

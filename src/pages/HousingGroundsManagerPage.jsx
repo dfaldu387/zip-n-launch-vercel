@@ -43,7 +43,7 @@ import AssignBoard from '@/components/housing/AssignBoard';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
-import { unassignBookingRvSpots } from '@/lib/rvAssignment';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
@@ -3328,6 +3328,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     fulfillmentStatus: r.fulfillmentStatus,
                     stageTimestamps: r.stageTimestamps,
                     fulfilledAt: r.fulfilledAt,
+                    // Payments are saved at once (check entry) or by Stripe on the
+                    // server (card) — never held as a local-only edit — so the
+                    // saved copy wins. Without this a card payment made while the
+                    // page was open stayed "Unpaid" here until a full reload.
+                    paymentStatus: r.paymentStatus,
+                    paidAmount: r.paidAmount,
+                    paidAt: r.paidAt,
+                    checkNumber: r.checkNumber,
+                    checkAmount: r.checkAmount,
+                    checkRecordedAt: r.checkRecordedAt,
                 };
             });
         });
@@ -3648,6 +3658,19 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, fields);
     };
 
+    // Record a payment (paid-by-check, or reset to unpaid) and save it right away.
+    // Money must not wait for Save All, so the activity line rides in the same
+    // patch that goes to the database instead of being a local-only log entry.
+    const recordPayment = async (bookingId, patch, message) => {
+        const current = bookings.find(b => b.id === bookingId);
+        const fullPatch = {
+            ...patch,
+            activityLog: [...(current?.activityLog || []), { at: new Date().toISOString(), message }],
+        };
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...fullPatch } : b));
+        if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, fullPatch);
+    };
+
     // Commit a whole patch from the Edit Booking dialog (contact fields, nights,
     // and a freshly-rebuilt items[]/amount/totalAmount — see AddBookingDialog's
     // edit mode). Status gets the same explicit DB save + stall-release side
@@ -3666,16 +3689,26 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // only remounts when a different show is picked), so both are refreshed from what
     // was actually written — otherwise the barn map would keep showing the released
     // stalls as booked until the page was reloaded.
-    const changeBookingStatus = async (bookingId, newStatus) => {
+    const changeBookingStatus = async (bookingId, newStatus, activityMessage) => {
         const wasAlreadyConfirmed = bookings.find(b => b.id === bookingId)?.status === 'confirmed';
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: newStatus } : b));
         const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
         if (result?.barns) setBarns(result.barns);
-        if (result?.bookings) setBookings(result.bookings);
+        // The server copy has no client-only activity log, so keep whichever log is
+        // longer — otherwise the "stall assigned" lines logged a moment ago (right
+        // before an auto-confirm) vanish.
+        if (result?.bookings) {
+            setBookings(prev => result.bookings.map(rb => {
+                const local = prev.find(b => b.id === rb.id);
+                return local?.activityLog?.length > (rb.activityLog?.length || 0)
+                    ? { ...rb, activityLog: local.activityLog }
+                    : rb;
+            }));
+        }
         // Logged AFTER the possible result.bookings overwrite above, so a status
         // change always shows in the log even though the server response doesn't
         // know about this client-only field.
-        logActivity(bookingId, `Status changed to ${newStatus.replace('_', ' ')}`);
+        logActivity(bookingId, activityMessage || `Status changed to ${newStatus.replace('_', ' ')}`);
 
         // Tell the exhibitor once, right when the organizer actually confirms —
         // not on every later edit, so re-saving a confirmed booking doesn't resend it.
@@ -3693,6 +3726,40 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             }
         }
     };
+
+    // Robert (2026-09-23 video): "when we assign both, it can naturally change
+    // to confirmed, from pending to confirmed." Watches the SAVED barns / RV /
+    // bookings (not the in-progress local copy) so the status write never races
+    // the assignment auto-save and can't put stale barns back.
+    // Only a booking that BECOMES fully assigned since the last look is
+    // confirmed — the first pass just records who is already assigned, so
+    // opening a show never mass-confirms (and mass-emails) old pending bookings.
+    // Only Pending moves; Cancelled / Checked In / Checked Out are never touched.
+    const fullyAssignedRef = useRef(null);
+    useEffect(() => {
+        const svc = pd?.stallingService || {};
+        const savedBarns = svc.barns || [];
+        const savedRv = ensureAllRvSpots(svc.rvAreas || []);
+        const savedBookings = svc.bookings || [];
+        const now = new Map();
+        for (const b of savedBookings) {
+            if (!b || b.orderType === 'live-supply') continue;
+            const needStalls = getRequestedStallCount(b);
+            const needRv = getRequestedRvCount(b);
+            if (needStalls + needRv === 0) continue;
+            now.set(b.id, getAssignedStallsForBooking(b, savedBarns).length >= needStalls
+                && getAssignedRvSpotsForBooking(b, savedRv).length >= needRv);
+        }
+        const before = fullyAssignedRef.current;
+        fullyAssignedRef.current = now;
+        if (!before || isLocked) return;
+        for (const b of savedBookings) {
+            if (before.get(b.id) === false && now.get(b.id) === true && (b.status || 'pending') === 'pending') {
+                changeBookingStatus(b.id, 'confirmed', 'Auto-confirmed — all stalls and RV spots assigned');
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pd?.stallingService?.barns, pd?.stallingService?.rvAreas, pd?.stallingService?.bookings]);
 
     const removeBooking = async (bookingId) => {
         setBookings(prev => prev.filter(b => b.id !== bookingId));
@@ -4279,7 +4346,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [bookings, barns, extraStallFees, rvAreas, extraRvFees, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
 
     const persist = useCallback(async (opts = {}) => {
-        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, opts);
+        // The debounced auto-save below can fire up to 1.5s after the edit that
+        // scheduled it, holding that moment's `bookings`. Anything saved in between
+        // (e.g. auto-confirm on the last stall assignment) would be overwritten with
+        // the old status. bookingsRef always holds the latest bookings.
+        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings: bookingsRef.current, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, opts);
         setLastSavedAt(new Date());
         setIsDirty(false);
     }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish]);
@@ -5143,6 +5214,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         extraStallFees={extraStallFees}
                         showName={show.project_name || 'Show'}
                         onUpdateField={(bookingId, field, value) => updateBooking(bookingId, field, value)}
+                        onRecordPayment={recordPayment}
                         onStatusChange={changeBookingStatus}
                         onRemove={removeBooking}
                         onDownloadInvoice={downloadBookingInvoice}

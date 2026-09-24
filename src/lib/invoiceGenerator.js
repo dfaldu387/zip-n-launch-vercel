@@ -28,6 +28,7 @@ const STATUS_BADGE = {
 const PAY_BADGE = {
     paid:     { label: 'PAID',        color: SUCCESS },
     partial:  { label: 'PARTIAL',     color: [245, 158, 11] },
+    check:    { label: 'PAID BY CHECK', color: SUCCESS },
     unpaid:   { label: 'UNPAID',      color: DANGER },
     refunded: { label: 'REFUNDED',    color: MUTED },
 };
