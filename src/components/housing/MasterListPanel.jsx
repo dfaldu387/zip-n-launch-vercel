@@ -86,6 +86,19 @@ const fmtDate = (iso) => {
     return `${MONTHS[m - 1]} ${d}`;
 };
 
+// Whole nights between two 'YYYY-MM-DD' dates (UTC math so daylight-saving can't skew it).
+// Falls back to the stored night count when a booking has no usable dates.
+const countNights = (arrival, departure, fallback) => {
+    const toUtc = (iso) => {
+        const [y, m, d] = String(iso || '').split('-').map(Number);
+        return y && m && d ? Date.UTC(y, m - 1, d) : null;
+    };
+    const a = toUtc(arrival);
+    const b = toUtc(departure);
+    if (a != null && b != null && b > a) return Math.round((b - a) / 86400000);
+    return Number(fallback) || 0;
+};
+
 // ISO timestamp → "Jul 14, 11:08 PM" for the "Booked" line in the detail panel.
 const fmtDateTime = (iso) => {
     if (!iso) return '';
@@ -151,6 +164,8 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
         departure: booking.departureDate || '',
         arrivalLabel: fmtDate(booking.arrivalDate),
         departureLabel: fmtDate(booking.departureDate),
+        departureYear: String(booking.departureDate || '').slice(0, 4),
+        nights: countNights(booking.arrivalDate, booking.departureDate, booking.nights),
         stalls: requested,
         assignedCount: assigned.length,
         stallNumbersArr: assigned.map(s => s.number),
@@ -406,7 +421,7 @@ const MasterListRow = ({
                     {r.supplies.length > 0 ? (
                         <div className="flex items-center gap-1 flex-wrap">
                             {r.supplies.map((s, i) => (
-                                <Badge key={i} variant="outline" className="text-[10px] font-normal">
+                                <Badge key={i} variant="outline" className="text-[10px] font-normal whitespace-nowrap">
                                     {s.name} <span className="ml-1 font-semibold tabular-nums">×{s.qty}</span>
                                 </Badge>
                             ))}
@@ -489,6 +504,36 @@ const MasterListRow = ({
                 <tr className="border-b bg-muted/30">
                     <td colSpan={12} className="px-4 py-3 text-xs">
                         <div className="space-y-2.5">
+                            {/* Sticky identity bar — stays under the table header while the detail scrolls,
+                                so you always see whose booking this is (Robert 2026-09-24). */}
+                            <div className="sticky top-[37px] z-[5] -mx-4 px-4 py-2 bg-background border-y flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                                <Users className="h-4 w-4 text-primary shrink-0" />
+                                <span className="text-sm font-semibold">{r.name}</span>
+                                <span className="text-[11px] font-mono text-muted-foreground">#{r.ref}</span>
+                                <Badge className={cn('text-[10px] capitalize', STATUS_STYLES[r.status] || '')}>{r.status.replace('_', ' ')}</Badge>
+                                {r.trainer && <span className="text-muted-foreground">Trainer: <span className="text-foreground">{r.trainer}</span></span>}
+                                <span className="text-muted-foreground hidden lg:inline">
+                                    {[r.booking.createdAt ? `Booked: ${fmtDateTime(r.booking.createdAt)}` : '',
+                                      r.booking.source ? `Source: ${r.booking.source}` : ''].filter(Boolean).join(' · ')}
+                                </span>
+                                <div className="flex-1" />
+                                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onDownloadInvoice?.(booking)}>
+                                    <FileText className="h-3.5 w-3.5 mr-1" /> Invoice
+                                </Button>
+                                {balanceDue > 0 && booking.email && (
+                                    <Button variant="outline" size="sm" className="h-7 text-xs" disabled={isEmailing} onClick={() => onEmailInvoice?.(booking)}>
+                                        {isEmailing ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Mail className="h-3.5 w-3.5 mr-1" />}
+                                        Email Invoice
+                                    </Button>
+                                )}
+                                <Button variant="outline" size="sm" className="h-7 text-xs" disabled={isEditing} onClick={startEdit}>
+                                    <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+                                </Button>
+                                <Button variant="outline" size="sm" className="h-7 text-xs text-rose-600 border-rose-300 hover:text-rose-600 hover:bg-rose-500/10" onClick={() => setConfirmDelete(true)}>
+                                    <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
+                                </Button>
+                            </div>
+
                             {/* Edit form — Exhibitor / Trainer / Status / Payment / Paid amount */}
                             {isEditing && draft && (
                                 <div className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50/60 dark:bg-amber-900/10 p-2.5 space-y-2">
@@ -571,28 +616,39 @@ const MasterListRow = ({
                                 </div>
                             )}
 
-                            {/* Contacts */}
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                                {r.email ? <span className="inline-flex items-center gap-1"><Mail className="h-3 w-3 text-muted-foreground" /> {r.email}</span> : null}
-                                {r.phone ? <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3 text-muted-foreground" /> {r.phone}</span> : null}
-                                {!r.email && !r.phone && <span className="text-muted-foreground italic">No exhibitor contact on file</span>}
-                            </div>
-                            {(r.trainer || r.trainerEmail || r.trainerPhone) && (
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
-                                    <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" /> Trainer: {r.trainer || '—'}</span>
-                                    {r.trainerEmail ? <span className="inline-flex items-center gap-1"><Mail className="h-3 w-3" /> {r.trainerEmail}</span> : null}
-                                    {r.trainerPhone ? <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3" /> {r.trainerPhone}</span> : null}
+                            {/* Vertical, labelled columns (Robert 2026-09-24): every block reads
+                                top-to-bottom under its own heading, like the Status/Payment columns. */}
+                            <div className="grid gap-x-4 gap-y-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-[1.5fr_1.5fr_1fr_1fr_0.8fr_0.8fr_1.2fr]">
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">Contact Information</p>
+                                    <p className="inline-flex items-center gap-1.5"><Users className="h-3 w-3 text-muted-foreground shrink-0" /> {r.name}</p>
+                                    {r.email ? <p className="flex items-start gap-1.5 break-words min-w-0"><Mail className="h-3 w-3 mt-0.5 text-muted-foreground shrink-0" /> {r.email}</p> : null}
+                                    {r.phone ? <p className="flex items-center gap-1.5"><Phone className="h-3 w-3 text-muted-foreground shrink-0" /> {r.phone}</p> : null}
+                                    {!r.email && !r.phone && <p className="italic text-muted-foreground">No contact on file</p>}
                                 </div>
-                            )}
 
-                            {/* Horses, stalls, extra, RV */}
-                            <div className={cn('grid gap-2 sm:grid-cols-2', r.rv > 0 ? 'md:grid-cols-4' : 'md:grid-cols-3')}>
-                                <div>
-                                    <p className="font-medium text-muted-foreground mb-0.5">Horses ({r.horses})</p>
-                                    <p>{r.horseNamesArr.length ? r.horseNamesArr.join(', ') : <span className="italic text-muted-foreground">None listed</span>}</p>
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">Trainer / Group</p>
+                                    {(r.trainer || r.trainerEmail || r.trainerPhone) ? (
+                                        <>
+                                            <p className="inline-flex items-center gap-1.5"><Users className="h-3 w-3 text-muted-foreground shrink-0" /> {r.trainer || '—'}</p>
+                                            {r.trainerEmail ? <p className="flex items-start gap-1.5 break-words min-w-0"><Mail className="h-3 w-3 mt-0.5 text-muted-foreground shrink-0" /> {r.trainerEmail}</p> : null}
+                                            {r.trainerPhone ? <p className="flex items-center gap-1.5"><Phone className="h-3 w-3 text-muted-foreground shrink-0" /> {r.trainerPhone}</p> : null}
+                                        </>
+                                    ) : <p className="italic text-muted-foreground">None listed</p>}
                                 </div>
-                                <div>
-                                    <p className="font-medium text-muted-foreground mb-0.5">Stalls ({r.assignedCount}{r.stalls ? ` of ${r.stalls}` : ''})</p>
+
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">Horses ({r.horses})</p>
+                                    {r.horseNamesArr.length
+                                        ? <ol className="space-y-0.5">
+                                            {r.horseNamesArr.map((h, i) => <li key={i}>{i + 1}. {h}</li>)}
+                                        </ol>
+                                        : <p className="italic text-muted-foreground">None listed</p>}
+                                </div>
+
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">Stalls ({r.assignedCount}{r.stalls ? ` of ${r.stalls}` : ''})</p>
                                     <div className="flex flex-wrap gap-1">
                                         {r.stallNumbersArr.length
                                             ? r.stallNumbersArr.map((num, i) => (
@@ -600,16 +656,17 @@ const MasterListRow = ({
                                             ))
                                             : <span className="italic text-muted-foreground">Unassigned</span>}
                                     </div>
-                                </div>
-                                <div>
-                                    <p className="font-medium text-muted-foreground mb-0.5">Extra stalls beyond horses</p>
-                                    <p className={cn('font-semibold', extraStalls > 0 ? 'text-amber-600' : 'text-muted-foreground')}>
-                                        {extraStalls > 0 ? `+${extraStalls}` : '0'}
+                                    <p className="text-muted-foreground">
+                                        Extra beyond horses:{' '}
+                                        <span className={cn('font-semibold', extraStalls > 0 ? 'text-amber-600' : 'text-muted-foreground')}>
+                                            {extraStalls > 0 ? `+${extraStalls}` : '0'}
+                                        </span>
                                     </p>
                                 </div>
-                                {r.rv > 0 && (
-                                    <div>
-                                        <p className="font-medium text-muted-foreground mb-0.5">RV ({r.rvAssignedCount}{r.rv ? ` of ${r.rv}` : ''})</p>
+
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">RV{r.rv > 0 ? ` (${r.rvAssignedCount} of ${r.rv})` : ''}</p>
+                                    {r.rv > 0 ? (
                                         <div className="flex flex-wrap gap-1">
                                             {r.rvSpotNumbersArr.length
                                                 ? r.rvSpotNumbersArr.map((num, i) => (
@@ -617,136 +674,154 @@ const MasterListRow = ({
                                                 ))
                                                 : <span className="italic text-muted-foreground">Unassigned</span>}
                                         </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Supply Fulfillment — one row per line item, each with its own stage,
-                                since a delivery can reach the Shavings before the Hay. */}
-                            {r.supplies.length > 0 && (
-                                <div>
-                                    <p className="font-medium text-muted-foreground mb-1">Supply Fulfillment</p>
-                                    <div className="rounded-md border overflow-hidden">
-                                        <table className="w-full text-xs">
-                                            <thead>
-                                                <tr className="bg-muted/50 text-muted-foreground">
-                                                    <th className="px-2 py-1 text-left font-medium">Item</th>
-                                                    <th className="px-2 py-1 text-center font-medium">Qty</th>
-                                                    <th className="px-2 py-1 text-left font-medium">Status</th>
-                                                    <th className="px-2 py-1 text-left font-medium">Last Updated</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {r.supplies.map((s, i) => (
-                                                    <tr key={i} className="border-t">
-                                                        <td className="px-2 py-1">
-                                                            <span>{s.name}</span>
-                                                            {/* Robert: tag each line as pre-ordered or ordered at the show. */}
-                                                            {r.booking.orderType === 'live-supply' ? (
-                                                                <Badge variant="outline" className="ml-2 text-[9px] font-normal border-amber-400 text-amber-600">At show</Badge>
-                                                            ) : (
-                                                                <Badge variant="outline" className="ml-2 text-[9px] font-normal border-sky-400 text-sky-600">Pre-order</Badge>
-                                                            )}
-                                                        </td>
-                                                        <td className="px-2 py-1 text-center tabular-nums">{s.qty}</td>
-                                                        <td className="px-2 py-1">
-                                                            <Badge className={cn(s.stageColor, 'text-white text-[10px]')}>{s.stageLabel}</Badge>
-                                                        </td>
-                                                        <td className="px-2 py-1 text-muted-foreground">
-                                                            {s.lastUpdated ? fmtDateTime(s.lastUpdated) : '—'}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                    ) : <p className="italic text-muted-foreground">No RV booked</p>}
                                 </div>
-                            )}
 
-                            {/* Notes — its own Edit button, saves independently of the fields above. */}
-                            <div>
-                                <div className="flex items-center gap-1.5 mb-0.5">
-                                    <StickyNote className="h-3 w-3 text-muted-foreground" />
-                                    <p className="font-medium text-muted-foreground">Notes</p>
-                                    {!isEditingNotes && (
-                                        <button
-                                            type="button"
-                                            onClick={startEditNotes}
-                                            className="text-muted-foreground hover:text-primary"
-                                            title="Edit notes"
-                                        >
-                                            <Pencil className="h-3 w-3" />
-                                        </button>
+                                {/* Stay details — when they move in and out. */}
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">Stay Details</p>
+                                    {(r.arrivalLabel || r.departureLabel) ? (
+                                        <>
+                                            <p><span className="text-muted-foreground">In:</span> {r.arrivalLabel || '?'}</p>
+                                            <p><span className="text-muted-foreground">Out:</span> {r.departureLabel || '?'}{r.departureYear ? `, ${r.departureYear}` : ''}</p>
+                                        </>
+                                    ) : <p className="italic text-muted-foreground">No dates on file</p>}
+                                    {r.nights > 0 && <p className="text-muted-foreground">{r.nights} night{r.nights === 1 ? '' : 's'}</p>}
+                                </div>
+
+                                <div className="space-y-1 min-w-0">
+                                    <p className="font-semibold text-foreground">Status &amp; Payment</p>
+                                    <p className="flex items-center gap-1.5">
+                                        <span className="text-muted-foreground">Booking:</span>
+                                        <Badge className={cn('text-[10px] capitalize', STATUS_STYLES[r.status] || '')}>{r.status.replace('_', ' ')}</Badge>
+                                    </p>
+                                    <p className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-muted-foreground">Payment:</span>
+                                        <Badge className={cn('text-[10px] whitespace-nowrap', PAYMENT_STYLES[r.paymentStatus] || PAYMENT_STYLES.unpaid)}>
+                                            {PAYMENT_LABELS[r.paymentStatus] || r.paymentStatus}
+                                        </Badge>
+                                    </p>
+                                    {r.paymentStatus === 'check' && r.checkNumber && (
+                                        <p className="text-muted-foreground">Check #{r.checkNumber}</p>
+                                    )}
+                                    <p><span className="text-muted-foreground">Amount:</span> <span className="font-semibold">{fmtMoney(r.amount)}</span></p>
+                                    <p><span className="text-muted-foreground">Paid:</span> <span className={cn('font-semibold', r.paidAmount > 0 && 'text-emerald-700 dark:text-emerald-400')}>{fmtMoney(r.paidAmount)}</span></p>
+                                    <p className={cn('font-semibold', balanceDue > 0 ? 'text-amber-600' : 'text-muted-foreground')}>
+                                        Balance Due: {fmtMoney(balanceDue)}
+                                    </p>
+                                    {r.paidAmount > 0 && (
+                                        r.paymentStatus === 'check' ? (
+                                            <p className="text-[10px] text-muted-foreground">Platform fee owed by show (5%): {fmtMoney(r.checkFee)}</p>
+                                        ) : (
+                                            <p className="text-[10px] text-muted-foreground">Club gets (95%): {fmtMoney(r.clubAmount)} · Platform fee (5%): {fmtMoney(r.platformFee)}</p>
+                                        )
                                     )}
                                 </div>
-                                {isEditingNotes ? (
-                                    <div className="space-y-1.5">
-                                        <Textarea
-                                            value={notesDraft}
-                                            onChange={(e) => setNotesDraft(e.target.value)}
-                                            placeholder="Anything the barn/facility should know — arrival plans, requests, etc."
-                                            className="text-xs min-h-[60px]"
-                                            autoFocus
-                                        />
-                                        <div className="flex items-center gap-1.5">
-                                            <Button size="sm" className="h-7 text-xs" onClick={saveNotes}>
-                                                <Check className="h-3.5 w-3.5 mr-1" /> Save
-                                            </Button>
-                                            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={cancelEditNotes}>
-                                                <X className="h-3.5 w-3.5 mr-1" /> Cancel
-                                            </Button>
+                            </div>
+
+                            {/* Notes | Supply Fulfillment (middle) | Activity Log. Fulfillment has one row
+                                per line item, each with its own stage, since a delivery can reach the
+                                Shavings before the Hay. */}
+                            <div className={cn('grid gap-3', r.supplies.length > 0 ? 'lg:grid-cols-[1fr_1.5fr_1fr]' : 'lg:grid-cols-2')}>
+                                {/* Notes — its own Edit button, saves independently of the fields above. */}
+                                <div className="rounded-md border bg-background/60 p-2.5">
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                        <StickyNote className="h-3 w-3 text-muted-foreground" />
+                                        <p className="font-semibold text-foreground">Notes</p>
+                                        {!isEditingNotes && (
+                                            <button
+                                                type="button"
+                                                onClick={startEditNotes}
+                                                className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-primary"
+                                                title="Edit notes"
+                                            >
+                                                <Pencil className="h-3 w-3" /> Edit
+                                            </button>
+                                        )}
+                                    </div>
+                                    {isEditingNotes ? (
+                                        <div className="space-y-1.5">
+                                            <Textarea
+                                                value={notesDraft}
+                                                onChange={(e) => setNotesDraft(e.target.value)}
+                                                placeholder="Anything the barn/facility should know — arrival plans, requests, etc."
+                                                className="text-xs min-h-[60px]"
+                                                autoFocus
+                                            />
+                                            <div className="flex items-center gap-1.5">
+                                                <Button size="sm" className="h-7 text-xs" onClick={saveNotes}>
+                                                    <Check className="h-3.5 w-3.5 mr-1" /> Save
+                                                </Button>
+                                                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={cancelEditNotes}>
+                                                    <X className="h-3.5 w-3.5 mr-1" /> Cancel
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <p className={cn('whitespace-pre-wrap', !booking.notes && 'italic text-muted-foreground')}>
+                                            {booking.notes || 'No notes'}
+                                        </p>
+                                    )}
+                                </div>
+
+                                {r.supplies.length > 0 && (
+                                    <div className="rounded-md border bg-background/60 p-2.5">
+                                        <p className="font-semibold text-foreground mb-1">Supply Fulfillment</p>
+                                        <div className="rounded-md border overflow-hidden">
+                                            <table className="w-full text-xs">
+                                                <thead>
+                                                    <tr className="bg-muted/50 text-muted-foreground">
+                                                        <th className="px-2 py-1 text-left font-medium">Item</th>
+                                                        <th className="px-2 py-1 text-center font-medium">Qty</th>
+                                                        <th className="px-2 py-1 text-left font-medium">Status</th>
+                                                        <th className="px-2 py-1 text-left font-medium">Last Updated</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {r.supplies.map((s, i) => (
+                                                        <tr key={i} className="border-t">
+                                                            <td className="px-2 py-1">
+                                                                <span>{s.name}</span>
+                                                                {/* Robert: tag each line as pre-ordered or ordered at the show. */}
+                                                                {r.booking.orderType === 'live-supply' ? (
+                                                                    <Badge variant="outline" className="ml-2 text-[9px] font-normal border-amber-400 text-amber-600">At show</Badge>
+                                                                ) : (
+                                                                    <Badge variant="outline" className="ml-2 text-[9px] font-normal border-sky-400 text-sky-600">Pre-order</Badge>
+                                                                )}
+                                                            </td>
+                                                            <td className="px-2 py-1 text-center tabular-nums">{s.qty}</td>
+                                                            <td className="px-2 py-1">
+                                                                <Badge className={cn(s.stageColor, 'text-white text-[10px]')}>{s.stageLabel}</Badge>
+                                                            </td>
+                                                            <td className="px-2 py-1 text-muted-foreground">
+                                                                {s.lastUpdated ? fmtDateTime(s.lastUpdated) : '—'}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
                                         </div>
                                     </div>
-                                ) : (
-                                    <p className={cn(!booking.notes && 'italic text-muted-foreground')}>
-                                        {booking.notes || 'No notes'}
+                                )}
+
+                                {/* Activity Log — bookings from before this existed still show a
+                                    sensible first line, synthesized from when they were booked. */}
+                                <div className="rounded-md border bg-background/60 p-2.5">
+                                    <p className="font-semibold text-foreground mb-1 flex items-center gap-1.5">
+                                        <History className="h-3 w-3 text-muted-foreground" /> Activity Log
                                     </p>
-                                )}
-                            </div>
-
-                            {/* Meta */}
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground pt-1 border-t">
-                                <span>Ref: <span className="font-mono font-medium text-foreground">#{r.ref}</span></span>
-                                <span>Type: <span className="font-medium text-foreground">{r.kind}</span></span>
-                                <span>Payment: <span className="font-medium text-foreground">{PAYMENT_LABELS[r.paymentStatus] || r.paymentStatus}</span></span>
-                                {r.paymentStatus === 'check' && r.checkNumber ? <span>Check #: <span className="font-medium text-foreground">{r.checkNumber}</span></span> : null}
-                                {r.booking.paidAt ? <span>Paid: <span className="font-medium text-foreground">{fmtDateTime(r.booking.paidAt)}</span></span> : null}
-                                {(r.arrivalLabel || r.departureLabel) ? <span>Dates: <span className="font-medium text-foreground">{r.arrivalLabel || '?'} – {r.departureLabel || '?'}</span></span> : null}
-                                {r.booking.source ? <span>Source: <span className="capitalize font-medium text-foreground">{r.booking.source}</span></span> : null}
-                                {r.booking.createdAt ? <span>Booked: <span className="font-medium text-foreground">{fmtDateTime(r.booking.createdAt)}</span></span> : null}
-                                <span>Amount: <span className="font-semibold text-foreground">{fmtMoney(r.amount)}</span></span>
-                                {r.paidAmount > 0 && (
-                                    <>
-                                        <span>Paid: <span className="font-semibold text-emerald-700 dark:text-emerald-400">{fmtMoney(r.paidAmount)}</span></span>
-                                        {r.paymentStatus === 'check' ? (
-                                            <span>Platform fee owed by show (5%): <span className="font-medium text-foreground">{fmtMoney(r.checkFee)}</span></span>
-                                        ) : (
-                                            <>
-                                                <span>Club gets (95%): <span className="font-medium text-foreground">{fmtMoney(r.clubAmount)}</span></span>
-                                                <span>Platform fee (5%): <span className="font-medium text-foreground">{fmtMoney(r.platformFee)}</span></span>
-                                            </>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-
-                            {/* Activity Log — bookings from before this existed still show a
-                                sensible first line, synthesized from when they were booked. */}
-                            <div>
-                                <p className="font-medium text-muted-foreground mb-0.5 flex items-center gap-1.5">
-                                    <History className="h-3 w-3" /> Activity Log
-                                </p>
-                                <ul className="space-y-0.5">
-                                    {(booking.activityLog?.length
-                                        ? [...booking.activityLog].reverse()
-                                        : (booking.createdAt ? [{ at: booking.createdAt, message: 'Booking created' }] : [])
-                                    ).map((entry, i) => (
-                                        <li key={i} className="flex items-baseline gap-2">
-                                            <span className="text-[10px] text-muted-foreground shrink-0 w-[92px]">{fmtDateTime(entry.at)}</span>
-                                            <span>{entry.message}</span>
-                                        </li>
-                                    ))}
-                                </ul>
+                                    <ul className="space-y-0.5">
+                                        {(booking.activityLog?.length
+                                            ? [...booking.activityLog].reverse()
+                                            : (booking.createdAt ? [{ at: booking.createdAt, message: 'Booking created' }] : [])
+                                        ).map((entry, i) => (
+                                            <li key={i} className="flex items-baseline gap-2">
+                                                <span className="text-[10px] text-muted-foreground shrink-0 w-[92px]">{fmtDateTime(entry.at)}</span>
+                                                <span>{entry.message}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
                             </div>
                         </div>
                     </td>
@@ -1130,13 +1205,13 @@ const MasterListPanel = ({
                     </CardContent>
                 </Card>
             ) : (
-                <div className="rounded-lg border overflow-x-auto">
+                <div className="rounded-lg border overflow-auto max-h-[75vh]">
                     <table className="w-full text-sm">
                         <thead>
-                            <tr className="border-b bg-muted/50">
+                            <tr className="border-b">
                                 {COLUMNS.map(col => (
                                     <th key={col.key}
-                                        className={cn('px-3 py-2 font-medium select-none cursor-pointer',
+                                        className={cn('sticky top-0 z-10 bg-muted px-3 py-2 font-medium select-none cursor-pointer shadow-[0_1px_0_0_hsl(var(--border))]',
                                             col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : 'text-left')}
                                         onClick={() => toggleSort(col.key)}>
                                         <span className={cn('inline-flex items-center gap-1',
@@ -1145,7 +1220,7 @@ const MasterListPanel = ({
                                         </span>
                                     </th>
                                 ))}
-                                <th className="px-3 py-2 font-medium text-center">Actions</th>
+                                <th className="sticky top-0 z-10 bg-muted px-3 py-2 font-medium text-center shadow-[0_1px_0_0_hsl(var(--border))]">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
