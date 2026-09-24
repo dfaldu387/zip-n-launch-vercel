@@ -1224,10 +1224,14 @@ const EventDetailPage = () => {
                   )}
                   {/* Stalling Chart — only when the organizer has published it (Assign
                       Stalls tab → Publish Chart). */}
-                  {event.isFromProjects && projectData?.stallingService?.chartPublish?.enabled && (
+                  {event.isFromProjects && projectData?.stallingService?.chartPublish?.enabled &&
+                    (projectData.stallingService.chartPublish.showStalls !== false || projectData.stallingService.chartPublish.showRv !== false) && (
                     <Button asChild variant="outline" className="w-full">
                       <Link to={`/show/${event.id}/stalling-chart`}>
-                        <MapPin className="h-4 w-4 mr-2" /> View Stalling Chart
+                        <MapPin className="h-4 w-4 mr-2" />
+                        {projectData.stallingService.chartPublish.showStalls === false ? 'View RV / Camping Chart'
+                          : projectData.stallingService.chartPublish.showRv === false ? 'View Stalling Chart'
+                          : 'View Stalling & RV Chart'}
                       </Link>
                     </Button>
                   )}

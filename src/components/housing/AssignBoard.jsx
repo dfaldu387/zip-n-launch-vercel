@@ -778,12 +778,15 @@ const AssignBoard = ({
     };
 
     const ModeToggle = () => (
-        <div className="inline-flex rounded-full border bg-muted p-0.5">
-            {[{ id: 'stalls', label: 'Stalls', Icon: Home }, { id: 'rv', label: 'RV / Camping', Icon: Car }].map(m => (
+        <div className="inline-flex gap-1.5">
+            {[
+                { id: 'stalls', label: 'Assign Stalls', Icon: Home, on: 'bg-blue-600 border-blue-600 text-white', off: 'hover:border-blue-400 hover:text-blue-700 dark:hover:text-blue-300' },
+                { id: 'rv', label: 'Assign RV / Camping', Icon: Car, on: 'bg-emerald-600 border-emerald-600 text-white', off: 'hover:border-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300' },
+            ].map(m => (
                 <button key={m.id} type="button" onClick={() => { setMode(m.id); setSelectedBookingId(null); setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(null); }}
-                    className={cn('flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                        mode === m.id ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground')}>
-                    <m.Icon className="h-3.5 w-3.5" /> {m.label}
+                    className={cn('flex items-center gap-1.5 rounded-lg border px-3.5 py-1.5 text-sm font-semibold transition-colors',
+                        mode === m.id ? cn(m.on, 'shadow-sm') : cn('bg-background text-muted-foreground', m.off))}>
+                    <m.Icon className="h-4 w-4" /> {m.label}
                 </button>
             ))}
         </div>
@@ -1172,9 +1175,17 @@ const AssignBoard = ({
 // see (no horse counts, shavings or pre-bedding, which stay admin-only).
 const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
     const { toast } = useToast();
-    const [draft, setDraft] = useState(value);
+    // Older saves only have one showInventory flag that covered both — carry it over.
+    const withDefaults = (v) => ({
+        ...v,
+        showStalls: v.showStalls !== false,
+        showRv: v.showRv !== false,
+        showStallInventory: v.showStallInventory ?? !!v.showInventory,
+        showRvInventory: v.showRvInventory ?? !!v.showInventory,
+    });
+    const [draft, setDraft] = useState(() => withDefaults(value));
     const [saving, setSaving] = useState(false);
-    React.useEffect(() => { if (open) setDraft(value); }, [open, value]);
+    React.useEffect(() => { if (open) setDraft(withDefaults(value)); }, [open, value]);
 
     const toggle = (id) => setDraft(d => {
         const next = d.layers.includes(id) ? d.layers.filter(l => l !== id) : [...d.layers, id];
@@ -1184,7 +1195,9 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
     const save = async () => {
         setSaving(true);
         try {
-            await onSave?.(draft);
+            // showInventory is kept (true if either count is on) so the SQL function
+            // that predates the split still behaves until the new one is deployed.
+            await onSave?.({ ...draft, showInventory: !!(draft.showStallInventory || draft.showRvInventory) });
             toast({
                 title: draft.enabled ? 'Chart published' : 'Chart unpublished',
                 description: draft.enabled
@@ -1215,8 +1228,35 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
                     <Switch checked={draft.enabled} onCheckedChange={(v) => setDraft(d => ({ ...d, enabled: v }))} />
                 </div>
 
+                {/* Stalls and RV / Camping are switched on and off separately, each with its
+                    own inventory count (Robert: "stalls and/or RV and/or both"). */}
                 <div className="space-y-2">
-                    <p className="text-xs font-medium text-muted-foreground">What the public can see</p>
+                    <p className="text-xs font-medium text-muted-foreground">What to show on the public chart</p>
+                    {[
+                        { key: 'showStalls', invKey: 'showStallInventory', label: 'Stalls', invLabel: 'Show stall inventory', Icon: Home },
+                        { key: 'showRv', invKey: 'showRvInventory', label: 'RV / Camping', invLabel: 'Show RV inventory', Icon: Car },
+                    ].map(s => {
+                        const on = draft[s.key] !== false;
+                        return (
+                            <div key={s.key} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <Checkbox checked={on} onCheckedChange={(v) => setDraft(d => ({ ...d, [s.key]: !!v }))} />
+                                    <s.Icon className="h-3.5 w-3.5 text-muted-foreground" /> {s.label}
+                                </label>
+                                <label className={cn('flex items-center gap-2 text-xs cursor-pointer', !on && 'opacity-50 pointer-events-none')}>
+                                    <Checkbox checked={on && !!draft[s.invKey]} onCheckedChange={(v) => setDraft(d => ({ ...d, [s.invKey]: !!v }))} />
+                                    {s.invLabel}
+                                </label>
+                            </div>
+                        );
+                    })}
+                    {draft.showStalls === false && draft.showRv === false && (
+                        <p className="text-[11px] text-amber-600">Both are off — the public chart will be empty.</p>
+                    )}
+                </div>
+
+                <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">What the public can see (stalls and RV)</p>
                     {STALL_LAYERS.filter(l => PUBLIC_LAYER_IDS.includes(l.id)).map(l => (
                         <label key={l.id} className="flex items-center gap-2 text-sm cursor-pointer">
                             <Checkbox checked={draft.layers.includes(l.id)} onCheckedChange={() => toggle(l.id)} />
@@ -1230,18 +1270,11 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
 
                 <label className="flex items-center gap-2 text-sm cursor-pointer">
                     <Checkbox checked={draft.perBarnPages} onCheckedChange={(v) => setDraft(d => ({ ...d, perBarnPages: !!v }))} />
-                    Show each barn as its own section
+                    Show each barn / RV area as its own section
                 </label>
-
-                <div className="space-y-1">
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                        <Checkbox checked={!!draft.showInventory} onCheckedChange={(v) => setDraft(d => ({ ...d, showInventory: !!v }))} />
-                        Show inventory (e.g. "12 of 20 stalls booked")
-                    </label>
-                    <p className="text-[11px] text-muted-foreground pl-6">
-                        Off by default — turn on if you want visitors to see how full the show is.
-                    </p>
-                </div>
+                <p className="text-[11px] text-muted-foreground">
+                    Inventory shows visitors how full the show is (e.g. "12 of 20 stalls booked"). Off by default.
+                </p>
 
                 <DialogFooter>
                     <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>

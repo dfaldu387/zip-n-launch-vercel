@@ -4483,7 +4483,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             // in case anything needs a second look later.
             items: [
                 { value: 'masterlist', label: 'Master List' },
-                { value: 'assign', label: 'Assign Stalls' },
+                { value: 'assign', label: 'Assign Stalls, RV & Camping' },
                 { value: 'charts', label: 'Charts (Trends)' },
             ],
         },
@@ -4538,7 +4538,6 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     {SECTION_CATEGORIES.map(cat => {
                         const Icon = cat.icon;
                         const isActiveCategory = cat.items.some(i => i.value === activeSection);
-                        const activeLabel = cat.items.find(i => i.value === activeSection)?.label;
                         const badge = cat.count > 0 && (
                             <span className={cn(
                                 'inline-flex items-center justify-center rounded-full px-1.5 h-4 min-w-4 text-[10px] font-semibold',
@@ -4578,9 +4577,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         <Icon className="h-3.5 w-3.5" />
                                         {cat.label}
                                         {badge}
-                                        {isActiveCategory && cat.items.length > 1 && (
-                                            <span className="opacity-80 font-normal hidden sm:inline">· {activeLabel}</span>
-                                        )}
+                                        {/* The open tab is highlighted in the dropdown and shown by the
+                                            page itself — repeating its (long) name here made the button huge. */}
                                         <ChevronDown className="h-3.5 w-3.5 opacity-70" />
                                     </Button>
                                 </DropdownMenuTrigger>

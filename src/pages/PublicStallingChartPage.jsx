@@ -173,15 +173,17 @@ const PublicStallingChartPage = () => {
                             <Link to={`/event-detail/${showId}`}><ArrowLeft className="h-4 w-4 mr-1.5" /> Back to event</Link>
                         </Button>
                         <h1 className="text-2xl font-bold">{data.showName} — Stalling Chart</h1>
-                        <p className="text-sm text-muted-foreground">
-                            {activeView === 'rv' ? 'Find your RV / camping spot below.' : 'Find your stall below.'}
-                        </p>
-                        {data.inventory && (
-                            <p className="text-sm font-medium mt-1">
-                                {activeView === 'rv'
-                                    ? `${data.inventory.rvTaken} of ${data.inventory.rvTotal} RV spots booked`
-                                    : `${data.inventory.stallsTaken} of ${data.inventory.stallsTotal} stalls booked`}
+                        {(hasBarns || hasRv) && (
+                            <p className="text-sm text-muted-foreground">
+                                {activeView === 'rv' ? 'Find your RV / camping spot below.' : 'Find your stall below.'}
                             </p>
+                        )}
+                        {/* Each count is only sent when the organizer turned it on. */}
+                        {activeView === 'rv' && data.inventory?.rvTotal != null && (
+                            <p className="text-sm font-medium mt-1">{`${data.inventory.rvTaken} of ${data.inventory.rvTotal} RV spots booked`}</p>
+                        )}
+                        {activeView === 'stalls' && data.inventory?.stallsTotal != null && (
+                            <p className="text-sm font-medium mt-1">{`${data.inventory.stallsTaken} of ${data.inventory.stallsTotal} stalls booked`}</p>
                         )}
                     </div>
                     {showToggle && <ViewToggle view={view} onChange={setView} />}
