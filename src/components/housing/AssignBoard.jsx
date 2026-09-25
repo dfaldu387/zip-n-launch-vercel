@@ -1484,4 +1484,6 @@ const ContainerChart = ({
     );
 };
 
+// Shared with the read-only delivery map so both screens colour a group identically.
+export { PALETTE, groupNameOf };
 export default AssignBoard;

@@ -23,6 +23,7 @@ import {
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
     ClipboardList, Package, Truck, ArrowUpDown, BarChart3,
+    Map as MapIcon, List as ListIcon,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -38,6 +39,7 @@ import { LogoUploader } from '@/components/show-structure/LogoUploader';
 import AddBookingDialog from '@/components/housing/AddBookingDialog';
 import MasterListPanel from '@/components/housing/MasterListPanel';
 import AssignBoard from '@/components/housing/AssignBoard';
+import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // Recharts is ~355 KB and the charts only appear on the Analytics tab, and only
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
@@ -554,10 +556,10 @@ const BookingLinkCard = ({ show }) => {
                         <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open
                     </Button>
                 </div>
-                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground border-t pt-3">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground border-t pt-3">
+                    <div className="flex items-center gap-2 min-w-0">
                         <span>Show details page:</span>
-                        <a href={showPageUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono">
+                        <a href={showPageUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono break-all">
                             {showPageUrl}
                         </a>
                     </div>
@@ -2280,6 +2282,67 @@ const ItemStageProgressLine = ({ stageTimestamps, currentIndex }) => (
     </div>
 );
 
+// Move ONE line item to a stage: stamps the time, saves, and — on reaching
+// Delivered — emails the customer. Shared by the item's status dropdown and the
+// map's Delivered button, so both do exactly the same thing.
+const applyItemStage = async ({ order, item, targetKey, onFulfill, showName, toast, setBusy = () => {} }) => {
+    const { status, stageTimestamps } = getItemStatus(order, item.refId);
+    const currentIndex = SUPPLY_STAGES.findIndex(s => s.key === status);
+    const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
+    if (targetIndex === currentIndex || targetIndex === -1) return;
+    const target = SUPPLY_STAGES[targetIndex];
+    const now = new Date().toISOString();
+    // Robert: timestamp every stage so a customer question can be answered
+    // with "ordered at X, received at Y, out for delivery at Z, delivered
+    // at W." Moving a stage backward (a correction) only changes which
+    // stage is current — it never erases a timestamp already recorded.
+    const stamps = { ...stageTimestamps };
+    if (targetIndex > currentIndex) stamps[target.key] = now;
+
+    const reachedDelivered = target.key === 'delivered' && targetIndex > currentIndex;
+    if (reachedDelivered) setBusy(true);
+
+    await onFulfill(order.id, {
+        itemStatuses: {
+            ...(order.itemStatuses || {}),
+            [item.refId]: { status: target.key, stageTimestamps: stamps },
+        },
+        _activityMessage: `${item.name} marked ${target.label}`,
+    });
+
+    if (!reachedDelivered) return;
+    if (!order.email) {
+        setBusy(false);
+        toast({ title: 'Marked delivered', description: `No email on this order — no delivery notice sent for ${item.name}.` });
+        return;
+    }
+    try {
+        const { error } = await supabase.functions.invoke('send-supply-order-email', {
+            body: {
+                kind: 'delivered',
+                to: order.email,
+                customerName: order.exhibitorName || 'there',
+                showName: showName || 'the show',
+                orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
+                items: [{ name: item.name, amount: item.amount }],
+                total: item.amount,
+                stableWith: order.stableWith || order.trainerName || '',
+                stallNumber: order.stallNumber || '',
+            },
+        });
+        if (error) throw error;
+        toast({ title: 'Delivered', description: `${item.name} delivery email sent to ${order.email}.` });
+    } catch (err) {
+        toast({
+            title: 'Marked delivered, but email failed',
+            description: err.message || 'The customer was not notified.',
+            variant: 'destructive',
+        });
+    } finally {
+        setBusy(false);
+    }
+};
+
 // One line item's own status control — Robert: "we might go out and deliver
 // the Shavings, but might not get to the Hay quite yet," so each item (not
 // just the order as a whole) gets its own Ordered/Received/Out for
@@ -2291,65 +2354,11 @@ const ItemStatusRow = ({ order, item, onFulfill, showName }) => {
     const currentIndex = SUPPLY_STAGES.findIndex(s => s.key === status);
     const stage = SUPPLY_STAGES[currentIndex === -1 ? 0 : currentIndex];
 
-    const setStage = async (val) => {
-        const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === val);
-        if (targetIndex === currentIndex || targetIndex === -1) return;
-        const target = SUPPLY_STAGES[targetIndex];
-        const now = new Date().toISOString();
-        // Robert: timestamp every stage so a customer question can be answered
-        // with "ordered at X, received at Y, out for delivery at Z, delivered
-        // at W." Moving a stage backward (a correction) only changes which
-        // stage is current — it never erases a timestamp already recorded.
-        const stamps = { ...stageTimestamps };
-        if (targetIndex > currentIndex) stamps[target.key] = now;
-
-        const reachedDelivered = target.key === 'delivered' && targetIndex > currentIndex;
-        if (reachedDelivered) setIsNotifying(true);
-
-        await onFulfill(order.id, {
-            itemStatuses: {
-                ...(order.itemStatuses || {}),
-                [item.refId]: { status: target.key, stageTimestamps: stamps },
-            },
-            _activityMessage: `${item.name} marked ${target.label}`,
-        });
-
-        if (!reachedDelivered) return;
-        if (!order.email) {
-            setIsNotifying(false);
-            toast({ title: 'Marked delivered', description: `No email on this order — no delivery notice sent for ${item.name}.` });
-            return;
-        }
-        try {
-            const { error } = await supabase.functions.invoke('send-supply-order-email', {
-                body: {
-                    kind: 'delivered',
-                    to: order.email,
-                    customerName: order.exhibitorName || 'there',
-                    showName: showName || 'the show',
-                    orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
-                    items: [{ name: item.name, amount: item.amount }],
-                    total: item.amount,
-                    stableWith: order.stableWith || order.trainerName || '',
-                    stallNumber: order.stallNumber || '',
-                },
-            });
-            if (error) throw error;
-            toast({ title: 'Delivered', description: `${item.name} delivery email sent to ${order.email}.` });
-        } catch (err) {
-            toast({
-                title: 'Marked delivered, but email failed',
-                description: err.message || 'The customer was not notified.',
-                variant: 'destructive',
-            });
-        } finally {
-            setIsNotifying(false);
-        }
-    };
+    const setStage = (val) => applyItemStage({ order, item, targetKey: val, onFulfill, showName, toast, setBusy: setIsNotifying });
 
     return (
         <div className="py-1">
-            <div className="flex items-center justify-between gap-2 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                 <div className="flex items-center gap-2 min-w-0">
                     <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
                     <span className="truncate">{item.name}</span>
@@ -3008,6 +3017,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const { toast } = useToast();
     const { profile, refreshProfile } = useAuth();
     const [activeSection, setActiveSection] = useState('inventory');
+    const [supplyView, setSupplyView] = useState('list'); // Hay & Shavings tab: 'list' | 'map'
 
     // Stall Fee Calculator "What-If" mode — a scratch estimator, never saved. Lets
     // the organizer type a hypothetical number sold per barn/RV area (e.g. "if I
@@ -5175,6 +5185,44 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
                 {/* ── Hay & Shavings Orders Tab (pre-show delivery + live at-show reorders) ── */}
                 <TabsContent value="supplyorders" className="space-y-6 mt-4">
+                    {/* List | Map View — the map is for walking the barn and delivering stall by stall. */}
+                    <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
+                        <Button
+                            size="sm"
+                            variant={supplyView === 'list' ? 'default' : 'ghost'}
+                            className="h-8 text-xs"
+                            onClick={() => setSupplyView('list')}
+                        >
+                            <ListIcon className="h-3.5 w-3.5 mr-1.5" /> List
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant={supplyView === 'map' ? 'default' : 'ghost'}
+                            className="h-8 text-xs"
+                            onClick={() => setSupplyView('map')}
+                        >
+                            <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Map View
+                        </Button>
+                    </div>
+                    {supplyView === 'map' ? (
+                        <SupplyDeliveryMap
+                            bookings={bookings}
+                            barns={barns}
+                            supplies={supplies}
+                            orders={preShowDeliveryOrders}
+                            onMarkDelivered={(order, item) => applyItemStage({
+                                order, item, targetKey: 'delivered',
+                                onFulfill: updateBookingFieldsLocal, showName: show.project_name, toast,
+                            })}
+                            renderOrder={(bookingId) => {
+                                const order = preShowDeliveryOrders.find(o => o.id === bookingId);
+                                return order ? (
+                                    <SupplyOrderCard order={order} onFulfill={updateBookingFieldsLocal} showName={show.project_name} />
+                                ) : null;
+                            }}
+                        />
+                    ) : (
+                    <>
                     <div className="space-y-2">
                         <h3 className="text-sm font-semibold flex items-center gap-1.5">
                             <Package className="h-4 w-4" /> Pre-Show Delivery
@@ -5201,6 +5249,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             showName={show.project_name}
                         />
                     </div>
+                    </>
+                    )}
                 </TabsContent>
 
                 {/* ── Master List Tab (Phase 1: spreadsheet-style roster) ── */}

@@ -52,7 +52,7 @@ const groupNameOf = (b) => {
 
 // Spread a total evenly across n stalls; the remainder lands on the earliest stalls.
 // 7 bags over 3 stalls → [3, 2, 2]. Deterministic, and it always sums back to the total.
-const spread = (total, n) => {
+export const spread = (total, n) => {
     if (n <= 0 || total <= 0) return [];
     const base = Math.floor(total / n);
     const rem = total % n;
@@ -61,7 +61,7 @@ const spread = (total, n) => {
 
 // Every stall a booking holds, in chart order (barn order, then box order) — so the
 // "first stalls" that receive the remainder are the ones at the top-left of the chart.
-const stallsOfBooking = (barns, bookingId) => {
+export const stallsOfBooking = (barns, bookingId) => {
     const out = [];
     for (const barn of barns || []) {
         for (const s of barn.stalls || []) {
@@ -241,11 +241,11 @@ function singleLayerLine(layerId, { unit, index }) {
         }
         case 'prebedHay': {
             const bales = s?.preBedHay || 0;
-            return bales ? { text: `✓ ${bales} bale${bales > 1 ? 's' : ''}`, tone: 'warm' } : null;
+            return bales ? { text: `${bales} bale${bales > 1 ? 's' : ''}`, tone: 'warm' } : null;
         }
         case 'prebedShavings': {
             const bags = s?.preBedShavings || 0;
-            return bags ? { text: `✓ ${bags} bag${bags > 1 ? 's' : ''}`, tone: 'warm' } : null;
+            return bags ? { text: `${bags} bag${bags > 1 ? 's' : ''}`, tone: 'warm' } : null;
         }
         default:
             return null;

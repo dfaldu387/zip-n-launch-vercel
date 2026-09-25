@@ -109,7 +109,7 @@ describe('layerCell', () => {
     it('splits Pre-Bed Hay from Pre-Bed Shavings instead of one combined "pre-bedded" number', () => {
         const hayCell = layerCell(['prebedHay'], { unit: unit('s1'), index });
         expect(hayCell.tone).toBe('warm');
-        expect(hayCell.lines[0].text).toBe('✓ 1 bale');
+        expect(hayCell.lines[0].text).toBe('1 bale');
 
         // Jane's booking has no pre-bed SHAVINGS line (only pre-bed hay), so it
         // must read as muted/blank here, not accidentally pick up the hay count.
