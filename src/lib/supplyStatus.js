@@ -85,3 +85,64 @@ export const getSupplyLineItems = (booking) =>
             const base = String(it.name || '').replace(/\s*×\s*\d+\s*$/, '').trim();
             return { name: base || it.name || 'Item', qty };
         });
+
+// A supply's unit ("bag", "bale"...), looked up by refId (id or name, since
+// older orders only ever stored the name) — shared by the Load Sheet and the
+// per-item status row, so both show the same "N bags" wording.
+export const unitLookup = (supplies) => {
+    const unitOf = new Map();
+    for (const s of supplies || []) {
+        if (s.id) unitOf.set(s.id, s.unit || 'unit');
+        if (s.name) unitOf.set(s.name, s.unit || 'unit');
+    }
+    return unitOf;
+};
+
+// Robert: "if we have to load the trailer to go deliver these... it tells us
+// what we need to load and how many bags of each supply." Given a set of
+// orders (checked by the facility for one delivery run), sums how much of
+// each supply is still owed — skipping items already delivered — both as one
+// flat total and grouped by barn/stall so a crew knows what goes where.
+// order.barnName/stallNumber are set on pre-show orders (real stall
+// assignment); at-show reorders have no barn, so they fall under "Unassigned".
+export const buildLoadSheet = (orders, supplies) => {
+    const unitOf = unitLookup(supplies);
+
+    const bySupply = new Map(); // name -> { qty, unit }
+    const byBarn = new Map();   // barnLabel -> { totals: Map(name -> {qty,unit}), stalls: Map(stallLabel -> Map(name -> {qty,unit})) }
+    let orderCount = 0;
+
+    for (const order of orders || []) {
+        const items = (order.items || []).filter(it => it?.type === 'supply');
+        let orderHasQty = false;
+        for (const item of items) {
+            const { status } = getItemStatus(order, item.refId);
+            if (status === 'delivered') continue;
+            const qty = Number(item.qty) || 0;
+            if (!qty) continue;
+            orderHasQty = true;
+
+            const name = String(item.name || '').replace(/\s*×\s*\d+\s*$/, '').trim() || 'Item';
+            const unit = unitOf.get(item.refId) || unitOf.get(name) || 'unit';
+
+            const prevSupply = bySupply.get(name) || { qty: 0, unit };
+            bySupply.set(name, { qty: prevSupply.qty + qty, unit });
+
+            const barnLabel = order.barnName || 'Unassigned';
+            const stallLabel = order.stallNumber ? `Stall ${order.stallNumber}` : (order.exhibitorName || 'Unknown');
+
+            if (!byBarn.has(barnLabel)) byBarn.set(barnLabel, { totals: new Map(), stalls: new Map() });
+            const barnEntry = byBarn.get(barnLabel);
+            const prevTotal = barnEntry.totals.get(name) || { qty: 0, unit };
+            barnEntry.totals.set(name, { qty: prevTotal.qty + qty, unit });
+
+            if (!barnEntry.stalls.has(stallLabel)) barnEntry.stalls.set(stallLabel, new Map());
+            const stallMap = barnEntry.stalls.get(stallLabel);
+            const prevStall = stallMap.get(name) || { qty: 0, unit };
+            stallMap.set(name, { qty: prevStall.qty + qty, unit });
+        }
+        if (orderHasQty) orderCount += 1;
+    }
+
+    return { bySupply, byBarn, orderCount };
+};

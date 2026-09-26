@@ -17,12 +17,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useNavigate, useParams } from 'react-router-dom';
 import {
     Loader2, Home, Hash, Calendar, FolderOpen,
-    MapPin, Plus, Minus, Trash2, Save, Check, X, Search, Users, DollarSign,
+    Plus, Minus, Trash2, Save, Check, X, Search, Users, DollarSign,
     Building2, Warehouse, Car, ShoppingCart, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
-    ClipboardList, Package, Truck, ArrowUpDown, BarChart3,
+    ClipboardList, Package, Truck, ArrowUpDown, BarChart3, Printer, MoreHorizontal,
     Map as MapIcon, List as ListIcon,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -50,7 +50,8 @@ import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
-import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus } from '@/lib/supplyStatus';
+import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup } from '@/lib/supplyStatus';
+import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import {
@@ -1605,6 +1606,10 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
     if (variant === 'inventory') {
         const stock = item.stockQty || 0;
         const remaining = stock - sold;
+        // Below Min Level (when set) or the old 10%-of-stock fallback — same rule
+        // the Analytics view's Low Inventory table uses, so this badge and that
+        // table never disagree about what counts as low.
+        const isLow = item.minLevel != null ? remaining <= item.minLevel : remaining <= Math.max(1, Math.ceil(stock * 0.1));
         return (
             <div className={cn('p-3 border rounded-lg bg-background border-l-4 border-l-amber-500', locked && 'opacity-70')}>
                 <div className="flex flex-wrap items-center gap-3">
@@ -1635,6 +1640,18 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                                 />
                             </div>
                             <AddStockControl onAdd={(qty) => onUpdate('stockQty', (item.stockQty || 0) + qty)} disabled={locked} />
+                            <div className="space-y-1">
+                                <Label className="text-[10px] text-muted-foreground">Min level</Label>
+                                <Input
+                                    type="number"
+                                    min={0}
+                                    value={item.minLevel ?? ''}
+                                    onChange={(e) => onUpdate('minLevel', e.target.value === '' ? null : parseInt(e.target.value) || 0)}
+                                    className="h-8 text-xs w-20"
+                                    placeholder="—"
+                                    title="Low Inventory alert threshold (Analytics view) — leave blank for none."
+                                />
+                            </div>
                             <div className="space-y-1 text-center">
                                 <Label className="text-[10px] text-muted-foreground block">Unit</Label>
                                 <span className="text-xs text-muted-foreground inline-block h-8 leading-8">{item.unit || 'each'}</span>
@@ -1649,7 +1666,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                                 'text-xs',
                                 stock === 0 ? 'bg-slate-200 text-slate-700'
                                     : remaining <= 0 ? 'bg-red-500 text-white'
-                                    : remaining <= Math.max(1, Math.ceil(stock * 0.1)) ? 'bg-amber-500 text-white'
+                                    : isLow ? 'bg-amber-500 text-white'
                                     : 'bg-emerald-600 text-white'
                             )}
                         >
@@ -2263,7 +2280,7 @@ const fmtOrderedAt = (iso) => {
 // correcting the status backward (e.g. Delivered → Received) must not hide a
 // timestamp that already happened, only change which stage is current.
 const ItemStageProgressLine = ({ stageTimestamps, currentIndex }) => (
-    <div className="flex items-start gap-1 pl-4 pt-0.5">
+    <div className="flex items-start gap-1 shrink-0">
         {SUPPLY_STAGES.map((s, i) => {
             const reached = i <= currentIndex;
             const ts = stageTimestamps?.[s.key];
@@ -2347,42 +2364,125 @@ const applyItemStage = async ({ order, item, targetKey, onFulfill, showName, toa
 // the Shavings, but might not get to the Hay quite yet," so each item (not
 // just the order as a whole) gets its own Ordered/Received/Out for
 // Delivery/Delivered dropdown and sends its own delivery email.
-const ItemStatusRow = ({ order, item, onFulfill, showName }) => {
+const ItemStatusRow = ({ order, item, onFulfill, showName, unitOf }) => {
     const { toast } = useToast();
     const [isNotifying, setIsNotifying] = useState(false);
     const { status, stageTimestamps } = getItemStatus(order, item.refId);
     const currentIndex = SUPPLY_STAGES.findIndex(s => s.key === status);
     const stage = SUPPLY_STAGES[currentIndex === -1 ? 0 : currentIndex];
+    // At-show reorder items still carry their raw "Hay (Grass) × 1" name (built
+    // in QuickSupplyOrderPage); pre-show items already had this stripped in
+    // beddingItemsOf. Strip it here too so both read as a clean name plus one
+    // qty/unit suffix, not a duplicated "× 1 ... 1 bale".
+    const displayName = String(item.name || '').replace(/\s*×\s*\d+\s*$/, '').trim() || item.name;
+    const unit = unitOf?.get(item.refId) || unitOf?.get(displayName) || '';
+    const qty = Number(item.qty) || 0;
 
     const setStage = (val) => applyItemStage({ order, item, targetKey: val, onFulfill, showName, toast, setBusy: setIsNotifying });
 
     return (
-        <div className="py-1">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                <div className="flex items-center gap-2 min-w-0">
-                    <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
-                    <span className="truncate">{item.name}</span>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                    <span className="tabular-nums text-muted-foreground">{fmtMoney(item.amount)}</span>
-                    <Select value={stage.key} disabled={isNotifying} onValueChange={setStage}>
-                        <SelectTrigger className={cn('h-7 w-[10rem] text-xs text-white border-none focus:ring-0', stage.color)}>
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {SUPPLY_STAGES.map(s => (
-                                <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
+        <div className="py-1.5 flex flex-wrap items-center gap-3 text-sm">
+            <div className="flex items-center gap-2 min-w-0 flex-1 basis-40">
+                <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
+                <span className="truncate">{displayName}</span>
+                {qty > 0 && unit && (
+                    <span className="text-xs text-muted-foreground shrink-0">{qty} {unit}{qty === 1 ? '' : 's'}</span>
+                )}
             </div>
+            <span className="tabular-nums text-muted-foreground shrink-0">{fmtMoney(item.amount)}</span>
+            <Select value={stage.key} disabled={isNotifying} onValueChange={setStage}>
+                <SelectTrigger className={cn('h-7 w-[9rem] text-xs text-white border-none focus:ring-0 shrink-0', stage.color)}>
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    {SUPPLY_STAGES.map(s => (
+                        <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
             <ItemStageProgressLine stageTimestamps={stageTimestamps} currentIndex={currentIndex === -1 ? 0 : currentIndex} />
         </div>
     );
 };
 
-const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onToggleCollapse }) => {
+// Move every item on ONE order to the same stage at once — Robert: "if
+// you're delivering all of them at once, you can mark as Received, Out
+// for Delivery, or Delivered, and all three items would have been
+// delivered, and I get an email." Sends one combined email, same as before.
+// Shared by the per-card "All items" dropdown and the bulk Load Sheet
+// "Mark as Out for Delivery" action so both behave identically.
+const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast, setBusy = () => {} }) => {
+    const items = order.items || [];
+    const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
+    const target = SUPPLY_STAGES[targetIndex];
+    const now = new Date().toISOString();
+    const nextItemStatuses = { ...(order.itemStatuses || {}) };
+    let anyAdvancedToDelivered = false;
+    let anyChanged = false;
+    for (const it of items) {
+        if (!it.refId) continue;
+        const { status, stageTimestamps } = getItemStatus(order, it.refId);
+        const curIdx = SUPPLY_STAGES.findIndex(s => s.key === status);
+        if (curIdx === targetIndex) continue;
+        anyChanged = true;
+        const stamps = { ...stageTimestamps };
+        if (targetIndex > curIdx) stamps[target.key] = now;
+        nextItemStatuses[it.refId] = { status: target.key, stageTimestamps: stamps };
+        if (target.key === 'delivered' && targetIndex > curIdx) anyAdvancedToDelivered = true;
+    }
+    if (!anyChanged) return;
+
+    if (anyAdvancedToDelivered) setBusy(true);
+
+    await onFulfill(order.id, {
+        itemStatuses: nextItemStatuses,
+        // Kept in sync for anything still reading the old order-level fields.
+        fulfillmentStatus: target.key,
+        stageTimestamps: { ...(order.stageTimestamps || {}), [target.key]: now },
+        fulfilledAt: target.key === 'delivered' ? now : null,
+        _activityMessage: `All items marked ${target.label}`,
+    });
+
+    if (!anyAdvancedToDelivered) return;
+    if (!order.email) {
+        setBusy(false);
+        toast({ title: 'Marked delivered', description: 'No email on this order, so no delivery notice was sent.' });
+        return;
+    }
+    const total = order.totalAmount ?? order.amount ?? 0;
+    try {
+        const { error } = await supabase.functions.invoke('send-supply-order-email', {
+            body: {
+                kind: 'delivered',
+                to: order.email,
+                customerName: order.exhibitorName || 'there',
+                showName: showName || 'the show',
+                orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
+                items: items.map(it => ({ name: it.name, amount: it.amount })),
+                total,
+                stableWith: order.stableWith || order.trainerName || '',
+                stallNumber: order.stallNumber || '',
+            },
+        });
+        if (error) throw error;
+        toast({ title: 'Delivered', description: `Delivery email sent to ${order.email}.` });
+    } catch (err) {
+        toast({
+            title: 'Marked delivered, but email failed',
+            description: err.message || 'The customer was not notified.',
+            variant: 'destructive',
+        });
+    } finally {
+        setBusy(false);
+    }
+};
+
+const SOURCE_BADGE = {
+    preshow: { label: 'Pre-Show', className: 'bg-amber-600' },
+    atshow: { label: 'At-Show', className: 'bg-cyan-600' },
+};
+
+const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onToggleCollapse, selected, onToggleSelect, unitOf }) => {
     const { toast } = useToast();
     const current = stageIndexOf(order);
     const delivered = isDelivered(order);
@@ -2390,76 +2490,21 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
     const items = order.items || [];
     const [isNotifying, setIsNotifying] = useState(false);
 
-    // Move every item on the order to the same stage at once — Robert: "if
-    // you're delivering all of them at once, you can mark as Received, Out
-    // for Delivery, or Delivered, and all three items would have been
-    // delivered, and I get an email." Sends one combined email, same as before.
-    const setAllStage = async (targetKey) => {
-        const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
-        const target = SUPPLY_STAGES[targetIndex];
-        const now = new Date().toISOString();
-        const nextItemStatuses = { ...(order.itemStatuses || {}) };
-        let anyAdvancedToDelivered = false;
-        for (const it of items) {
-            if (!it.refId) continue;
-            const { status, stageTimestamps } = getItemStatus(order, it.refId);
-            const curIdx = SUPPLY_STAGES.findIndex(s => s.key === status);
-            if (curIdx === targetIndex) continue;
-            const stamps = { ...stageTimestamps };
-            if (targetIndex > curIdx) stamps[target.key] = now;
-            nextItemStatuses[it.refId] = { status: target.key, stageTimestamps: stamps };
-            if (target.key === 'delivered' && targetIndex > curIdx) anyAdvancedToDelivered = true;
-        }
-
-        if (anyAdvancedToDelivered) setIsNotifying(true);
-
-        await onFulfill(order.id, {
-            itemStatuses: nextItemStatuses,
-            // Kept in sync for anything still reading the old order-level fields.
-            fulfillmentStatus: target.key,
-            stageTimestamps: { ...(order.stageTimestamps || {}), [target.key]: now },
-            fulfilledAt: target.key === 'delivered' ? now : null,
-            _activityMessage: `All items marked ${target.label}`,
-        });
-
-        if (!anyAdvancedToDelivered) return;
-        if (!order.email) {
-            setIsNotifying(false);
-            toast({ title: 'Marked delivered', description: 'No email on this order, so no delivery notice was sent.' });
-            return;
-        }
-        try {
-            const { error } = await supabase.functions.invoke('send-supply-order-email', {
-                body: {
-                    kind: 'delivered',
-                    to: order.email,
-                    customerName: order.exhibitorName || 'there',
-                    showName: showName || 'the show',
-                    orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
-                    items: items.map(it => ({ name: it.name, amount: it.amount })),
-                    total,
-                    stableWith: order.stableWith || order.trainerName || '',
-                    stallNumber: order.stallNumber || '',
-                },
-            });
-            if (error) throw error;
-            toast({ title: 'Delivered', description: `Delivery email sent to ${order.email}.` });
-        } catch (err) {
-            toast({
-                title: 'Marked delivered, but email failed',
-                description: err.message || 'The customer was not notified.',
-                variant: 'destructive',
-            });
-        } finally {
-            setIsNotifying(false);
-        }
-    };
+    const setAllStage = (targetKey) => applyAllItemsStage({ order, targetKey, onFulfill, showName, toast, setBusy: setIsNotifying });
 
     return (
         <Card className={cn('border', delivered && 'opacity-70 border-emerald-300 dark:border-emerald-800')}>
             <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                     <div className="min-w-0 flex items-start gap-1.5">
+                        {onToggleSelect && (
+                            <Checkbox
+                                checked={!!selected}
+                                onCheckedChange={() => onToggleSelect(order.id)}
+                                className="mt-1.5 shrink-0"
+                                aria-label="Select for load sheet"
+                            />
+                        )}
                         {onToggleCollapse && (
                             <Button
                                 variant="ghost"
@@ -2477,45 +2522,73 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
                                 <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
                                     {SUPPLY_STAGES[current].label}
                                 </Badge>
+                                {SOURCE_BADGE[order.sourceType] && (
+                                    <Badge className={cn(SOURCE_BADGE[order.sourceType].className, 'text-white text-[10px]')}>
+                                        {SOURCE_BADGE[order.sourceType].label}
+                                    </Badge>
+                                )}
                                 <span className="font-mono text-[10px] text-muted-foreground/70">#{getBookingRef(order)}</span>
                             </div>
                             <p className="font-semibold">{order.exhibitorName || 'Unknown'}</p>
                             {!collapsed && (
                                 <>
-                                    <p className="text-sm text-muted-foreground">
-                                        Stable with/under: <span className="text-foreground">{order.stableWith || order.trainerName || '—'}</span>
-                                    </p>
-                                    {order.stallNumber && (
+                                    {(order.stableWith || order.trainerName) && (
                                         <p className="text-sm text-muted-foreground">
-                                            Stall #: <span className="text-foreground font-medium">{order.stallNumber}</span>
+                                            Stable with/under: <span className="text-foreground">{order.stableWith || order.trainerName}</span>
                                         </p>
                                     )}
-                                    {order.phone && (
-                                        <p className="text-sm text-muted-foreground flex items-center gap-1">
-                                            <Phone className="h-3.5 w-3.5" /> {order.phone}
-                                        </p>
-                                    )}
-                                    {order.email && (
-                                        <p className="text-sm text-muted-foreground flex items-center gap-1 break-all">
-                                            <Mail className="h-3.5 w-3.5 shrink-0" /> {order.email}
+                                    {(order.phone || order.email) && (
+                                        <p className="text-sm text-muted-foreground flex items-center flex-wrap gap-x-4 gap-y-0.5">
+                                            {order.phone && (
+                                                <span className="flex items-center gap-1">
+                                                    <Phone className="h-3.5 w-3.5 shrink-0" /> {order.phone}
+                                                </span>
+                                            )}
+                                            {order.email && (
+                                                <span className="flex items-center gap-1 break-all">
+                                                    <Mail className="h-3.5 w-3.5 shrink-0" /> {order.email}
+                                                </span>
+                                            )}
                                         </p>
                                     )}
                                 </>
                             )}
                         </div>
                     </div>
+                    {(order.barnName || order.stallNumber) && (
+                        <div className="w-28 sm:w-32 shrink-0 text-sm">
+                            {order.barnName && <p className="font-medium truncate">{order.barnName}</p>}
+                            {order.stallNumber && <p className="text-muted-foreground text-xs">Stall: {order.stallNumber}</p>}
+                        </div>
+                    )}
                     <div className="text-right">
                         <p className="text-lg font-bold tabular-nums">{fmtMoney(total)}</p>
                         <div className="flex items-center justify-end gap-2 mt-2">
+                            {onToggleSelect && (
+                                <Button
+                                    size="sm"
+                                    variant={selected ? 'default' : 'outline'}
+                                    onClick={() => onToggleSelect(order.id)}
+                                    title="Add to the Load Sheet"
+                                >
+                                    <Truck className="h-3.5 w-3.5 mr-1" /> {selected ? 'Added' : 'Add to Load'}
+                                </Button>
+                            )}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                    <Button size="sm" variant="outline" disabled={isNotifying}>
-                                        {isNotifying ? (
-                                            <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Notifying…</>
-                                        ) : (
-                                            <>All items <ChevronDown className="h-3.5 w-3.5 ml-1" /></>
-                                        )}
-                                    </Button>
+                                    {onToggleSelect ? (
+                                        <Button size="icon" variant="outline" className="h-9 w-9" disabled={isNotifying} title="More actions">
+                                            {isNotifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                                        </Button>
+                                    ) : (
+                                        <Button size="sm" variant="outline" disabled={isNotifying}>
+                                            {isNotifying ? (
+                                                <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Notifying…</>
+                                            ) : (
+                                                <>All items <ChevronDown className="h-3.5 w-3.5 ml-1" /></>
+                                            )}
+                                        </Button>
+                                    )}
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
                                     <DropdownMenuLabel className="text-[10px] uppercase text-muted-foreground">Mark every item</DropdownMenuLabel>
@@ -2537,7 +2610,7 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
                 ) : (
                     <div className="mt-3 border-t pt-2">
                         {items.map((it, i) => (
-                            <ItemStatusRow key={it.refId || i} order={order} item={it} onFulfill={onFulfill} showName={showName} />
+                            <ItemStatusRow key={it.refId || i} order={order} item={it} onFulfill={onFulfill} showName={showName} unitOf={unitOf} />
                         ))}
                     </div>
                 )}
@@ -2567,164 +2640,125 @@ const sortOrdersBy = (list, sortBy) => {
     return arr;
 };
 
-// Search + status filter + sort + which cards are collapsed — shared by both
-// the Pre-Show Delivery and At-Show Reorders lists so a facility with
-// thousands of orders can navigate either one the same way.
-const useOrderListControls = (orders) => {
+// Search + status/barn/item filters + which cards are collapsed — one merged
+// list (Pre-Show + At-Show together, tagged with a source badge) instead of
+// two separate sections, matching Robert's mockup of a single Supply Orders
+// table with "All Barns"/"All Items" filters and clickable status tabs.
+const useUnifiedOrderListControls = (orders) => {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
-    const [sortBy, setSortBy] = useState('newest');
+    const [barnFilter, setBarnFilter] = useState('all');
+    const [itemFilter, setItemFilter] = useState('all');
     const [collapsedIds, setCollapsedIds] = useState(() => new Set());
+
+    const barnOptions = useMemo(() => {
+        const set = new Set();
+        for (const o of orders) {
+            String(o.barnName || '').split(',').map(s => s.trim()).filter(Boolean).forEach(b => set.add(b));
+        }
+        return [...set].sort();
+    }, [orders]);
+
+    const itemOptions = useMemo(() => {
+        const set = new Set();
+        for (const o of orders) {
+            for (const it of (o.items || [])) if (it?.name) set.add(it.name);
+        }
+        return [...set].sort();
+    }, [orders]);
 
     const filtered = useMemo(() => {
         let list = orders.filter(o => orderMatchesSearch(o, search));
         if (statusFilter !== 'all') list = list.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === statusFilter);
-        return sortOrdersBy(list, sortBy);
-    }, [orders, search, statusFilter, sortBy]);
+        if (barnFilter !== 'all') list = list.filter(o => String(o.barnName || '').split(',').map(s => s.trim()).includes(barnFilter));
+        if (itemFilter !== 'all') list = list.filter(o => (o.items || []).some(it => it?.name === itemFilter));
+        return sortOrdersBy(list, 'newest');
+    }, [orders, search, statusFilter, barnFilter, itemFilter]);
 
     const toggleCollapse = (id) => setCollapsedIds(prev => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id); else next.add(id);
         return next;
     });
-    const expandAll = () => setCollapsedIds(new Set());
-    const collapseAll = () => setCollapsedIds(new Set(orders.map(o => o.id)));
 
-    return { search, setSearch, statusFilter, setStatusFilter, sortBy, setSortBy, filtered, collapsedIds, toggleCollapse, expandAll, collapseAll };
+    return { search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, itemFilter, setItemFilter, barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse };
 };
 
-const OrdersToolbar = ({ search, onSearch, statusFilter, onStatusFilter, sortBy, onSortBy, onExpandAll, onCollapseAll }) => (
+const STATUS_TAB_LABELS = { new: 'Pending', received: 'Ready to Load', out_for_delivery: 'Out for Delivery', delivered: 'Delivered' };
+
+// Clickable status pills — Robert's mockup: "All Orders (28) / Pending (5) /
+// Ready to Load (5) / Out for Delivery (6) / Delivered (12)". Counts stay
+// based on the FULL list, not the filtered view, so the numbers don't shift
+// as you filter by them.
+const StatusTabs = ({ orders, statusFilter, onStatusFilter }) => {
+    const countAt = (key) => (key === 'all' ? orders.length : orders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length);
+    const tabs = [{ key: 'all', label: 'All Orders' }, ...SUPPLY_STAGES.map(s => ({ key: s.key, label: STATUS_TAB_LABELS[s.key] }))];
+    return (
+        <div className="flex flex-wrap gap-1.5">
+            {tabs.map(t => (
+                <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => onStatusFilter(t.key)}
+                    className={cn(
+                        'text-xs font-medium px-3 py-1.5 rounded-full border transition-colors',
+                        statusFilter === t.key
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'bg-background text-muted-foreground border-input hover:bg-muted'
+                    )}
+                >
+                    {t.label} ({countAt(t.key)})
+                </button>
+            ))}
+        </div>
+    );
+};
+
+const SupplyFilterBar = ({ search, onSearch, barnFilter, onBarnFilter, barnOptions, itemFilter, onItemFilter, itemOptions }) => (
     <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[180px] max-w-xs">
-            <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
                 value={search}
                 onChange={(e) => onSearch(e.target.value)}
-                placeholder="Search name or order #..."
-                className="pl-8 h-8 text-xs"
+                placeholder="Search by name, stall, order #..."
+                className="pl-8 h-9 text-sm"
             />
         </div>
-        <Select value={statusFilter} onValueChange={onStatusFilter}>
-            <SelectTrigger className="h-8 w-[10.5rem] text-xs"><SelectValue /></SelectTrigger>
+        <Select value={barnFilter} onValueChange={onBarnFilter}>
+            <SelectTrigger className="h-9 w-[9.5rem] text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
-                <SelectItem value="all" className="text-xs">All statuses</SelectItem>
-                {SUPPLY_STAGES.map(s => (
-                    <SelectItem key={s.key} value={s.key} className="text-xs">{s.label}</SelectItem>
-                ))}
+                <SelectItem value="all">All Barns</SelectItem>
+                {barnOptions.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
             </SelectContent>
         </Select>
-        <Select value={sortBy} onValueChange={onSortBy}>
-            <SelectTrigger className="h-8 w-[9.5rem] text-xs"><SelectValue /></SelectTrigger>
+        <Select value={itemFilter} onValueChange={onItemFilter}>
+            <SelectTrigger className="h-9 w-[9.5rem] text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
-                <SelectItem value="newest" className="text-xs">Newest first</SelectItem>
-                <SelectItem value="oldest" className="text-xs">Oldest first</SelectItem>
-                <SelectItem value="status" className="text-xs">By status</SelectItem>
+                <SelectItem value="all">All Items</SelectItem>
+                {itemOptions.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
             </SelectContent>
         </Select>
-        <div className="flex items-center gap-1 sm:ml-auto">
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onExpandAll}>Expand all</Button>
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onCollapseAll}>Collapse all</Button>
-        </div>
     </div>
 );
 
-const SupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName }) => {
-    const { search, setSearch, statusFilter, setStatusFilter, sortBy, setSortBy, filtered, collapsedIds, toggleCollapse, expandAll, collapseAll } = useOrderListControls(orders);
-    const pending = filtered.filter(o => !isDelivered(o));
-    const done = filtered.filter(o => isDelivered(o));
-    // Counts stay based on ALL orders (not the filtered view) so the header
-    // remains a true summary of the whole list, not just what's on screen.
-    const countAt = (key) => orders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length;
-    const deliveredTotal = orders.filter(isDelivered).length;
-
-    // Header row: manual refresh + a note that the list updates on its own while live.
-    const RefreshBar = () => (
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex flex-wrap gap-2">
-                {SUPPLY_STAGES.slice(0, -1).map(stage => (
-                    <Badge key={stage.key} className={cn(stage.color, 'text-white')}>
-                        {stage.label}: {countAt(stage.key)}
-                    </Badge>
-                ))}
-                <Badge variant="outline">Delivered: {deliveredTotal}</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-                {isLive && (
-                    <span className="text-xs text-muted-foreground flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> Auto-updating
-                    </span>
-                )}
-                <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing}>
-                    <RefreshCw className={cn('h-4 w-4 mr-1', isRefreshing && 'animate-spin')} /> Refresh
-                </Button>
-            </div>
-        </div>
-    );
-
-    if (orders.length === 0) {
-        return (
-            <div className="space-y-4">
-                <RefreshBar />
-                <Card>
-                    <CardContent className="py-12 text-center">
-                        <ShoppingCart className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-                        <p className="text-muted-foreground">No hay &amp; shavings orders yet.</p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                            Orders placed from the event page during the show land here, newest first.
-                        </p>
-                    </CardContent>
-                </Card>
-            </div>
-        );
-    }
-
-    return (
-        <div className="space-y-4">
-            <RefreshBar />
-            <OrdersToolbar
-                search={search} onSearch={setSearch}
-                statusFilter={statusFilter} onStatusFilter={setStatusFilter}
-                sortBy={sortBy} onSortBy={setSortBy}
-                onExpandAll={expandAll} onCollapseAll={collapseAll}
-            />
-            {filtered.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">No orders match your search or filter.</p>
-            ) : (
-                <>
-                    {pending.length > 0 && (
-                        <div className="space-y-2">
-                            {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
-                        </div>
-                    )}
-                    {done.length > 0 && (
-                        <div className="space-y-2">
-                            <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
-                            {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
-                        </div>
-                    )}
-                </>
-            )}
-        </div>
-    );
-};
-
-// Hay/shavings bought ahead of the show (pre-bedding or a plain pre-show
-// order) — a barn crew still has to physically deliver these, same as an
-// at-show reorder, just without the live-polling/refresh chrome since it's
-// derived straight from local booking state.
-const PreShowDeliveryPanel = ({ orders, onFulfill, showName }) => {
-    const { search, setSearch, statusFilter, setStatusFilter, sortBy, setSortBy, filtered, collapsedIds, toggleCollapse, expandAll, collapseAll } = useOrderListControls(orders);
-    const pending = filtered.filter(o => !isDelivered(o));
-    const done = filtered.filter(o => isDelivered(o));
+// One merged table-style list for Pre-Show + At-Show orders together — each
+// row carries its own Pre-Show/At-Show badge (see SOURCE_BADGE) instead of
+// living under two separate section headers.
+const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName, selectedIds, onToggleSelect, unitOf }) => {
+    const {
+        search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, itemFilter, setItemFilter,
+        barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse,
+    } = useUnifiedOrderListControls(orders);
 
     if (orders.length === 0) {
         return (
             <Card>
-                <CardContent className="py-10 text-center">
-                    <Package className="h-9 w-9 mx-auto text-muted-foreground mb-3" />
-                    <p className="text-muted-foreground">No pre-show hay or shavings to deliver yet.</p>
+                <CardContent className="py-12 text-center">
+                    <ShoppingCart className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+                    <p className="text-muted-foreground">No hay &amp; shavings orders yet.</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                        Exhibitors who ordered hay or shavings ahead of the show — pre-bedded or not — show up here.
+                        Pre-show hay/shavings and at-show reorders both land here, newest first.
                     </p>
                 </CardContent>
             </Card>
@@ -2733,22 +2767,432 @@ const PreShowDeliveryPanel = ({ orders, onFulfill, showName }) => {
 
     return (
         <div className="space-y-3">
-            <OrdersToolbar
+            <div className="flex items-center justify-between flex-wrap gap-2">
+                <StatusTabs orders={orders} statusFilter={statusFilter} onStatusFilter={setStatusFilter} />
+                <div className="flex items-center gap-2">
+                    {isLive && (
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> Auto-updating
+                        </span>
+                    )}
+                    <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing}>
+                        <RefreshCw className={cn('h-4 w-4 mr-1', isRefreshing && 'animate-spin')} /> Refresh
+                    </Button>
+                </div>
+            </div>
+            <SupplyFilterBar
                 search={search} onSearch={setSearch}
-                statusFilter={statusFilter} onStatusFilter={setStatusFilter}
-                sortBy={sortBy} onSortBy={setSortBy}
-                onExpandAll={expandAll} onCollapseAll={collapseAll}
+                barnFilter={barnFilter} onBarnFilter={setBarnFilter} barnOptions={barnOptions}
+                itemFilter={itemFilter} onItemFilter={setItemFilter} itemOptions={itemOptions}
             />
-            {filtered.length === 0 && (
+            <div className="hidden md:flex items-center gap-3 px-4 text-[10px] font-semibold uppercase text-muted-foreground">
+                <span className="flex-1">Order / Customer</span>
+                <span className="w-24 shrink-0">Location</span>
+                <span className="w-32 shrink-0">Items</span>
+                <span className="w-28 shrink-0">Status</span>
+                <span className="w-40 shrink-0">Progress</span>
+                <span className="w-24 shrink-0 text-right">Actions</span>
+            </div>
+            {filtered.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">No orders match your search or filter.</p>
+            ) : (
+                <div className="space-y-2">
+                    {filtered.map(o => (
+                        <SupplyOrderCard
+                            key={o.id} order={o} onFulfill={onFulfill} showName={showName}
+                            collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)}
+                            selected={selectedIds?.has(o.id)} onToggleSelect={onToggleSelect}
+                            unitOf={unitOf}
+                        />
+                    ))}
+                </div>
             )}
-            {pending.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
-            {done.length > 0 && (
-                <>
-                    <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Delivered</p>
-                    {done.map(o => <SupplyOrderCard key={o.id} order={o} onFulfill={onFulfill} showName={showName} collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)} />)}
-                </>
-            )}
+        </div>
+    );
+};
+
+const pluralize = (qty) => (qty === 1 ? '' : 's');
+
+// Robert: "we click on these buttons and then generate load sheet... it's
+// taking this amount of shavings to barn A and barn B and it tells us what
+// we need to load." Shows the checked orders totaled up, by supply and by
+// barn/stall, with a print button and a bulk "mark out for delivery."
+// Permanent side panel (not a popup) — Robert's mockup keeps this visible at
+// all times next to the order list, live-updating as orders are checked.
+const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, isBusy, showName }) => {
+    const { bySupply, byBarn, orderCount } = useMemo(() => buildLoadSheet(orders, supplies), [orders, supplies]);
+    const bySupplyEntries = [...bySupply.entries()];
+    const byBarnEntries = [...byBarn.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+    return (
+        <Card className="lg:sticky lg:top-4 h-fit">
+            <CardContent className="p-4 space-y-4">
+                <div>
+                    <p className="font-bold text-sm flex items-center gap-2"><Truck className="h-4 w-4" /> Load Sheet</p>
+                    <p className="text-xs text-muted-foreground">Today's Delivery Run</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                        {orders.length} order{pluralize(orders.length)} selected · {orderCount} still {orderCount === 1 ? 'has' : 'have'} supplies to load
+                    </p>
+                </div>
+
+                {orders.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4">
+                        Check orders in the list (or use "Add to Load") to build a load sheet.
+                    </p>
+                ) : (
+                    <div className="space-y-5">
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Sort:</span>
+                            <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
+                                <Button size="sm" variant={sortBy === 'barn' ? 'default' : 'ghost'} className="h-7 text-xs" onClick={() => onSortBy('barn')}>By Barn</Button>
+                                <Button size="sm" variant={sortBy === 'supply' ? 'default' : 'ghost'} className="h-7 text-xs" onClick={() => onSortBy('supply')}>By Supply</Button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h4 className="text-sm font-semibold mb-2">Load Totals</h4>
+                            <div className="rounded-lg border divide-y">
+                                {bySupplyEntries.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground p-3">Nothing left to load on the selected orders.</p>
+                                ) : bySupplyEntries.map(([name, { qty, unit }]) => (
+                                    <div key={name} className="flex items-center justify-between px-3 py-2 text-sm">
+                                        <span>{name}</span>
+                                        <span className="font-semibold tabular-nums">{qty} {unit}{pluralize(qty)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {sortBy === 'barn' ? (
+                            <div>
+                                <h4 className="text-sm font-semibold mb-2">By Barn / Location</h4>
+                                <div className="space-y-3">
+                                    {byBarnEntries.map(([barnLabel, entry]) => (
+                                        <div key={barnLabel} className="rounded-lg border p-3">
+                                            <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                                                <p className="font-medium text-sm">{barnLabel}</p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {[...entry.totals.entries()].map(([n, { qty, unit }]) => `${qty} ${unit}${pluralize(qty)} ${n}`).join(' · ')}
+                                                </p>
+                                            </div>
+                                            <div className="space-y-1">
+                                                {[...entry.stalls.entries()].map(([stallLabel, itemsMap]) => (
+                                                    <div key={stallLabel} className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                                        <span className="shrink-0">{stallLabel}</span>
+                                                        <span className="text-right">{[...itemsMap.entries()].map(([n, { qty, unit }]) => `${qty} ${unit}${pluralize(qty)} ${n}`).join(', ')}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            <div>
+                                <h4 className="text-sm font-semibold mb-2">By Supply</h4>
+                                <div className="space-y-3">
+                                    {bySupplyEntries.map(([name]) => {
+                                        const rows = byBarnEntries
+                                            .map(([barnLabel, entry]) => [barnLabel, entry.totals.get(name)])
+                                            .filter(([, t]) => t && t.qty > 0);
+                                        return (
+                                            <div key={name} className="rounded-lg border p-3">
+                                                <p className="font-medium text-sm mb-1.5">{name}</p>
+                                                <div className="space-y-1">
+                                                    {rows.map(([barnLabel, t]) => (
+                                                        <div key={barnLabel} className="flex items-center justify-between text-xs text-muted-foreground">
+                                                            <span>{barnLabel}</span>
+                                                            <span>{t.qty} {t.unit}{pluralize(t.qty)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                <div className="flex flex-col gap-2 pt-2 border-t">
+                    <Button
+                        variant="outline"
+                        disabled={orders.length === 0}
+                        onClick={() => printLoadSheet({ showName, bySupply, byBarn, orderCount })}
+                    >
+                        <Printer className="h-4 w-4 mr-1.5" /> Preview / Print
+                    </Button>
+                    <Button
+                        disabled={orders.length === 0 || isBusy}
+                        onClick={onMarkOutForDelivery}
+                    >
+                        {isBusy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Truck className="h-4 w-4 mr-1.5" />}
+                        Mark as Out for Delivery
+                    </Button>
+                </div>
+            </CardContent>
+        </Card>
+    );
+};
+
+const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
+
+// A supply's Low Inventory threshold is Item's own minLevel when the organizer
+// set one (Inventory tab); otherwise fall back to 20% of stock so a show that
+// never configures it still gets a sensible flag instead of none at all.
+const lowInventoryThreshold = (c) => (c.minLevel != null ? c.minLevel : Math.ceil(c.total * 0.2));
+
+// Small colored icon-badge tile — mirrors Robert's mockup's rounded
+// Pending/Delivered order-count chips inside each supply card.
+const OrderCountChip = ({ icon: Icon, label, value, tone }) => (
+    <div className={cn('flex items-center gap-2 rounded-lg px-2.5 py-1.5 flex-1',
+        tone === 'amber' ? 'bg-amber-50 dark:bg-amber-950/30' : 'bg-emerald-50 dark:bg-emerald-950/30')}>
+        <span className={cn('flex h-6 w-6 items-center justify-center rounded-full text-white shrink-0',
+            tone === 'amber' ? 'bg-amber-500' : 'bg-emerald-600')}>
+            <Icon className="h-3.5 w-3.5" />
+        </span>
+        <div className="leading-tight">
+            <p className="text-[10px] uppercase text-muted-foreground">{label}</p>
+            <p className={cn('text-sm font-bold', tone === 'amber' ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400')}>{value}</p>
+        </div>
+    </div>
+);
+
+// One card per supply's stock (+ an All Supplies rollup) — Robert's mockup
+// shows this row on the main Supply Orders page itself, not tucked away in a
+// separate tab, so it's a standalone hook + grid the List/Map/Analytics
+// views all render above their own content.
+const useSupplyStockCards = (supplies, allOrders, soldForSupply, deliveredForSupply) => {
+    const cards = useMemo(() => supplies.map((s, i) => {
+        const total = s.stockQty || 0;
+        const delivered = deliveredForSupply(s);
+        const sold = soldForSupply(s);
+        // Robert's mockup: Total Inventory / Delivered / Committed / Available —
+        // Committed is stock already sold but not yet delivered (in progress);
+        // Available is what's left to sell (Total minus everything sold).
+        const committed = Math.max(0, sold - delivered);
+        const remaining = Math.max(0, total - delivered);
+        const available = Math.max(0, total - sold);
+        const pct = total > 0 ? Math.round((delivered / total) * 100) : 0;
+        let pendingOrders = 0, deliveredOrders = 0;
+        for (const o of allOrders) {
+            const item = (o.items || []).find(it => it?.type === 'supply' && (it.refId === s.id || it.refId === s.name));
+            if (!item) continue;
+            const { status } = getItemStatus(o, item.refId);
+            if (status === 'delivered') deliveredOrders += 1; else pendingOrders += 1;
+        }
+        return {
+            id: s.id || s.name, name: s.name || 'Supply', unit: s.unit || 'unit', minLevel: s.minLevel,
+            total, delivered, committed, remaining, available, pct, pendingOrders, deliveredOrders,
+            palette: STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length],
+        };
+    }), [supplies, allOrders, soldForSupply, deliveredForSupply]);
+
+    const allSuppliesCard = useMemo(() => ({
+        id: '__all__', name: 'All Supplies', unit: 'unit', minLevel: null,
+        total: cards.reduce((sum, c) => sum + c.total, 0),
+        delivered: cards.reduce((sum, c) => sum + c.delivered, 0),
+        committed: cards.reduce((sum, c) => sum + c.committed, 0),
+        remaining: cards.reduce((sum, c) => sum + c.remaining, 0),
+        available: cards.reduce((sum, c) => sum + c.available, 0),
+        pendingOrders: cards.reduce((sum, c) => sum + c.pendingOrders, 0),
+        deliveredOrders: cards.reduce((sum, c) => sum + c.deliveredOrders, 0),
+        pct: 0,
+        palette: STAT_COLOR_PALETTE[4],
+    }), [cards]);
+    allSuppliesCard.pct = allSuppliesCard.total > 0 ? Math.round((allSuppliesCard.delivered / allSuppliesCard.total) * 100) : 0;
+
+    return { cards, allSuppliesCard };
+};
+
+const SupplyStockCardsGrid = ({ cards, allSuppliesCard }) => (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[...cards, allSuppliesCard].map(c => {
+            const threshold = lowInventoryThreshold(c);
+            const isLow = c.id !== '__all__' && c.total > 0 && c.available <= threshold;
+            return (
+                <Card key={c.id} className={cn(c.palette.bg, c.palette.border)}>
+                    <CardContent className="p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                            <div>
+                                <p className={cn('font-bold text-sm', c.palette.text)}>{c.name}</p>
+                                <p className="text-[10px] text-muted-foreground uppercase">{c.unit}s</p>
+                            </div>
+                            {c.id !== '__all__' && (
+                                <Badge className={cn('text-[10px]', isLow ? 'bg-red-600' : 'bg-emerald-600', 'text-white')}>
+                                    {isLow ? 'Low Stock' : 'In Stock'}
+                                </Badge>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                            <div><p className="text-muted-foreground text-[10px] uppercase">Total Inventory</p><p className="font-semibold">{c.total}</p></div>
+                            <div><p className="text-muted-foreground text-[10px] uppercase">Delivered</p><p className="font-semibold text-emerald-600">{c.delivered}</p></div>
+                            <div><p className="text-muted-foreground text-[10px] uppercase">Remaining</p><p className="font-semibold">{c.remaining}</p></div>
+                            <div><p className="text-muted-foreground text-[10px] uppercase">Available to sell</p><p className={cn('font-semibold', isLow && 'text-red-600')}>{c.available}</p></div>
+                        </div>
+                        <div>
+                            <div className="h-1.5 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+                                <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${Math.min(c.pct, 100)}%` }} />
+                            </div>
+                            <p className="text-[11px] text-muted-foreground mt-1">{c.pct}% delivered</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <OrderCountChip icon={Clock} label="Pending" value={c.pendingOrders} tone="amber" />
+                            <OrderCountChip icon={Truck} label="Delivered" value={c.deliveredOrders} tone="emerald" />
+                        </div>
+                    </CardContent>
+                </Card>
+            );
+        })}
+    </div>
+);
+
+// Icon-badge stat tiles for the Hay & Shavings tab's own Total/Delivered/Out
+// for Delivery/Ready to Load/Pending row — Robert's mockup gives these a
+// colored icon circle + a % of total, distinct from the plain text-only KPI
+// tiles every other section uses.
+const SUPPLY_TILE_META = [
+    { key: 'total', label: 'Total Orders', icon: ClipboardList, tone: 'blue' },
+    { key: 'delivered', label: 'Delivered', icon: CheckCircle2, tone: 'emerald' },
+    { key: 'outForDelivery', label: 'Out for Delivery', icon: Truck, tone: 'amber' },
+    { key: 'readyToLoad', label: 'Ready to Load', icon: Package, tone: 'blue' },
+    { key: 'pending', label: 'Pending', icon: Clock, tone: 'slate' },
+];
+const SUPPLY_TILE_TONES = {
+    blue: { bg: 'bg-blue-50 dark:bg-blue-950/20', border: 'border-blue-200 dark:border-blue-800', icon: 'bg-blue-500', text: 'text-blue-700 dark:text-blue-300' },
+    emerald: { bg: 'bg-emerald-50 dark:bg-emerald-950/20', border: 'border-emerald-200 dark:border-emerald-800', icon: 'bg-emerald-600', text: 'text-emerald-700 dark:text-emerald-300' },
+    amber: { bg: 'bg-amber-50 dark:bg-amber-950/20', border: 'border-amber-200 dark:border-amber-800', icon: 'bg-amber-500', text: 'text-amber-700 dark:text-amber-300' },
+    slate: { bg: 'bg-slate-50 dark:bg-slate-900/40', border: 'border-slate-200 dark:border-slate-700', icon: 'bg-slate-400', text: 'text-slate-700 dark:text-slate-300' },
+};
+
+const SupplyOrderStatTiles = ({ total, delivered, outForDelivery, readyToLoad, pending }) => {
+    const values = { total, delivered, outForDelivery, readyToLoad, pending };
+    return (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            {SUPPLY_TILE_META.map(t => {
+                const tone = SUPPLY_TILE_TONES[t.tone];
+                const value = values[t.key];
+                const pct = t.key !== 'total' && total > 0 ? Math.round((value / total) * 100) : null;
+                return (
+                    <div key={t.key} className={cn('rounded-xl border p-4 flex items-center gap-3', tone.bg, tone.border)}>
+                        <span className={cn('flex h-9 w-9 items-center justify-center rounded-full text-white shrink-0', tone.icon)}>
+                            <t.icon className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground uppercase truncate">{t.label}</p>
+                            <p className="flex items-baseline gap-1.5">
+                                <span className={cn('text-2xl font-bold', tone.text)}>{value}</span>
+                                {pct != null && <span className="text-xs text-muted-foreground">{pct}%</span>}
+                            </p>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
+// Robert: "I also think we should have some analytics specific to hay
+// shavings and barn services" — Low Inventory table + Recent Deliveries feed.
+// The per-supply stock cards themselves now live above the List/Map/Analytics
+// toggle (see SupplyStockCardsGrid), so they aren't repeated here.
+// Skips his mockup's date-scheduled "Today's/Upcoming Orders" — this data
+// model has no per-order delivery date to group by.
+const SupplyAnalyticsPanel = ({ supplies, allOrders, cards, allSuppliesCard }) => {
+    const recentDeliveries = useMemo(() => {
+        const rows = [];
+        for (const o of allOrders) {
+            for (const it of (o.items || [])) {
+                if (it?.type !== 'supply') continue;
+                const { status, stageTimestamps } = getItemStatus(o, it.refId);
+                if (status !== 'delivered') continue;
+                rows.push({
+                    key: `${o.id}-${it.refId}`,
+                    orderRef: getBookingRef(o),
+                    name: it.name,
+                    qty: it.qty,
+                    location: o.barnName || (o.stallNumber ? `Stall ${o.stallNumber}` : (o.exhibitorName || 'Unknown')),
+                    deliveredAt: stageTimestamps?.delivered || o.createdAt,
+                });
+            }
+        }
+        return rows.sort((a, b) => new Date(b.deliveredAt) - new Date(a.deliveredAt)).slice(0, 5);
+    }, [allOrders]);
+
+    if (supplies.length === 0) {
+        return <p className="text-sm text-muted-foreground text-center py-8">Add supplies under Inventory to see delivery analytics.</p>;
+    }
+
+    return (
+        <div className="space-y-5">
+            <SupplyStockCardsGrid cards={cards} allSuppliesCard={allSuppliesCard} />
+
+            <div className="grid md:grid-cols-2 gap-4">
+                <Card>
+                    <CardContent className="p-4">
+                        <p className="font-semibold text-sm flex items-center gap-1.5 mb-3">
+                            <AlertCircle className="h-4 w-4 text-red-600" /> Low Inventory
+                        </p>
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="text-[10px] uppercase text-muted-foreground text-left">
+                                    <th className="font-medium pb-1.5">Supply</th>
+                                    <th className="font-medium pb-1.5 text-right">Available</th>
+                                    <th className="font-medium pb-1.5 text-right">Min Level</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {cards.map(c => {
+                                    const threshold = lowInventoryThreshold(c);
+                                    const isLow = c.total > 0 && c.available <= threshold;
+                                    return (
+                                        <tr key={c.id} className={cn('border-t', isLow && 'bg-red-50 dark:bg-red-950/20')}>
+                                            <td className={cn('py-1.5', isLow && 'text-red-700 dark:text-red-400 font-medium')}>{c.name}</td>
+                                            <td className={cn('py-1.5 text-right tabular-nums', isLow && 'text-red-700 dark:text-red-400 font-semibold')}>{c.available}</td>
+                                            <td className="py-1.5 text-right text-muted-foreground tabular-nums">{c.minLevel ?? '—'}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                            Set a Min Level per supply under Inventory — without one, 20% of stock is used instead.
+                        </p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardContent className="p-4">
+                        <p className="font-semibold text-sm flex items-center gap-1.5 mb-3">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Recent Deliveries
+                        </p>
+                        {recentDeliveries.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">Nothing delivered yet.</p>
+                        ) : (
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="text-[10px] uppercase text-muted-foreground text-left">
+                                        <th className="font-medium pb-1.5">Order #</th>
+                                        <th className="font-medium pb-1.5">Location</th>
+                                        <th className="font-medium pb-1.5">Item</th>
+                                        <th className="font-medium pb-1.5 text-right">When</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {recentDeliveries.map(r => (
+                                        <tr key={r.key} className="border-t">
+                                            <td className="py-1.5 font-mono text-[11px] text-muted-foreground">#{r.orderRef}</td>
+                                            <td className="py-1.5 truncate max-w-[8rem]">{r.location}</td>
+                                            <td className="py-1.5">{r.qty} × {r.name}</td>
+                                            <td className="py-1.5 text-right text-xs text-muted-foreground whitespace-nowrap">{fmtDateTime(r.deliveredAt)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
         </div>
     );
 };
@@ -3018,6 +3462,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const { profile, refreshProfile } = useAuth();
     const [activeSection, setActiveSection] = useState('inventory');
     const [supplyView, setSupplyView] = useState('list'); // Hay & Shavings tab: 'list' | 'map'
+
+    // Load Sheet — Robert: "check boxes ... and it makes a load sheet." Which
+    // orders are checked (shown in a permanent side panel, not a popup), and
+    // how its breakdown is sorted (by barn/location or by supply type).
+    const [loadSheetIds, setLoadSheetIds] = useState(() => new Set());
+    const [loadSheetSort, setLoadSheetSort] = useState('barn');
+    const [isMarkingOutForDelivery, setIsMarkingOutForDelivery] = useState(false);
+    const toggleLoadSheetId = (id) => setLoadSheetIds(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+    });
 
     // Stall Fee Calculator "What-If" mode — a scratch estimator, never saved. Lets
     // the organizer type a hypothetical number sold per barn/RV area (e.g. "if I
@@ -3841,7 +4297,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         () => bookings
             .filter(isLiveSupply)
             // Newest first — facility works the freshest orders at the top.
-            .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+            .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+            .map(b => ({ ...b, sourceType: 'atshow' })),
         [bookings]
     );
 
@@ -3856,14 +4313,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             .map(b => {
                 const items = beddingItemsOf(b, supplies);
                 if (!items.length) return null;
-                const stallNumber = getAssignedStallsForBooking(b, barns).map(s => s.number).filter(Boolean).join(', ');
+                const assignedStalls = getAssignedStallsForBooking(b, barns);
+                const stallNumber = assignedStalls.map(s => s.number).filter(Boolean).join(', ');
+                const barnName = [...new Set(assignedStalls.map(s => s.barnName).filter(Boolean))].join(', ');
                 return {
                     id: b.id,
+                    sourceType: 'preshow',
                     exhibitorName: b.exhibitorName,
                     email: b.email,
                     phone: b.phone,
                     trainerName: b.trainerName,
                     stallNumber,
+                    barnName,
                     createdAt: b.createdAt,
                     fulfillmentStatus: b.fulfillmentStatus || 'new',
                     stageTimestamps: b.stageTimestamps || {},
@@ -3875,6 +4336,66 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             .filter(Boolean)
             .sort((a, b) => (a.exhibitorName || '').localeCompare(b.exhibitorName || ''));
     }, [stallBookings, barns, supplies]);
+
+    // Every supply order regardless of pre-show vs at-show — used by the top
+    // stat tiles, the unified order list, and the Load Sheet.
+    const allSupplyOrders = useMemo(
+        () => [...preShowDeliveryOrders, ...liveSupplyOrders],
+        [preShowDeliveryOrders, liveSupplyOrders]
+    );
+    const supplyUnitOf = useMemo(() => unitLookup(supplies), [supplies]);
+
+    // Feeds the icon-badge stat tiles at the top of the Hay & Shavings tab —
+    // Robert's mockup gives these their own icon + % styling, distinct from
+    // the generic KPI row every other section uses.
+    const supplyOrderCounts = useMemo(() => {
+        const countAtStage = (key) => allSupplyOrders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length;
+        return {
+            total: allSupplyOrders.length,
+            delivered: countAtStage('delivered'),
+            outForDelivery: countAtStage('out_for_delivery'),
+            readyToLoad: countAtStage('received'),
+            pending: countAtStage('new'),
+        };
+    }, [allSupplyOrders]);
+
+    const loadSheetOrders = useMemo(
+        () => allSupplyOrders.filter(o => loadSheetIds.has(o.id)),
+        [allSupplyOrders, loadSheetIds]
+    );
+
+    const markLoadSheetOutForDelivery = async () => {
+        setIsMarkingOutForDelivery(true);
+        try {
+            for (const order of loadSheetOrders) {
+                await applyAllItemsStage({
+                    order, targetKey: 'out_for_delivery',
+                    onFulfill: updateBookingFieldsLocal, showName: show.project_name, toast,
+                });
+            }
+            toast({ title: 'Out for delivery', description: `${loadSheetOrders.length} order${loadSheetOrders.length === 1 ? '' : 's'} marked out for delivery.` });
+            setLoadSheetIds(new Set());
+        } finally {
+            setIsMarkingOutForDelivery(false);
+        }
+    };
+
+    // Load Sheet quick presets (Robert's mockup): pick which orders land on the
+    // sheet without checking them one by one.
+    const applyLoadSheetPreset = (key) => {
+        const notDelivered = allSupplyOrders.filter(o => !isDelivered(o));
+        if (key === 'today') {
+            const todayStr = new Date().toDateString();
+            const ids = notDelivered.filter(o => o.createdAt && new Date(o.createdAt).toDateString() === todayStr).map(o => o.id);
+            setLoadSheetIds(new Set(ids));
+        } else if (key === 'byBarn') {
+            setLoadSheetIds(new Set(notDelivered.map(o => o.id)));
+            setLoadSheetSort('barn');
+        } else if (key === 'allUndelivered') {
+            setLoadSheetIds(new Set(notDelivered.map(o => o.id)));
+        }
+        // 'selected' keeps whatever is already checked — nothing to do.
+    };
 
     const filteredBookings = useMemo(() => {
         if (!searchTerm.trim()) return stallBookings;
@@ -4013,6 +4534,27 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     // Sold count for one supply — match by id first, fall back to name (older bookings).
     const soldForSupply = (s) => (suppliesSold[s.id] || 0) + (s.id !== s.name ? (suppliesSold[s.name] || 0) : 0);
+
+    // How much of each supply has actually gone out the door (item-level
+    // status is 'delivered') — feeds the Analytics view's per-supply cards.
+    const suppliesDelivered = useMemo(() => {
+        const delivered = {};
+        for (const b of bookings) {
+            if (b.status === 'cancelled') continue;
+            for (const it of (b.items || [])) {
+                if (it.type !== 'supply') continue;
+                const key = it.refId;
+                if (key == null) continue;
+                const { status } = getItemStatus(b, key);
+                if (status !== 'delivered') continue;
+                delivered[key] = (delivered[key] || 0) + (it.qty || 0);
+            }
+        }
+        return delivered;
+    }, [bookings]);
+    const deliveredForSupply = (s) => (suppliesDelivered[s.id] || 0) + (s.id !== s.name ? (suppliesDelivered[s.name] || 0) : 0);
+
+    const supplyStockCards = useSupplyStockCards(supplies, allSupplyOrders, soldForSupply, deliveredForSupply);
 
     // RV areas work the same way as barns now — the price isn't typed directly
     // on the area, it's whichever RV fees (Flat and/or Per-Night) are scoped to
@@ -4428,13 +4970,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     { label: 'Occupancy', value: `${occupancyRate}%` },
                 ];
             case 'supplyorders': {
-                const liveDelivered = liveSupplyOrders.filter(isDelivered).length;
-                const preShowDelivered = preShowDeliveryOrders.filter(isDelivered).length;
+                const countAtStage = (key) => allSupplyOrders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length;
                 return [
-                    { label: 'Pre-Show Orders', value: preShowDeliveryOrders.length },
-                    { label: 'At-Show Orders', value: liveSupplyOrders.length },
-                    { label: 'Delivered', value: liveDelivered + preShowDelivered },
-                    { label: 'Pending', value: (liveSupplyOrders.length - liveDelivered) + (preShowDeliveryOrders.length - preShowDelivered) },
+                    { label: 'Total Orders', value: allSupplyOrders.length },
+                    { label: 'Delivered', value: countAtStage('delivered') },
+                    { label: 'Out for Delivery', value: countAtStage('out_for_delivery') },
+                    { label: 'Ready to Load', value: countAtStage('received') },
+                    { label: 'Pending', value: countAtStage('new') },
                 ];
             }
             case 'masterlist': {
@@ -4529,7 +5071,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 Master List has its own, fuller stat bar (Total Bookings/Exhibitors/
                 Horses/Stalls/RV, Supplies, Revenue Summary) right above its table, so
                 this generic row would just repeat the same numbers a second time. */}
-            {activeSection !== 'masterlist' && (
+            {activeSection === 'supplyorders' ? (
+                <SupplyOrderStatTiles {...supplyOrderCounts} />
+            ) : activeSection !== 'masterlist' && (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                     {sectionStats.map((stat, i) => {
                         const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
@@ -5184,26 +5728,64 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 </TabsContent>
 
                 {/* ── Hay & Shavings Orders Tab (pre-show delivery + live at-show reorders) ── */}
-                <TabsContent value="supplyorders" className="space-y-6 mt-4">
+                <TabsContent value="supplyorders" className="space-y-4 mt-4">
+
                     {/* List | Map View — the map is for walking the barn and delivering stall by stall. */}
-                    <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
-                        <Button
-                            size="sm"
-                            variant={supplyView === 'list' ? 'default' : 'ghost'}
-                            className="h-8 text-xs"
-                            onClick={() => setSupplyView('list')}
-                        >
-                            <ListIcon className="h-3.5 w-3.5 mr-1.5" /> List
-                        </Button>
-                        <Button
-                            size="sm"
-                            variant={supplyView === 'map' ? 'default' : 'ghost'}
-                            className="h-8 text-xs"
-                            onClick={() => setSupplyView('map')}
-                        >
-                            <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Map View
-                        </Button>
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
+                            <Button
+                                size="sm"
+                                variant={supplyView === 'list' ? 'default' : 'ghost'}
+                                className="h-8 text-xs"
+                                onClick={() => setSupplyView('list')}
+                            >
+                                <ListIcon className="h-3.5 w-3.5 mr-1.5" /> List
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant={supplyView === 'map' ? 'default' : 'ghost'}
+                                className="h-8 text-xs"
+                                onClick={() => setSupplyView('map')}
+                            >
+                                <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Map View
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant={supplyView === 'analytics' ? 'default' : 'ghost'}
+                                className="h-8 text-xs"
+                                onClick={() => setSupplyView('analytics')}
+                            >
+                                <BarChart3 className="h-3.5 w-3.5 mr-1.5" /> Analytics
+                            </Button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button size="sm" variant="outline" className="h-8 text-xs">
+                                        <Truck className="h-3.5 w-3.5 mr-1.5" /> Load Sheet{loadSheetIds.size > 0 ? ` (${loadSheetIds.size})` : ''} <ChevronDown className="h-3.5 w-3.5 ml-1" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                    <DropdownMenuItem onClick={() => applyLoadSheetPreset('today')}>Today's Load Sheet</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => applyLoadSheetPreset('selected')}>Selected Orders ({loadSheetIds.size})</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => applyLoadSheetPreset('byBarn')}>By Barn / Location</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => applyLoadSheetPreset('allUndelivered')}>All Undelivered Orders</DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                                size="sm"
+                                className="h-8 text-xs"
+                                disabled={loadSheetOrders.length === 0}
+                                onClick={() => printLoadSheet({
+                                    showName: show.project_name,
+                                    ...buildLoadSheet(loadSheetOrders, supplies),
+                                })}
+                            >
+                                <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Load Sheet
+                            </Button>
+                        </div>
                     </div>
+
                     {supplyView === 'map' ? (
                         <SupplyDeliveryMap
                             bookings={bookings}
@@ -5221,35 +5803,36 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 ) : null;
                             }}
                         />
+                    ) : supplyView === 'analytics' ? (
+                        <SupplyAnalyticsPanel
+                            supplies={supplies}
+                            allOrders={allSupplyOrders}
+                            cards={supplyStockCards.cards}
+                            allSuppliesCard={supplyStockCards.allSuppliesCard}
+                        />
                     ) : (
-                    <>
-                    <div className="space-y-2">
-                        <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                            <Package className="h-4 w-4" /> Pre-Show Delivery
-                        </h3>
-                        <p className="text-xs text-muted-foreground -mt-1">
-                            Hay &amp; shavings ordered ahead of the show — pre-bedded or not.
-                        </p>
-                        <PreShowDeliveryPanel
-                            orders={preShowDeliveryOrders}
-                            onFulfill={updateBookingFieldsLocal}
-                            showName={show.project_name}
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                            <Truck className="h-4 w-4" /> At-Show Reorders
-                        </h3>
-                        <SupplyOrdersPanel
-                            orders={liveSupplyOrders}
-                            onFulfill={updateBookingFieldsLocal}
-                            onRefresh={() => refreshLiveOrders({ silent: false })}
-                            isRefreshing={isRefreshingOrders}
-                            isLive={publishStatus === 'published'}
-                            showName={show.project_name}
-                        />
-                    </div>
-                    </>
+                        <div className="grid lg:grid-cols-[1fr_340px] gap-4 items-start">
+                            <UnifiedSupplyOrdersPanel
+                                orders={allSupplyOrders}
+                                onFulfill={updateBookingFieldsLocal}
+                                onRefresh={() => refreshLiveOrders({ silent: false })}
+                                isRefreshing={isRefreshingOrders}
+                                isLive={publishStatus === 'published'}
+                                showName={show.project_name}
+                                selectedIds={loadSheetIds}
+                                onToggleSelect={toggleLoadSheetId}
+                                unitOf={supplyUnitOf}
+                            />
+                            <LoadSheetPanel
+                                orders={loadSheetOrders}
+                                supplies={supplies}
+                                sortBy={loadSheetSort}
+                                onSortBy={setLoadSheetSort}
+                                onMarkOutForDelivery={markLoadSheetOutForDelivery}
+                                isBusy={isMarkingOutForDelivery}
+                                showName={show.project_name}
+                            />
+                        </div>
                     )}
                 </TabsContent>
 
