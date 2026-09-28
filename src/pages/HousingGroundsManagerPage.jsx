@@ -54,6 +54,7 @@ import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemSt
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
+import { mergeBookingsForSave, createSerialQueue } from '@/lib/showDataWrite';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
     numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS,
@@ -3750,7 +3751,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // (2026-09-20): a show could hit Published with zero stall fees set up — nothing
     // stopped it, so exhibitors would see a $0 or broken price on the public booking
     // page. Same count the "Stall Fees" badge in the Fees tab shows.
-    const stallFeeCount = extraStallFees.length + manualFeesByCategory('stall').length;
+    // Only fees that actually carry a price count — a fee left at $0, or one scoped
+    // to a barn that has since been deleted, gives exhibitors nothing to pay.
+    const stallFeeCount = extraStallFees.filter(f => Number(f.amount) > 0 && barns.some(b => feeAppliesToBarn(f, b.id))).length
+        + manualFeesByCategory('stall').filter(f => Number(f.amount) > 0).length;
     const BILLING_MODE_LABELS = { invoice_after: 'Invoice after confirmation', at_booking: 'Bill at booking' };
 
     // Guard the lifecycle toggle: going *to* Published asks first; everything else applies now.
@@ -3763,7 +3767,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 toast({
                     variant: 'destructive',
                     title: 'Add a stall fee before publishing',
-                    description: 'This show has no stall fees set up yet — add at least one (a barn’s nightly rate, a flat fee, etc.) in the Fees tab first, so exhibitors have a price to book at.',
+                    description: 'This show has no stall fee with a price above $0 (for an existing barn) — add one (a barn’s nightly rate, a flat fee, etc.) in the Fees tab first, so exhibitors have a price to book at.',
                 });
                 return;
             }
@@ -3854,6 +3858,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const removeBarn = (barnId) => {
         setBarns(prev => prev.filter(b => b.id !== barnId));
     };
+
+    // Deleting a barn also deletes its stalls and any assignments on them, so it
+    // asks first (same two-step idea as removing a stall from a booking).
+    const [barnToRemove, setBarnToRemove] = useState(null);
+    const barnToRemoveAssigned = barnToRemove
+        ? (barnToRemove.stalls || []).filter(s => s.bookingId).length
+        : 0;
 
     // ── Stall fees (a circuit fee across the facility, or a fee on one or more
     // barns — a barn's own per-night rate is one of these, unitType 'per_night') ──
@@ -3962,9 +3973,24 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             lateFee: 0,
             feeLocked: false,
         })));
-        // Auto-generate an RV area
-        setRvAreas([{
+        // Auto-generate an RV area. Its rate must be a real Per-Night RV fee, same as
+        // the barns above — a bare pricePerNight showed $0 in Housing (and dropped to
+        // $0 on the first fee edit) while the public booking page still charged it.
+        const rvAreaId = uuidv4();
+        setExtraRvFees([{
             id: uuidv4(),
+            name: 'RV Parking Rate',
+            appliesTo: [rvAreaId],
+            amount: 45,
+            cost: 0,
+            unitType: 'per_night',
+            paymentTiming: 'pre_entry',
+            dueDate: '',
+            lateFee: 0,
+            feeLocked: false,
+        }]);
+        setRvAreas([{
+            id: rvAreaId,
             name: 'RV Parking',
             spotCount: 15,
             pricePerNight: 45,
@@ -3991,11 +4017,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // ── RV Area CRUD ──
     const addRvArea = () => {
         const idx = rvAreas.length + 1;
+        const id = uuidv4();
         setRvAreas(prev => [...prev, {
-            id: uuidv4(),
+            id,
             name: `RV Area ${idx}`,
             spotCount: 10,
-            pricePerNight: 45,
+            // A rate comes only from a Per-Night RV fee (0 until one applies), never a
+            // hidden default — otherwise Housing showed $0 while the public page charged it.
+            pricePerNight: nightlyRateForRvArea(id, extraRvFees),
             hookupType: 'full',
             powerType: '50amp',
             hasWater: true,
@@ -4096,8 +4125,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         }
     };
 
-    const updateBooking = (bookingId, field, value) => {
+    // Saved straight to the database, not just to this screen: on a Locked or
+    // Published show there is no Save All button and auto-save doesn't watch
+    // bookings, so a local-only edit was lost on reload while the toast said saved.
+    // Status has its own save path (changeBookingStatus), so it is skipped here.
+    const updateBooking = async (bookingId, field, value) => {
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
+        if (field !== 'status' && onUpdateBookingFields) await onUpdateBookingFields(bookingId, { [field]: value });
     };
 
     // Append one line to a booking's Activity Log (Master List's expanded row).
@@ -4145,6 +4179,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const current = bookings.find(b => b.id === bookingId);
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, ...patch } : b));
         logActivity(bookingId, 'Booking details updated (stalls/RV/supplies or pricing)');
+        // Save the edit itself right away (see updateBooking). Status is left out —
+        // a status change goes through changeBookingStatus below, which also
+        // releases stalls on cancel and sends the confirmation email.
+        const { status: _status, ...editFields } = patch;
+        if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, editFields);
         if (patch.status && current && patch.status !== (current.status || 'pending')) {
             await changeBookingStatus(bookingId, patch.status);
         }
@@ -4295,7 +4334,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const stallBookings = useMemo(() => bookings.filter(b => !isLiveSupply(b)), [bookings]);
     const liveSupplyOrders = useMemo(
         () => bookings
-            .filter(isLiveSupply)
+            // A cancelled at-show order is no longer a delivery to make — leave it out
+            // of the tiles, stock counts and Load Sheet (it stays in the Master List).
+            .filter(b => isLiveSupply(b) && b.status !== 'cancelled')
             // Newest first — facility works the freshest orders at the top.
             .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
             .map(b => ({ ...b, sourceType: 'atshow' })),
@@ -5057,13 +5098,21 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     return (
         <ReadOnlyContext.Provider value={isLocked}>
         <div className="space-y-6">
+            <ConfirmationDialog
+                isOpen={!!barnToRemove}
+                onClose={() => setBarnToRemove(null)}
+                onConfirm={() => { removeBarn(barnToRemove.id); setBarnToRemove(null); }}
+                title={`Delete ${barnToRemove?.name || 'this barn'}?`}
+                description={`This removes the barn and its ${(barnToRemove?.stalls || []).length} stall${(barnToRemove?.stalls || []).length === 1 ? '' : 's'}${barnToRemoveAssigned > 0 ? `, including ${barnToRemoveAssigned} already assigned to bookings (they will become unassigned)` : ''}. It is saved with your next auto-save.`}
+                confirmText="Delete barn"
+            />
             {/* Read-only banner (Locked or Published) */}
             {isLocked && (
                 <div className="flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
                     {publishStatus === 'published' ? <Globe className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
                     {publishStatus === 'published'
-                        ? <span><strong>Published — read-only.</strong> Exhibitors can book now. Switch to <strong>Draft</strong> (top of page) to edit.</span>
-                        : <span><strong>Locked — read-only.</strong> Switch to <strong>Draft</strong> (top of page) to edit.</span>}
+                        ? <span><strong>Published — setup is read-only.</strong> Exhibitors can book now. Bookings and payments can still be edited. Switch to <strong>Draft</strong> (top of page) to change barns, fees or supplies.</span>
+                        : <span><strong>Locked — setup is read-only.</strong> Bookings and payments can still be edited. Switch to <strong>Draft</strong> (top of page) to change barns, fees or supplies.</span>}
                 </div>
             )}
 
@@ -5243,7 +5292,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             showId={show.id}
                                             onUpdate={(field, value) => updateBarn(barn.id, field, value)}
                                             onUpdateFields={(patch) => updateBarnFields(barn.id, patch)}
-                                            onRemove={() => removeBarn(barn.id)}
+                                            onRemove={() => setBarnToRemove(barn)}
                                             onDuplicate={() => duplicateBarn(barn.id)}
                                             liveBookingIds={liveBookingIds}
                                             moveInDate={moveInDate}
@@ -6311,7 +6360,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 <TabsContent value="charts" className="mt-4 space-y-4">
                     {analytics.noShow.total > 0 ? (
                         <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading charts…</div>}>
-                            <AnalyticsCharts analytics={analytics} bookings={bookings} />
+                            {/* stallBookings, not bookings: at-show hay reorders are not stall
+                                bookings and must not inflate the status / timeline charts. */}
+                            <AnalyticsCharts analytics={analytics} bookings={stallBookings} />
                         </Suspense>
                     ) : (
                         <div className="text-center py-12 text-sm text-muted-foreground border border-dashed rounded-lg">
@@ -6698,160 +6749,161 @@ const HousingGroundsManagerPage = () => {
         return () => document.removeEventListener('visibilitychange', onVisible);
     }, [fetchShows]);
 
+    // Every save below goes through this. It (1) waits its turn, so two saves fired
+    // together can't overwrite each other, and (2) re-reads the LATEST saved show
+    // right before writing, so a booking or Stripe payment that arrived while this
+    // page was open is kept instead of being replaced by the copy loaded earlier.
+    // `buildNext(latest)` returns { data: newProjectData, result }; `result` is
+    // handed back to the caller.
+    const selectedShowId = selectedShow?.id;
+    const enqueueWrite = useMemo(() => createSerialQueue(), []);
+    const commitShowData = useCallback((buildNext) => enqueueWrite(async () => {
+        if (!selectedShowId) return null;
+        const { data: row, error: readError } = await supabase
+            .from('projects')
+            .select('project_data')
+            .eq('id', selectedShowId)
+            .single();
+        if (readError) throw readError;
+        const { data: updatedData, result } = buildNext(row?.project_data || {});
+        const { error } = await supabase
+            .from('projects')
+            .update({ project_data: updatedData })
+            .eq('id', selectedShowId);
+        if (error) throw error;
+        setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
+        setShows(prev => prev.map(s => s.id === selectedShowId ? { ...s, project_data: updatedData } : s));
+        return result;
+    }), [enqueueWrite, selectedShowId]);
+
     // Persist updated barns array immediately (used by Smart Auto-Assign + ManageStallsDialog).
     // This commits stall->booking assignments without requiring "Save All".
     const updateBarnsImmediate = useCallback(async (nextBarns) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         try {
-            const updatedData = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: {
-                    ...(selectedShow.project_data?.stallingService || {}),
-                    barns: nextBarns,
-                },
-            }, 'housing');
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => ({
+                data: stampModuleStatusOnSave({
+                    ...latest,
+                    stallingService: { ...(latest.stallingService || {}), barns: nextBarns },
+                }, 'housing'),
+            }));
         } catch (error) {
             toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
             throw error;
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     // Persist updated rvAreas immediately (used by the RV assignment board).
     // Commits camper spot -> booking assignments without requiring "Save All".
     const updateRvAreasImmediate = useCallback(async (nextRvAreas) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         try {
-            const updatedData = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: {
-                    ...(selectedShow.project_data?.stallingService || {}),
-                    rvAreas: nextRvAreas,
-                },
-            }, 'housing');
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => ({
+                data: stampModuleStatusOnSave({
+                    ...latest,
+                    stallingService: { ...(latest.stallingService || {}), rvAreas: nextRvAreas },
+                }, 'housing'),
+            }));
         } catch (error) {
             toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
             throw error;
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     // Persist the cover image URL immediately so it shows on the public event card.
     const updateCoverImageImmediate = useCallback(async (url) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         try {
-            const updatedData = { ...selectedShow.project_data, coverImageUrl: url || '' };
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => ({ data: { ...latest, coverImageUrl: url || '' } }));
             toast({ title: url ? 'Cover image saved' : 'Cover image removed', description: 'It will show on the public event card.' });
         } catch (error) {
             toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     // Persist a single booking's status immediately (no Save All needed).
     const updateBookingStatusImmediate = useCallback(async (bookingId, newStatus) => {
-        if (!selectedShow) return null;
+        if (!selectedShowId) return null;
         try {
-            const svc = selectedShow.project_data?.stallingService || {};
-            const currentBookings = svc.bookings || [];
-            const updatedBookings = currentBookings.map(b =>
-                b.id === bookingId
-                    ? {
-                        ...b,
-                        status: newStatus,
-                        ...(newStatus === 'checked_in' ? { checkedInAt: new Date().toISOString() } : {}),
-                        ...(newStatus === 'checked_out' ? { checkedOutAt: new Date().toISOString() } : {}),
-                    }
-                    : b
-            );
-
-            // Cancelling has to give the stalls back. Only the status used to change,
-            // so the stalls stayed pinned to the cancelled booking — the occupancy
-            // chart stopped counting them, but every "is this stall free?" check still
-            // said taken: the barn map, auto-assign, the Assign Board and the public
-            // booking page. Those stalls could not be sold again until somebody
-            // unassigned each one by hand.
-            //
-            // Released in the SAME write as the status, so a second save cannot put
-            // the old stall assignments back.
-            let updatedBarns = svc.barns || [];
-            let releasedStalls = 0;
-            if (newStatus === 'cancelled') {
-                releasedStalls = updatedBarns.reduce(
-                    (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId === bookingId).length,
-                    0
+            return await commitShowData(latest => {
+                const svc = latest.stallingService || {};
+                const currentBookings = svc.bookings || [];
+                const updatedBookings = currentBookings.map(b =>
+                    b.id === bookingId
+                        ? {
+                            ...b,
+                            status: newStatus,
+                            ...(newStatus === 'checked_in' ? { checkedInAt: new Date().toISOString() } : {}),
+                            ...(newStatus === 'checked_out' ? { checkedOutAt: new Date().toISOString() } : {}),
+                        }
+                        : b
                 );
-                if (releasedStalls > 0) {
-                    updatedBarns = unassignBookingStalls(updatedBarns, bookingId);
-                }
-            }
 
-            const updatedData = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns },
-            }, 'housing');
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
-            toast({
-                title: 'Status updated',
-                description: releasedStalls > 0
-                    ? `Booking is now cancelled. ${releasedStalls} stall${releasedStalls !== 1 ? 's' : ''} released and available to book again.`
-                    : `Booking is now ${newStatus.replace('_', ' ')}.`,
+                // Cancelling has to give the stalls back. Only the status used to change,
+                // so the stalls stayed pinned to the cancelled booking — the occupancy
+                // chart stopped counting them, but every "is this stall free?" check still
+                // said taken: the barn map, auto-assign, the Assign Board and the public
+                // booking page. Those stalls could not be sold again until somebody
+                // unassigned each one by hand.
+                //
+                // Released in the SAME write as the status, so a second save cannot put
+                // the old stall assignments back.
+                let updatedBarns = svc.barns || [];
+                let releasedStalls = 0;
+                if (newStatus === 'cancelled') {
+                    releasedStalls = updatedBarns.reduce(
+                        (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId === bookingId).length,
+                        0
+                    );
+                    if (releasedStalls > 0) {
+                        updatedBarns = unassignBookingStalls(updatedBarns, bookingId);
+                    }
+                }
+
+                return {
+                    data: stampModuleStatusOnSave({
+                        ...latest,
+                        stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns },
+                    }, 'housing'),
+                    result: { barns: updatedBarns, bookings: updatedBookings, releasedStalls },
+                };
+            }).then(outcome => {
+                toast({
+                    title: 'Status updated',
+                    description: outcome.releasedStalls > 0
+                        ? `Booking is now cancelled. ${outcome.releasedStalls} stall${outcome.releasedStalls !== 1 ? 's' : ''} released and available to book again.`
+                        : `Booking is now ${newStatus.replace('_', ' ')}.`,
+                });
+                return outcome;
             });
-            return { barns: updatedBarns, bookings: updatedBookings, releasedStalls };
         } catch (error) {
             toast({ title: 'Status save failed', description: error.message, variant: 'destructive' });
             return null;
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     // Patch arbitrary fields on one booking and save immediately (no Save All).
-    // Used by the Hay & Shavings Orders tab to flip fulfillmentStatus on the spot.
+    // Used by the Hay & Shavings Orders tab to flip fulfillmentStatus on the spot,
+    // and by every booking edit (name, nights, items, payment...) so it isn't lost.
     const updateBookingFieldsImmediate = useCallback(async (bookingId, patch) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         try {
-            const currentBookings = selectedShow.project_data?.stallingService?.bookings || [];
-            const updatedBookings = currentBookings.map(b =>
-                b.id === bookingId ? { ...b, ...patch } : b
-            );
-            const updatedData = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: { ...(selectedShow.project_data?.stallingService || {}), bookings: updatedBookings },
-            }, 'housing');
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => {
+                const svc = latest.stallingService || {};
+                const updatedBookings = (svc.bookings || []).map(b =>
+                    b.id === bookingId ? { ...b, ...patch } : b
+                );
+                return {
+                    data: stampModuleStatusOnSave({
+                        ...latest,
+                        stallingService: { ...svc, bookings: updatedBookings },
+                    }, 'housing'),
+                };
+            });
         } catch (error) {
             toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     // Delete a booking immediately (no Save All needed). The delete button in the
     // Bookings list only ever updated local React state — a deleted booking looked
@@ -6860,93 +6912,88 @@ const HousingGroundsManagerPage = () => {
     // spots pinned to it in the SAME write, same as cancelling, so they don't
     // stay stuck "taken" by a booking that no longer exists.
     const removeBookingImmediate = useCallback(async (bookingId) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         try {
-            const svc = selectedShow.project_data?.stallingService || {};
-            const updatedBookings = (svc.bookings || []).filter(b => b.id !== bookingId);
-            const updatedBarns = unassignBookingStalls(svc.barns || [], bookingId);
-            const updatedRvAreas = unassignBookingRvSpots(svc.rvAreas || [], bookingId);
-            const updatedData = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns, rvAreas: updatedRvAreas },
-            }, 'housing');
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => {
+                const svc = latest.stallingService || {};
+                const updatedBookings = (svc.bookings || []).filter(b => b.id !== bookingId);
+                const updatedBarns = unassignBookingStalls(svc.barns || [], bookingId);
+                const updatedRvAreas = unassignBookingRvSpots(svc.rvAreas || [], bookingId);
+                return {
+                    data: stampModuleStatusOnSave({
+                        ...latest,
+                        stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns, rvAreas: updatedRvAreas },
+                    }, 'housing'),
+                };
+            });
         } catch (error) {
             toast({ title: 'Delete failed', description: error.message, variant: 'destructive' });
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     // Append a manually-created booking to the DB immediately (no Save All needed),
     // mirroring updateBookingStatusImmediate so it survives a refresh right away.
     const addBookingImmediate = useCallback(async (booking) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         try {
-            const currentBookings = selectedShow.project_data?.stallingService?.bookings || [];
-            const updatedBookings = [...currentBookings, booking];
-            const updatedData = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: { ...(selectedShow.project_data?.stallingService || {}), bookings: updatedBookings },
-            }, 'housing');
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => {
+                const svc = latest.stallingService || {};
+                return {
+                    data: stampModuleStatusOnSave({
+                        ...latest,
+                        stallingService: { ...svc, bookings: [...(svc.bookings || []), booking] },
+                    }, 'housing'),
+                };
+            });
         } catch (error) {
             toast({ title: 'Could not save booking', description: error.message, variant: 'destructive' });
             throw error;
         }
-    }, [selectedShow, toast]);
+    }, [selectedShowId, commitShowData, toast]);
 
     const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, { silent = false } = {}) => {
-        if (!selectedShow) return;
+        if (!selectedShowId) return;
         setIsSaving(true);
         try {
-            // Fees typed on the Fee Structure page (source !== 'housing'). Use the
-            // edited copy from the dashboard when provided (two-way sync), else fall
-            // back to whatever is on the record. Housing-sourced fees are regenerated.
-            const manualFees = editedManualFees || (selectedShow.project_data?.fees || []).filter(f => f.source !== 'housing');
-            const housingFees = buildHousingFees({ barns, extraStallFees, rvAreas, extraRvFees, supplies });
-            const effectiveStatus = publishStatus || selectedShow.project_data?.stallingService?.publishStatus || 'draft';
-            const stamped = stampModuleStatusOnSave({
-                ...selectedShow.project_data,
-                stallingService: {
-                    ...selectedShow.project_data?.stallingService,
-                    barns, rvAreas, supportSpaces, supplies, bookings,
-                    extraStallFees: extraStallFees ?? selectedShow.project_data?.stallingService?.extraStallFees ?? [],
-                    extraRvFees: extraRvFees ?? selectedShow.project_data?.stallingService?.extraRvFees ?? [],
-                    publishStatus: effectiveStatus,
-                    // Keep prior values when an auto-save payload omits them.
-                    moveInDate: moveInDate ?? selectedShow.project_data?.stallingService?.moveInDate ?? '',
-                    moveOutDate: moveOutDate ?? selectedShow.project_data?.stallingService?.moveOutDate ?? '',
-                    datesLocked: datesLocked ?? selectedShow.project_data?.stallingService?.datesLocked ?? false,
-                    billingMode: billingMode ?? selectedShow.project_data?.stallingService?.billingMode ?? 'invoice_after',
-                    processingFeeMode: processingFeeMode ?? selectedShow.project_data?.stallingService?.processingFeeMode ?? 'show',
-                    chartPublish: chartPublish ?? selectedShow.project_data?.stallingService?.chartPublish ?? { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true },
-                },
-                fees: [...manualFees, ...housingFees],
-            }, 'housing');
-            // The Draft/Locked/Published bar is the source of truth — write it into
-            // the shared module-status map so the Show overview reflects it.
-            const updatedData = {
-                ...stamped,
-                moduleStatuses: { ...(stamped.moduleStatuses || {}), housing: effectiveStatus },
-            };
-            const { error } = await supabase
-                .from('projects')
-                .update({ project_data: updatedData })
-                .eq('id', selectedShow.id);
-            if (error) throw error;
-            setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
-            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            await commitShowData(latest => {
+                const latestSvc = latest.stallingService || {};
+                // Fees typed on the Fee Structure page (source !== 'housing'). Use the
+                // edited copy from the dashboard when provided (two-way sync), else fall
+                // back to whatever is on the record. Housing-sourced fees are regenerated.
+                const manualFees = editedManualFees || (latest.fees || []).filter(f => f.source !== 'housing');
+                const housingFees = buildHousingFees({ barns, extraStallFees, rvAreas, extraRvFees, supplies });
+                const effectiveStatus = publishStatus || latestSvc.publishStatus || 'draft';
+                const stamped = stampModuleStatusOnSave({
+                    ...latest,
+                    stallingService: {
+                        ...latestSvc,
+                        barns, rvAreas, supportSpaces, supplies,
+                        // The page's bookings merged into the LATEST saved list: a customer
+                        // booking or card payment that landed while this page was open is
+                        // kept, not overwritten by the older copy held here.
+                        bookings: mergeBookingsForSave(latestSvc.bookings, bookings),
+                        extraStallFees: extraStallFees ?? latestSvc.extraStallFees ?? [],
+                        extraRvFees: extraRvFees ?? latestSvc.extraRvFees ?? [],
+                        publishStatus: effectiveStatus,
+                        // Keep prior values when an auto-save payload omits them.
+                        moveInDate: moveInDate ?? latestSvc.moveInDate ?? '',
+                        moveOutDate: moveOutDate ?? latestSvc.moveOutDate ?? '',
+                        datesLocked: datesLocked ?? latestSvc.datesLocked ?? false,
+                        billingMode: billingMode ?? latestSvc.billingMode ?? 'invoice_after',
+                        processingFeeMode: processingFeeMode ?? latestSvc.processingFeeMode ?? 'show',
+                        chartPublish: chartPublish ?? latestSvc.chartPublish ?? { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true },
+                    },
+                    fees: [...manualFees, ...housingFees],
+                }, 'housing');
+                // The Draft/Locked/Published bar is the source of truth — write it into
+                // the shared module-status map so the Show overview reflects it.
+                return {
+                    data: {
+                        ...stamped,
+                        moduleStatuses: { ...(stamped.moduleStatuses || {}), housing: effectiveStatus },
+                    },
+                };
+            });
             if (!silent) toast({ title: 'Housing & Grounds Saved', description: 'All housing, grounds, and booking data saved successfully.' });
         } catch (error) {
             toast({ title: 'Error saving', description: error.message, variant: 'destructive' });

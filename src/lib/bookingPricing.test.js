@@ -114,6 +114,45 @@ describe('computeBookingTotal', () => {
         expect(computeBookingTotal(booking, assigned)).toBe(650); // 300 (fallback) + 350 (real)
     });
 
+    it('does not bill a fully-placed barn twice when a different barn on the same order is still unassigned', () => {
+        // Regression: ordered Barn A x2 ($100) + Barn B x2 ($200). Both Barn A
+        // stalls are placed, Barn B is not. The open slots belong to Barn B, so the
+        // bill is 2 x $100 (real) + 2 x $200 (Barn B fallback) = $600. It used to
+        // start again at the first line, billing Barn A twice ($400) and never Barn B.
+        const booking = {
+            id: 'bk-6',
+            nights: 1,
+            items: [
+                { type: 'stall', refId: 'barn-a', name: 'Barn A', qty: 2, unitPrice: 100 },
+                { type: 'stall', refId: 'barn-b', name: 'Barn B', qty: 2, unitPrice: 200 },
+            ],
+        };
+        const assigned = stalls(2, 100, 'barn-a');
+        expect(computeBookingTotal(booking, assigned)).toBe(600);
+        const rows = buildLineItems(booking, assigned);
+        expect(rows.some(r => /Barn B/.test(r.description) && /not yet assigned/.test(r.description))).toBe(true);
+        expect(rows.some(r => /Barn A/.test(r.description) && /not yet assigned/.test(r.description))).toBe(false);
+    });
+
+    it('prices each placed stall by its own barn, whatever order the stalls come back in', () => {
+        // Barn A was bought Flat ($40), Barn B was bought Nightly ($90 x 2 nights).
+        // The stalls arrive in barn order (B first, then A) — the opposite of the
+        // order the lines were bought in. Pairing by list position billed B's stall
+        // at A's Flat rate and A's stall at B's nightly rate. Now each stall matches
+        // the line for its own barn: $40 + $180 = $220.
+        const extraStallFees = [{ id: 'f1', appliesTo: 'barn-a', amount: 40, unitType: 'flat' }];
+        const booking = {
+            id: 'bk-7',
+            nights: 2,
+            items: [
+                { type: 'stall', refId: 'barn-a', feeType: 'flat', name: 'Barn A – Flat Fee', qty: 1, unitPrice: 0 },
+                { type: 'stall', refId: 'barn-b', feeType: 'per_night', name: 'Barn B – Nightly Fee', qty: 1, unitPrice: 90, nights: 2 },
+            ],
+        };
+        const assigned = [...stalls(1, 90, 'barn-b'), ...stalls(1, 0, 'barn-a')];
+        expect(computeBookingTotal(booking, assigned, extraStallFees)).toBe(220);
+    });
+
     it('returns 0 for an empty or missing booking instead of throwing', () => {
         expect(computeBookingTotal(null, [])).toBe(0);
         expect(computeBookingTotal({}, [])).toBe(0);

@@ -41,7 +41,7 @@ const EmptyChart = ({ message, icon: Icon }) => (
 
 // ───── Custom donut with center label ─────
 
-const CenterLabelDonut = ({ data, palette, centerLabel, centerValue, height = 260 }) => (
+const CenterLabelDonut = ({ data, palette, centerLabel, centerValue, height = 260, formatValue = money }) => (
     <ResponsiveContainer width="100%" height={height}>
         <PieChart>
             <Pie
@@ -66,7 +66,7 @@ const CenterLabelDonut = ({ data, palette, centerLabel, centerValue, height = 26
                 </text>
             </Pie>
             <Tooltip
-                formatter={(v) => money(v)}
+                formatter={(v) => formatValue(v)}
                 contentStyle={tooltipContentStyle}
             />
         </PieChart>
@@ -237,6 +237,7 @@ const StatusChart = ({ bookings }) => {
                             palette={Object.values(STATUS_META).map(m => m.color)}
                             centerLabel="Bookings"
                             centerValue={total}
+                            formatValue={(v) => `${v} booking${v === 1 ? '' : 's'}`}
                         />
                         <div className="space-y-2">
                             {data.map(d => {
@@ -272,7 +273,9 @@ const TimelineChart = ({ bookings }) => {
             .map(d => {
                 try { return startOfDay(parseISO(d)); } catch { return null; }
             })
-            .filter(Boolean)
+            // parseISO does not throw on a bad date — it returns an Invalid Date, which
+            // would crash eachDayOfInterval / format and blank the whole Analytics tab.
+            .filter(d => d && !Number.isNaN(d.getTime()))
             .sort((a, b) => a - b);
 
         if (valid.length === 0) return [];

@@ -43,17 +43,31 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         const qty = Number(it.qty) || 0;
         const unitNights = it.nights != null ? (Number(it.nights) || nights) : nights;
         for (let i = 0; i < qty; i++) {
-            units.push({ feeType: it.feeType || null, nights: unitNights });
+            units.push({ item: it, feeType: it.feeType || null, nights: unitNights, stall: null });
         }
     }
 
-    // Pair each physically-assigned stall with the next purchased unit, in
-    // order — same "first N assigned stalls count toward the order" rule as
-    // before.
+    // Pair each physically-assigned stall with a purchased unit. A stall sitting
+    // in the barn a line was ordered for fills THAT line first; only stalls that
+    // were moved to a different barn take whatever units are still open, in
+    // order. Pairing purely by list position mixed up multi-barn orders: it could
+    // hand a Barn B stall the Barn A line's Flat/Nightly option, and it left the
+    // wrong line marked "not yet assigned".
+    const unitOfStall = new Map();
+    const moved = [];
+    for (const stall of used) {
+        const unit = units.find(u => !u.stall && u.item.refId === stall.barnId);
+        if (unit) { unit.stall = stall; unitOfStall.set(stall, unit); } else moved.push(stall);
+    }
+    for (const stall of moved) {
+        const unit = units.find(u => !u.stall);
+        if (unit) { unit.stall = stall; unitOfStall.set(stall, unit); }
+    }
+
     const byGroup = new Map();
     for (let i = 0; i < used.length; i++) {
         const stall = used[i];
-        const unit = units[i];
+        const unit = unitOfStall.get(stall);
         const key = `${stall.barnId}::${unit?.feeType || ''}`;
         if (!byGroup.has(key)) byGroup.set(key, { barnId: stall.barnId, feeType: unit?.feeType || null, nights: unit?.nights ?? nights, stalls: [] });
         byGroup.get(key).stalls.push(stall);
@@ -105,12 +119,15 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
     // originally-ordered barn — current flat rate if it has one, else the
     // unitPrice frozen at booking time (we have no live per-night rate to
     // fall back to here, same as before this file tracked real placement).
-    let deficit = Math.max(0, orderedTotal - used.length);
+    // Only the units no stall was paired with are still open — counted per line,
+    // so a line whose stalls are already placed is never billed a second time.
+    const openByItem = new Map();
+    for (const u of units) {
+        if (!u.stall) openByItem.set(u.item, (openByItem.get(u.item) || 0) + 1);
+    }
     for (const it of stallItems) {
-        if (deficit <= 0) break;
-        const take = Math.min(Number(it.qty) || 0, deficit);
+        const take = openByItem.get(it) || 0;
         if (take <= 0) continue;
-        deficit -= take;
 
         const barnNights = it.nights != null ? (Number(it.nights) || nights) : nights;
         const nightlyRate = Number(it.unitPrice) || 0;
