@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe, Search } from 'lucide-react';
+import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe, Search, Eye } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
     assignStallToBooking, unassignStall, applyPlanToBarns,
@@ -61,6 +61,14 @@ const groupNameOf = (b) => {
     if (manual === NO_GROUP) return '';
     if (manual) return manual;
     return (b.trainerName || '').trim();
+};
+
+// The trainer / group name the PUBLIC chart shows for a booking — same rule as
+// get_public_stalling_chart(): manual group, else trainer, else the exhibitor's own name.
+const publicTrainerOf = (b) => {
+    const manual = (b.stallGroup || '').trim();
+    if (manual === NO_GROUP) return '';
+    return manual || (b.trainerName || '').trim() || (b.exhibitorName || '').trim();
 };
 
 // Left-rail search + assigned/unassigned filter, shared by every list the rail renders
@@ -305,7 +313,7 @@ const DEFAULT_CHART_PUBLISH = { enabled: false, layers: ['number', 'name', 'trai
 
 const AssignBoard = ({
     bookings = [], barns = [], rvAreas = [], supplies = [], onApplyBarns, onApplyRvAreas, onSetBookingGroup, meta = {},
-    chartPublish, onApplyChartPublish,
+    chartPublish, onApplyChartPublish, publishStatus,
 }) => {
     const { toast } = useToast();
     const [mode, setMode] = useState('stalls'); // 'stalls' | 'rv'
@@ -902,6 +910,29 @@ const AssignBoard = ({
                 </div>
             </div>
 
+            {/* Publish status at a glance — what visitors can see on the public Event page,
+                per side, without having to open the Publish Chart popup. */}
+            <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs mb-2">
+                <span className="flex items-center gap-1.5 text-muted-foreground"><Globe className="h-3.5 w-3.5" /> Public chart:</span>
+                {[
+                    { key: 'showStalls', label: 'Stalls', Icon: Home },
+                    { key: 'showRv', label: 'RV / Camping', Icon: Car },
+                ].map(s => {
+                    const live = !!chartPublish?.enabled && chartPublish?.[s.key] !== false;
+                    return (
+                        <span key={s.key} className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium',
+                            live ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300' : 'text-muted-foreground')}>
+                            <span className={cn('h-1.5 w-1.5 rounded-full', live ? 'bg-emerald-500' : 'bg-muted-foreground/40')} />
+                            {s.label}: {live ? 'Published' : 'Hidden'}
+                        </span>
+                    );
+                })}
+                <button type="button" className="text-primary hover:underline" onClick={() => setPublishDialogOpen(true)}>Change</button>
+                {chartPublish?.enabled && publishStatus && publishStatus !== 'published' && (
+                    <span className="text-amber-600">Housing is still {publishStatus} — visitors can't see the chart until it's Published.</span>
+                )}
+            </div>
+
             <div className="flex items-start gap-2 text-xs text-muted-foreground mb-3">
                 <MousePointerClick className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
                 <p>
@@ -1165,6 +1196,9 @@ const AssignBoard = ({
                 onOpenChange={setPublishDialogOpen}
                 value={chartPublish || DEFAULT_CHART_PUBLISH}
                 onSave={onApplyChartPublish}
+                barns={barns}
+                rvAreas={rvWithSpots}
+                bookings={bookings}
             />
         </DndContext>
     );
@@ -1173,23 +1207,27 @@ const AssignBoard = ({
 // What shows up on the public Event page — deliberately a SEPARATE choice from the
 // internal on-screen/print layers above, and limited to fields safe for anyone to
 // see (no horse counts, shavings or pre-bedding, which stay admin-only).
-const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
+const PublishChartDialog = ({ open, onOpenChange, value, onSave, barns = [], rvAreas = [], bookings = [] }) => {
     const { toast } = useToast();
     // Older saves only have one showInventory flag that covered both — carry it over.
+    // Likewise one `layers` list used to cover RV too: RV starts from a copy of it.
     const withDefaults = (v) => ({
         ...v,
         showStalls: v.showStalls !== false,
         showRv: v.showRv !== false,
         showStallInventory: v.showStallInventory ?? !!v.showInventory,
         showRvInventory: v.showRvInventory ?? !!v.showInventory,
+        rvLayers: v.rvLayers || v.layers,
     });
     const [draft, setDraft] = useState(() => withDefaults(value));
     const [saving, setSaving] = useState(false);
     React.useEffect(() => { if (open) setDraft(withDefaults(value)); }, [open, value]);
 
-    const toggle = (id) => setDraft(d => {
-        const next = d.layers.includes(id) ? d.layers.filter(l => l !== id) : [...d.layers, id];
-        return { ...d, layers: next.length ? next : d.layers };
+    // `key` is 'layers' (stalls) or 'rvLayers' (RV / camping). One box always stays on.
+    const toggle = (key, id) => setDraft(d => {
+        const cur = d[key] || [];
+        const next = cur.includes(id) ? cur.filter(l => l !== id) : [...cur, id];
+        return { ...d, [key]: next.length ? next : cur };
     });
 
     const save = async () => {
@@ -1212,7 +1250,7 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-md">
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2"><Globe className="h-4 w-4 text-primary" /> Publish Chart</DialogTitle>
                     <DialogDescription>
@@ -1255,14 +1293,37 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
                     )}
                 </div>
 
-                <div className="space-y-2">
-                    <p className="text-xs font-medium text-muted-foreground">What the public can see (stalls and RV)</p>
-                    {STALL_LAYERS.filter(l => PUBLIC_LAYER_IDS.includes(l.id)).map(l => (
-                        <label key={l.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                            <Checkbox checked={draft.layers.includes(l.id)} onCheckedChange={() => toggle(l.id)} />
-                            {l.label}
-                        </label>
-                    ))}
+                {/* One row per detail, one column per side — so names can be public for stalls
+                    but hidden for camping (or the other way round). */}
+                <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground">What the public can see</p>
+                    <div className="rounded-md border overflow-hidden">
+                        <div className="grid grid-cols-[1fr_88px_88px] items-center bg-muted/40 px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+                            <span />
+                            <span className="flex items-center justify-center gap-1"><Home className="h-3 w-3" /> Stalls</span>
+                            <span className="flex items-center justify-center gap-1"><Car className="h-3 w-3" /> RV / Camping</span>
+                        </div>
+                        {STALL_LAYERS.filter(l => PUBLIC_LAYER_IDS.includes(l.id)).map(l => (
+                            <div key={l.id} className="grid grid-cols-[1fr_88px_88px] items-center border-t px-3 py-1.5 text-sm">
+                                <span>{l.label}{l.id === 'number' && <span className="ml-1.5 text-[10px] text-muted-foreground">always shown</span>}</span>
+                                {[
+                                    { layersKey: 'layers', onKey: 'showStalls' },
+                                    { layersKey: 'rvLayers', onKey: 'showRv' },
+                                ].map(c => {
+                                    const sideOn = draft[c.onKey] !== false;
+                                    return (
+                                        <span key={c.layersKey} className={cn('flex justify-center', !sideOn && 'opacity-40 pointer-events-none')}>
+                                            {/* The public chart always prints the stall number (visitors need it to find
+                                                their stall), so that row is a fixed tick instead of a box that did nothing. */}
+                                            {l.id === 'number'
+                                                ? <Checkbox checked disabled />
+                                                : <Checkbox checked={sideOn && (draft[c.layersKey] || []).includes(l.id)} onCheckedChange={() => toggle(c.layersKey, l.id)} />}
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                        ))}
+                    </div>
                     <p className="text-[11px] text-muted-foreground">
                         Horses, shavings and pre-bedding stay admin-only — they never appear on the public chart.
                     </p>
@@ -1276,6 +1337,8 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
                     Inventory shows visitors how full the show is (e.g. "12 of 20 stalls booked"). Off by default.
                 </p>
 
+                <PublishPreview draft={draft} barns={barns} rvAreas={rvAreas} bookings={bookings} />
+
                 <DialogFooter>
                     <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
                     <Button onClick={save} disabled={saving}>
@@ -1284,6 +1347,111 @@ const PublishChartDialog = ({ open, onOpenChange, value, onSave }) => {
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+    );
+};
+
+// A few real boxes from the first barn / RV area that has someone in it. With nothing
+// assigned yet it falls back to made-up names, so the preview still shows what the
+// settings do.
+const EXAMPLE_UNITS = [
+    { id: 'x1', number: '1', taken: true, exhibitor: 'Jane Rider', trainer: 'Sunny Ranch' },
+    { id: 'x2', number: '2', taken: true, exhibitor: 'Tom Lee', trainer: 'Sunny Ranch' },
+    { id: 'x3', number: '3', taken: true, exhibitor: 'Ana Ruiz', trainer: 'Oak Stables' },
+    { id: 'x4', number: '4', taken: false, exhibitor: '', trainer: '' },
+];
+
+const pickPreviewSample = (containers, unitsOf, bookingById) => {
+    const all = (containers || []).map(c => ({
+        name: c.name,
+        units: unitsOf(c).filter(u => (u.type || 'stall') === 'stall'),
+    }));
+    const src = all.find(c => c.units.some(u => u.bookingId)) || all[0];
+    if (!src) return { name: '', units: EXAMPLE_UNITS, example: true, total: 0, taken: 0 };
+    const first = Math.max(0, src.units.findIndex(u => u.bookingId));
+    const units = src.units.slice(first, first + 4).map(u => {
+        const b = u.bookingId ? bookingById[u.bookingId] : null;
+        const live = b && b.status !== 'cancelled';
+        return { id: u.id, number: u.number, taken: !!u.bookingId, exhibitor: live ? (b.exhibitorName || '') : '', trainer: live ? publicTrainerOf(b) : '' };
+    });
+    const hasNames = units.some(u => u.taken);
+    const flat = all.flatMap(c => c.units);
+    return {
+        name: src.name,
+        units: hasNames ? units : EXAMPLE_UNITS,
+        example: !hasNames,
+        total: flat.length,
+        taken: flat.filter(u => u.bookingId).length,
+    };
+};
+
+// What visitors will see, drawn from the popup's current (unsaved) choices. Mirrors
+// PublicStallingChartPage: the trainer line, the exhibitor line (only when it differs
+// from the trainer) and the stall number.
+const PublishPreview = ({ draft, barns, rvAreas, bookings }) => {
+    const [view, setView] = useState('stalls');
+    const bookingById = useMemo(() => Object.fromEntries((bookings || []).map(b => [b.id, b])), [bookings]);
+    const stalls = useMemo(() => pickPreviewSample(barns, (b) => b.stalls || [], bookingById), [barns, bookingById]);
+    const rv = useMemo(() => pickPreviewSample(rvAreas, (a) => a.spots || [], bookingById), [rvAreas, bookingById]);
+
+    const stallsOn = draft.showStalls !== false;
+    const rvOn = draft.showRv !== false;
+    const both = stallsOn && rvOn;
+    const active = both ? view : (rvOn ? 'rv' : 'stalls');
+    const isRv = active === 'rv';
+    const sample = isRv ? rv : stalls;
+    const layers = (isRv ? draft.rvLayers : draft.layers) || [];
+    const showInv = isRv ? draft.showRvInventory : draft.showStallInventory;
+    const colorOf = {};
+    sample.units.forEach(u => { if (u.taken && !(u.trainer in colorOf)) colorOf[u.trainer] = PALETTE[Object.keys(colorOf).length % PALETTE.length]; });
+
+    return (
+        <div className="rounded-md border bg-muted/20 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Eye className="h-3.5 w-3.5" /> Preview — what visitors will see</p>
+                {both && (
+                    <div className="inline-flex rounded-full border bg-muted p-0.5">
+                        {[{ id: 'stalls', label: 'Stalls' }, { id: 'rv', label: 'RV / Camping' }].map(v => (
+                            <button key={v.id} type="button" onClick={() => setView(v.id)}
+                                className={cn('rounded-full px-2.5 py-0.5 text-[11px] font-medium', active === v.id ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground')}>
+                                {v.label}
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {!stallsOn && !rvOn ? (
+                <p className="text-xs text-amber-600">Both are off — visitors will see an empty chart.</p>
+            ) : (
+                <>
+                    <div>
+                        <p className="text-xs font-semibold">{sample.name || (isRv ? 'RV Area' : 'Barn')}{sample.example && <span className="ml-1.5 font-normal text-muted-foreground">(example — nothing assigned yet)</span>}</p>
+                        {showInv && (
+                            <p className="text-[11px] text-muted-foreground">
+                                {isRv ? `${rv.taken} of ${rv.total} RV spots booked` : `${stalls.taken} of ${stalls.total} stalls booked`}
+                            </p>
+                        )}
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                        {sample.units.map(u => {
+                            const color = u.taken ? colorOf[u.trainer] : null;
+                            const trainer = layers.includes('trainer') ? u.trainer : '';
+                            const exhibitor = layers.includes('name') ? u.exhibitor : '';
+                            return (
+                                <div key={u.id}
+                                    className="h-12 w-[76px] rounded-sm border flex flex-col items-center justify-center overflow-hidden px-0.5 font-mono"
+                                    style={color ? { background: color, borderColor: color, color: '#fff' } : { background: 'var(--background)' }}>
+                                    {trainer && <span className="text-[9px] font-semibold leading-tight truncate max-w-full">{trainer}</span>}
+                                    {exhibitor && exhibitor !== trainer && <span className="text-[8px] opacity-90 leading-tight truncate max-w-full">{exhibitor}</span>}
+                                    <span className="text-[8px] opacity-80 leading-tight">{u.number}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </>
+            )}
+            {!draft.enabled && <p className="text-[11px] text-muted-foreground">Not published yet — visitors will only see this once "Show on the public Event page" is on.</p>}
+        </div>
     );
 };
 

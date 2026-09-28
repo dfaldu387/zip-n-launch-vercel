@@ -5887,6 +5887,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             if (onUpdateBookingFields) await onUpdateBookingFields(bookingId, { stallGroup: groupName });
                         }}
                         chartPublish={chartPublish}
+                        publishStatus={publishStatus}
                         onApplyChartPublish={async (next) => {
                             setChartPublish(next);
                             await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish: next });

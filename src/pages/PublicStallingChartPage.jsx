@@ -24,7 +24,7 @@ const PALETTE = [
 
 const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack' };
 
-const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup }) => {
+const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, Icon = Home }) => {
     const cols = gridCols({ layoutCols, stallCount });
     const rowCount = Math.ceil(units.length / cols);
     const { rowLabels: defRows, colLabels: defCols } = computeGridLabels(units, cols);
@@ -33,7 +33,7 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
         <Card className="bg-secondary border-border">
             <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-lg">
-                    <Home className="h-4 w-4 text-primary" /> {name}
+                    <Icon className="h-4 w-4 text-primary" /> {name}
                 </CardTitle>
             </CardHeader>
             <CardContent>
@@ -217,6 +217,7 @@ const PublicStallingChartPage = () => {
                             rowLabels={area.rowLabels}
                             colLabels={area.colLabels}
                             colorByGroup={colorByGroup}
+                            Icon={Car}
                         />
                     </motion.div>
                 ))}
