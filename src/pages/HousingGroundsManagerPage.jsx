@@ -48,13 +48,13 @@ import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooki
 import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
-import { getBookingDisplayStatus } from '@/lib/bookingPricing';
+import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
 import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
-import { mergeBookingsForSave, createSerialQueue } from '@/lib/showDataWrite';
+import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from '@/lib/showDataWrite';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
     numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS,
@@ -3561,6 +3561,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const supportSpaces = pd.stallingService?.supportSpaces || [];
     const [supplies, setSupplies] = useState(() => pd.stallingService?.supplies || []);
     const [bookings, setBookings] = useState(() => pd.stallingService?.bookings || []);
+
+    // What this tab last knew barns/fees/RV areas/supplies to be — captured once at
+    // mount. Auto-save used to write this tab's local copy of these fields on EVERY
+    // save, even when this tab never touched them. A tab left open from earlier,
+    // never used to edit Fees, would then overwrite a fee just added in another tab
+    // with the stale copy it loaded on mount, the moment anything else about the
+    // show changed (even just assigning a stall triggers this same auto-save).
+    // fieldOrUnset (below) compares against this baseline so only a field THIS tab
+    // actually edited is ever sent — everything else falls back to whatever the
+    // database currently holds (handleSave's `?? latestSvc.field`).
+    const baselineRef = useRef({ barns, extraStallFees, extraRvFees, rvAreas, supplies, supportSpaces });
     // Everything that still holds space. Passed to the barn map so a box pinned to a
     // cancelled booking is not drawn as sold.
     const liveBookingIds = useMemo(() => getLiveBookingIds(bookings), [bookings]);
@@ -4198,7 +4209,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const wasAlreadyConfirmed = bookings.find(b => b.id === bookingId)?.status === 'confirmed';
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: newStatus } : b));
         const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
-        if (result?.barns) setBarns(result.barns);
+        // Cancelling releases stalls AND RV spots server-side (see
+        // updateBookingStatusImmediate) — mirror both into local state, same as barns
+        // already did, so the Assign boards show them free right away instead of only
+        // after a reload. baselineRef also advances so the next auto-save doesn't
+        // treat this server-driven change as "no local edit" and defer to a stale copy.
+        if (result?.barns) { setBarns(result.barns); baselineRef.current.barns = result.barns; }
+        if (result?.rvAreas) { setRvAreas(result.rvAreas); baselineRef.current.rvAreas = result.rvAreas; }
         // The server copy has no client-only activity log, so keep whichever log is
         // longer — otherwise the "stall assigned" lines logged a moment ago (right
         // before an auto-confirm) vanish.
@@ -4240,6 +4257,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // confirmed — the first pass just records who is already assigned, so
     // opening a show never mass-confirms (and mass-emails) old pending bookings.
     // Only Pending moves; Cancelled / Checked In / Checked Out are never touched.
+    //
+    // Runs in every lifecycle state, including Locked and Published — real
+    // customers only book once a show is Published, and Assign Stalls stays
+    // editable in Locked/Published (only Inventory/Fees/Pricing freeze), so
+    // that is exactly when this needs to fire. It used to skip while
+    // Locked/Published, which meant the one case Robert asked for — assigning
+    // a live customer's stalls after publish — never auto-confirmed at all.
     const fullyAssignedRef = useRef(null);
     useEffect(() => {
         const svc = pd?.stallingService || {};
@@ -4257,7 +4281,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         }
         const before = fullyAssignedRef.current;
         fullyAssignedRef.current = now;
-        if (!before || isLocked) return;
+        if (!before) return;
         for (const b of savedBookings) {
             if (before.get(b.id) === false && now.get(b.id) === true && (b.status || 'pending') === 'pending') {
                 changeBookingStatus(b.id, 'confirmed', 'Auto-confirmed — all stalls and RV spots assigned');
@@ -4268,7 +4292,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
 
     const removeBooking = async (bookingId) => {
         setBookings(prev => prev.filter(b => b.id !== bookingId));
-        if (onRemoveBookingImmediate) await onRemoveBookingImmediate(bookingId);
+        const result = onRemoveBookingImmediate ? await onRemoveBookingImmediate(bookingId) : null;
+        // Deleting releases the booking's stalls and RV spots in the database — mirror
+        // both into local state (same as changeBookingStatus does for cancel) so the
+        // Assign boards show them free immediately, not only after a reload.
+        if (result?.barns) { setBarns(result.barns); baselineRef.current.barns = result.barns; }
+        if (result?.rvAreas) { setRvAreas(result.rvAreas); baselineRef.current.rvAreas = result.rvAreas; }
     };
 
     // Shared by the Bookings tab and the Master List's Actions column so both
@@ -4793,6 +4822,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             const nights = Number(b.nights) || 1;
             const assignedForBooking = getAssignedStallsForBooking(b, barns);
 
+            // One booking can carry two line items for the same barn (a Flat Fee item
+            // plus a Nightly Fee item — see buildBarnStallOptionItems). pairStallUnits
+            // (same pairing the invoice uses) hands each assigned stall to exactly ONE
+            // of those items, so a barn bought as 1 Flat + 1 Nightly, both placed, is
+            // never counted as 2 stalls on EACH item (2 items × the barn's whole
+            // assigned count used to double stall revenue and cost).
+            const stallItemsForBooking = (b.items || []).filter(x => x.type === 'stall');
+            const stallCountByItem = new Map();
+            for (const unit of pairStallUnits(stallItemsForBooking, assignedForBooking, nights)) {
+                if (unit.stall) stallCountByItem.set(unit.item, (stallCountByItem.get(unit.item) || 0) + 1);
+            }
+
             // One booking can carry two line items for the same barn/RV area (a
             // Flat Fee item plus a Nightly Fee item — see buildBarnStallOptionItems).
             // Demand should still count once per booking per zone, so "Peak Demand"
@@ -4807,14 +4848,18 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 const itAmt = Number(it.amount || 0);
                 if (it.type === 'stall') {
                     const barn = barns.find(x => x.id === it.refId);
-                    const assignedHere = assignedForBooking.filter(s => s.barnId === it.refId).length;
-                    const count = assignedHere || Number(it.qty) || 0;
-                    const price = barn ? Number(barn.pricePerNight) || 0 : Number(it.unitPrice) || 0;
-                    const liveStallAmt = count * nights * price;
+                    const count = stallCountByItem.get(it) || (assignedForBooking.some(s => s.barnId === it.refId) ? 0 : Number(it.qty) || 0);
+                    const nightlyRate = barn ? Number(barn.pricePerNight) || 0 : Number(it.unitPrice) || 0;
+                    const flatRate = barn ? flatRateForBarn(barn.id, extraStallFees) : 0;
+                    const liveStallAmt = count * stallUnitPrice(it.feeType, nightlyRate, flatRate, nights);
                     if (isActive) {
                         stallRevenue += liveStallAmt;
                         realizedRevenue += liveStallAmt;
-                        realizedCost += count * nights * (barn ? nightlyCostForBarn(barn.id, extraStallFees) : 0);
+                        if (barn) {
+                            const nightlyCost = nightlyCostForBarn(barn.id, extraStallFees);
+                            const flatCost = flatCostForBarn(barn.id, extraStallFees);
+                            realizedCost += count * stallUnitPrice(it.feeType, nightlyCost, flatCost, nights);
+                        }
                         const bs = barnStats.get(it.refId);
                         if (bs) { bs.revenue += liveStallAmt; bs.bookings += 1; }
                     }
@@ -4850,7 +4895,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             const rs = rvTypeStats.get(rvTypeKey(area));
                             if (rs && isActive) { rs.occupied += Number(it.qty) || 0; rs.revenue += itAmt; }
                             if (isActive) {
-                                realizedCost += (Number(it.qty) || 0) * rvCostPerSpotTotal(area, nights);
+                                // RV spots can be split-purchased the same way stalls are (a
+                                // Flat item + a Nightly item for the same area — see
+                                // buildRvAreaOptionItems). rvCostPerSpotTotal always combined
+                                // both parts, so a Flat-only item wrongly picked up the
+                                // area's nightly cost too, and a split booking's cost was
+                                // inflated on both items. Price each item at only the part it
+                                // was actually bought under, same rule as stalls.
+                                const nightlyCost = nightlyCostForRvArea(area.id, extraRvFees);
+                                const flatCost = flatCostForRvArea(area.id, extraRvFees);
+                                realizedCost += (Number(it.qty) || 0) * stallUnitPrice(it.feeType, nightlyCost, flatCost, nights);
                             }
                         }
                     }
@@ -4943,7 +4997,25 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         // scheduled it, holding that moment's `bookings`. Anything saved in between
         // (e.g. auto-confirm on the last stall assignment) would be overwritten with
         // the old status. bookingsRef always holds the latest bookings.
-        await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings: bookingsRef.current, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, opts);
+        //
+        // barns/extraStallFees/extraRvFees/rvAreas/supplies/supportSpaces only go out
+        // when THIS tab actually changed them since baselineRef (see its comment) —
+        // otherwise undefined, so the wrapper's `field ?? latest.field` keeps whatever
+        // is currently saved instead of this tab's possibly-stale local copy.
+        const b = baselineRef.current;
+        await onSave({
+            barns: fieldOrUnset(barns, b.barns),
+            extraStallFees: fieldOrUnset(extraStallFees, b.extraStallFees),
+            rvAreas: fieldOrUnset(rvAreas, b.rvAreas),
+            extraRvFees: fieldOrUnset(extraRvFees, b.extraRvFees),
+            supportSpaces: fieldOrUnset(supportSpaces, b.supportSpaces),
+            supplies: fieldOrUnset(supplies, b.supplies),
+            bookings: bookingsRef.current, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish,
+        }, opts);
+        // What we just sent (or, for an unsent field, what this tab already believed
+        // it to be) is now the newest thing THIS tab knows — resets the comparison
+        // point for the next save.
+        baselineRef.current = { barns, extraStallFees, extraRvFees, rvAreas, supplies, supportSpaces };
         setLastSavedAt(new Date());
         setIsDirty(false);
     }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish]);
@@ -6839,17 +6911,20 @@ const HousingGroundsManagerPage = () => {
                         : b
                 );
 
-                // Cancelling has to give the stalls back. Only the status used to change,
-                // so the stalls stayed pinned to the cancelled booking — the occupancy
-                // chart stopped counting them, but every "is this stall free?" check still
-                // said taken: the barn map, auto-assign, the Assign Board and the public
-                // booking page. Those stalls could not be sold again until somebody
-                // unassigned each one by hand.
+                // Cancelling has to give the stalls AND RV spots back. Only the status used
+                // to change, so they stayed pinned to the cancelled booking — the occupancy
+                // chart stopped counting them, but every "is this stall/spot free?" check
+                // still said taken: the barn/RV map, auto-assign, the Assign Board and the
+                // public booking page. They could not be sold again until somebody
+                // unassigned each one by hand. (RV spots were missed here for a while —
+                // only Delete released them, Cancel only ever released stalls.)
                 //
                 // Released in the SAME write as the status, so a second save cannot put
-                // the old stall assignments back.
+                // the old assignments back.
                 let updatedBarns = svc.barns || [];
+                let updatedRvAreas = svc.rvAreas || [];
                 let releasedStalls = 0;
+                let releasedRvSpots = 0;
                 if (newStatus === 'cancelled') {
                     releasedStalls = updatedBarns.reduce(
                         (sum, barn) => sum + (barn.stalls || []).filter(s => s.bookingId === bookingId).length,
@@ -6858,20 +6933,31 @@ const HousingGroundsManagerPage = () => {
                     if (releasedStalls > 0) {
                         updatedBarns = unassignBookingStalls(updatedBarns, bookingId);
                     }
+                    releasedRvSpots = updatedRvAreas.reduce(
+                        (sum, area) => sum + (area.spots || []).filter(s => s.bookingId === bookingId).length,
+                        0
+                    );
+                    if (releasedRvSpots > 0) {
+                        updatedRvAreas = unassignBookingRvSpots(updatedRvAreas, bookingId);
+                    }
                 }
 
                 return {
                     data: stampModuleStatusOnSave({
                         ...latest,
-                        stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns },
+                        stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns, rvAreas: updatedRvAreas },
                     }, 'housing'),
-                    result: { barns: updatedBarns, bookings: updatedBookings, releasedStalls },
+                    result: { barns: updatedBarns, rvAreas: updatedRvAreas, bookings: updatedBookings, releasedStalls, releasedRvSpots },
                 };
             }).then(outcome => {
+                const released = [
+                    outcome.releasedStalls > 0 ? `${outcome.releasedStalls} stall${outcome.releasedStalls !== 1 ? 's' : ''}` : null,
+                    outcome.releasedRvSpots > 0 ? `${outcome.releasedRvSpots} RV spot${outcome.releasedRvSpots !== 1 ? 's' : ''}` : null,
+                ].filter(Boolean).join(' and ');
                 toast({
                     title: 'Status updated',
-                    description: outcome.releasedStalls > 0
-                        ? `Booking is now cancelled. ${outcome.releasedStalls} stall${outcome.releasedStalls !== 1 ? 's' : ''} released and available to book again.`
+                    description: released
+                        ? `Booking is now cancelled. ${released} released and available to book again.`
                         : `Booking is now ${newStatus.replace('_', ' ')}.`,
                 });
                 return outcome;
@@ -6914,7 +7000,7 @@ const HousingGroundsManagerPage = () => {
     const removeBookingImmediate = useCallback(async (bookingId) => {
         if (!selectedShowId) return;
         try {
-            await commitShowData(latest => {
+            return await commitShowData(latest => {
                 const svc = latest.stallingService || {};
                 const updatedBookings = (svc.bookings || []).filter(b => b.id !== bookingId);
                 const updatedBarns = unassignBookingStalls(svc.barns || [], bookingId);
@@ -6924,6 +7010,11 @@ const HousingGroundsManagerPage = () => {
                         ...latest,
                         stallingService: { ...svc, bookings: updatedBookings, barns: updatedBarns, rvAreas: updatedRvAreas },
                     }, 'housing'),
+                    // So the caller can refresh its own barns/rvAreas display right away —
+                    // the delete DOES release both stalls and RV spots in the database, but
+                    // without this the SAME tab kept showing them taken until reload (only
+                    // the bookings list itself was updated locally).
+                    result: { barns: updatedBarns, rvAreas: updatedRvAreas },
                 };
             });
         } catch (error) {
@@ -6957,23 +7048,38 @@ const HousingGroundsManagerPage = () => {
         try {
             await commitShowData(latest => {
                 const latestSvc = latest.stallingService || {};
+                // barns/extraStallFees/extraRvFees/rvAreas/supportSpaces/supplies arrive as
+                // undefined when this tab never touched them (see baselineRef in
+                // StallingDashboard) — resolved to the latest saved copy right here, BEFORE
+                // anything below reads them, so a stale tab's periodic save can no longer
+                // silently wipe a fee/barn/supply another tab just added.
+                const resolvedBarns = barns ?? latestSvc.barns ?? [];
+                const resolvedExtraStallFees = extraStallFees ?? latestSvc.extraStallFees ?? [];
+                const resolvedExtraRvFees = extraRvFees ?? latestSvc.extraRvFees ?? [];
+                const resolvedRvAreas = rvAreas ?? latestSvc.rvAreas ?? [];
+                const resolvedSupportSpaces = supportSpaces ?? latestSvc.supportSpaces ?? [];
+                const resolvedSupplies = supplies ?? latestSvc.supplies ?? [];
                 // Fees typed on the Fee Structure page (source !== 'housing'). Use the
                 // edited copy from the dashboard when provided (two-way sync), else fall
                 // back to whatever is on the record. Housing-sourced fees are regenerated.
                 const manualFees = editedManualFees || (latest.fees || []).filter(f => f.source !== 'housing');
-                const housingFees = buildHousingFees({ barns, extraStallFees, rvAreas, extraRvFees, supplies });
+                const housingFees = buildHousingFees({
+                    barns: resolvedBarns, extraStallFees: resolvedExtraStallFees,
+                    rvAreas: resolvedRvAreas, extraRvFees: resolvedExtraRvFees, supplies: resolvedSupplies,
+                });
                 const effectiveStatus = publishStatus || latestSvc.publishStatus || 'draft';
                 const stamped = stampModuleStatusOnSave({
                     ...latest,
                     stallingService: {
                         ...latestSvc,
-                        barns, rvAreas, supportSpaces, supplies,
+                        barns: resolvedBarns, rvAreas: resolvedRvAreas,
+                        supportSpaces: resolvedSupportSpaces, supplies: resolvedSupplies,
                         // The page's bookings merged into the LATEST saved list: a customer
                         // booking or card payment that landed while this page was open is
                         // kept, not overwritten by the older copy held here.
                         bookings: mergeBookingsForSave(latestSvc.bookings, bookings),
-                        extraStallFees: extraStallFees ?? latestSvc.extraStallFees ?? [],
-                        extraRvFees: extraRvFees ?? latestSvc.extraRvFees ?? [],
+                        extraStallFees: resolvedExtraStallFees,
+                        extraRvFees: resolvedExtraRvFees,
                         publishStatus: effectiveStatus,
                         // Keep prior values when an auto-save payload omits them.
                         moveInDate: moveInDate ?? latestSvc.moveInDate ?? '',

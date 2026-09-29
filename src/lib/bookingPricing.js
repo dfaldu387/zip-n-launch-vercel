@@ -23,21 +23,24 @@ import { flatRateForBarn, barnPerStallTotal } from './extraStallFees';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
-// Stall rows, grouped by each stall's REAL current barn (capped at the total
-// stalls ordered), plus a fallback row per line for whatever part of the
-// order isn't physically assigned yet.
-function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
-    const rows = [];
+// Pair each of a booking's stall items with the stalls actually assigned to it —
+// shared by the invoice (buildStallRows below) and by Analytics, so both count
+// and price a split Flat/Nightly booking the exact same way. Unrolls each item
+// into one "unit" per stall ordered, each carrying that item's OWN feeType/
+// nights, then fills a stall into the unit for ITS OWN barn first; only a stall
+// that was moved to a different barn than any item ordered spills into whatever
+// units are still open. Returns the flat unit list — unit.stall is the assigned
+// stall it was paired with, or null if that unit isn't physically placed yet.
+// A barn bought under BOTH a Flat item and a Nightly item (see
+// buildBarnStallOptionItems) stays two separate purchases after reassignment
+// too, never combined into one — and a unit's assigned-count is never counted
+// against a second item for the same barn (the bug this replaced: every item
+// for a barn re-read ALL of that barn's assigned stalls, so a barn bought as
+// 1 Flat + 1 Nightly, both placed, billed 2 stalls on EACH item).
+export function pairStallUnits(stallItems, assignedStalls, nights) {
     const orderedTotal = stallItems.reduce((s, it) => s + (Number(it.qty) || 0), 0);
     const used = (assignedStalls || []).slice(0, orderedTotal);
 
-    // Unroll each item into one "unit" per stall ordered, each carrying that
-    // item's OWN feeType/nights — so pairing a unit with whichever stall
-    // actually got assigned to it never loses which purchase option (Flat vs
-    // Nightly) it was bought under, even when that stall lands in a
-    // different barn than it was ordered in. A barn bought under BOTH a Flat
-    // item and a Nightly item (see buildBarnStallOptionItems) therefore stays
-    // two separate purchases after reassignment too, not one combined rate.
     const units = [];
     for (const it of stallItems) {
         const qty = Number(it.qty) || 0;
@@ -47,30 +50,44 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         }
     }
 
-    // Pair each physically-assigned stall with a purchased unit. A stall sitting
-    // in the barn a line was ordered for fills THAT line first; only stalls that
-    // were moved to a different barn take whatever units are still open, in
-    // order. Pairing purely by list position mixed up multi-barn orders: it could
-    // hand a Barn B stall the Barn A line's Flat/Nightly option, and it left the
-    // wrong line marked "not yet assigned".
-    const unitOfStall = new Map();
     const moved = [];
     for (const stall of used) {
         const unit = units.find(u => !u.stall && u.item.refId === stall.barnId);
-        if (unit) { unit.stall = stall; unitOfStall.set(stall, unit); } else moved.push(stall);
+        if (unit) unit.stall = stall; else moved.push(stall);
     }
     for (const stall of moved) {
         const unit = units.find(u => !u.stall);
-        if (unit) { unit.stall = stall; unitOfStall.set(stall, unit); }
+        if (unit) unit.stall = stall;
     }
 
+    return units;
+}
+
+// The per-stall price for one unit, given the barn's current nightly rate and
+// flat rate. Shared formula so revenue (amount rates) and cost (cost rates —
+// see Analytics) never drift apart on which fields apply for which feeType.
+export function stallUnitPrice(feeType, nightlyRate, flatRate, nights) {
+    if (feeType === 'flat') return flatRate;
+    if (feeType === 'per_night') return nightlyRate * nights;
+    // Legacy/mixed item with no recorded feeType: combine both parts into one
+    // per-stall figure (see the isMixed note below) — never happens for a
+    // split-selector item, which always carries its own feeType.
+    return nightlyRate * nights + flatRate;
+}
+
+// Stall rows, grouped by each stall's REAL current barn (capped at the total
+// stalls ordered), plus a fallback row per line for whatever part of the
+// order isn't physically assigned yet.
+function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
+    const rows = [];
+    const units = pairStallUnits(stallItems, assignedStalls, nights);
+
     const byGroup = new Map();
-    for (let i = 0; i < used.length; i++) {
-        const stall = used[i];
-        const unit = unitOfStall.get(stall);
-        const key = `${stall.barnId}::${unit?.feeType || ''}`;
-        if (!byGroup.has(key)) byGroup.set(key, { barnId: stall.barnId, feeType: unit?.feeType || null, nights: unit?.nights ?? nights, stalls: [] });
-        byGroup.get(key).stalls.push(stall);
+    for (const unit of units) {
+        if (!unit.stall) continue;
+        const key = `${unit.stall.barnId}::${unit.feeType || ''}`;
+        if (!byGroup.has(key)) byGroup.set(key, { barnId: unit.stall.barnId, feeType: unit.feeType, nights: unit.nights, stalls: [] });
+        byGroup.get(key).stalls.push(unit.stall);
     }
 
     for (const { barnId, feeType, nights: barnNights, stalls: group } of byGroup.values()) {
@@ -86,9 +103,7 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         // billed at exactly the option it was bought under.
         const isMixed = !feeType && nightlyRate > 0 && flatRate > 0;
         const billFlat = feeType === 'flat' || (!feeType && !isMixed && flatRate > 0);
-        const perStallUnit = feeType === 'per_night' ? nightlyRate * barnNights
-            : feeType === 'flat' ? flatRate
-                : nightlyRate * barnNights + flatRate;
+        const perStallUnit = stallUnitPrice(feeType, nightlyRate, flatRate, barnNights);
         const total = count * perStallUnit;
         const barnName = group[0]?.barnName || group[0]?.name || barnId;
         const numbers = group.map(s => s.number || s.stallNumber).filter(Boolean);
@@ -135,9 +150,7 @@ function buildStallRows(stallItems, assignedStalls, extraStallFees, nights) {
         const feeType = it.feeType;
         const isMixed = !feeType && nightlyRate > 0 && flatRate > 0;
         const billFlat = feeType === 'flat' || (!feeType && !isMixed && flatRate > 0);
-        const perStallUnit = feeType === 'per_night' ? nightlyRate * barnNights
-            : feeType === 'flat' ? flatRate
-                : nightlyRate * barnNights + flatRate;
+        const perStallUnit = stallUnitPrice(feeType, nightlyRate, flatRate, barnNights);
         const total = take * perStallUnit;
 
         const parts = [];

@@ -39,6 +39,18 @@ export function mergeBookingsForSave(saved, local) {
     });
 }
 
+// For admin-only fields (barns, fees, RV areas, supplies — never written by a
+// customer or the server) that go out on every save: only send a field's real
+// value when THIS tab actually changed it since it last knew the value
+// (`baseline`, normally what the tab loaded on mount). Otherwise return
+// undefined, so the caller's `field ?? latest.field` fallback keeps whatever
+// is currently saved instead of overwriting it with a stale local copy — the
+// bug where a tab left open (never touched Fees) silently wiped a fee another
+// tab had just added, the moment anything else on the show changed.
+export function fieldOrUnset(local, baseline) {
+    return JSON.stringify(local) === JSON.stringify(baseline) ? undefined : local;
+}
+
 // Runs async jobs strictly one after another. A failed job never blocks the next
 // one — its error goes only to the caller that queued it.
 export function createSerialQueue() {

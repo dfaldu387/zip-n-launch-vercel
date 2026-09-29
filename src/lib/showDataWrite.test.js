@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeBookingsForSave, createSerialQueue } from './showDataWrite';
+import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from './showDataWrite';
 
 // These pin down the "don't wipe other people's saves" rules for the Housing
 // page: a customer booking or Stripe payment that lands while the office has the
@@ -76,5 +76,33 @@ describe('createSerialQueue', () => {
         const good = enqueue(async () => 'ok');
         await expect(bad).rejects.toThrow('boom');
         await expect(good).resolves.toBe('ok');
+    });
+});
+
+// Pins the bug: a tab left open (never touched Fees) auto-saved on some unrelated
+// change (e.g. assigning a stall) and silently wiped a fee another tab had just
+// added, because the whole barns/extraStallFees/etc. field was always resent
+// from this tab's own (stale) local copy.
+describe('fieldOrUnset', () => {
+    it('returns undefined when the field matches the baseline (this tab never touched it)', () => {
+        const baseline = [{ id: 'f1', amount: 50 }];
+        const local = [{ id: 'f1', amount: 50 }]; // same content, different array instance
+        expect(fieldOrUnset(local, baseline)).toBeUndefined();
+    });
+
+    it('returns the local value when it actually changed since the baseline', () => {
+        const baseline = [{ id: 'f1', amount: 50 }];
+        const local = [{ id: 'f1', amount: 50 }, { id: 'f2', amount: 30 }];
+        expect(fieldOrUnset(local, baseline)).toBe(local);
+    });
+
+    it('treats an edited field value as changed, not just added/removed items', () => {
+        const baseline = [{ id: 'f1', amount: 50 }];
+        const local = [{ id: 'f1', amount: 75 }];
+        expect(fieldOrUnset(local, baseline)).toBe(local);
+    });
+
+    it('handles empty arrays on both sides as unchanged', () => {
+        expect(fieldOrUnset([], [])).toBeUndefined();
     });
 });

@@ -337,6 +337,7 @@ const AssignBoard = ({
     const [perBarnPages, setPerBarnPages] = useState(true); // print/download each barn on its own page
     const [publishDialogOpen, setPublishDialogOpen] = useState(false);
     const [removal, setRemoval] = useState(null); // pending stall/spot removal awaiting confirmation
+    const [stealConfirm, setStealConfirm] = useState(null); // pending assign that would take a unit away from a DIFFERENT booking
     const [collapsedBarns, setCollapsedBarns] = useState(() => new Set()); // barn/RV-area ids hidden, so a show with many barns doesn't force scrolling past ones you're not touching
     const toggleBarnCollapsed = (id) => setCollapsedBarns(prev => {
         const next = new Set(prev);
@@ -646,6 +647,15 @@ const AssignBoard = ({
         return null;
     };
 
+    // The unit object itself (for its number, when a confirmation needs to name it).
+    const findUnit = (unitId) => {
+        for (const c of cfg.containers) {
+            const u = (c.units || []).find(x => x.id === unitId);
+            if (u) return u;
+        }
+        return null;
+    };
+
     // A booking that ordered stalls in more than one barn (e.g. 1 in Barn A +
     // 1 in Barn B) can still be assigned however the organizer likes — nothing
     // blocks putting both in Barn A. But pricing now follows wherever a stall
@@ -671,8 +681,7 @@ const AssignBoard = ({
     // booked for. To add more, the booking must be updated on the Bookings tab
     // first. Reassigning a unit the booking already owns doesn't change its count,
     // so it's always allowed.
-    const tryAssign = (unitId, bookingId) => {
-        if (unitOwner(unitId) === bookingId) { cfg.assign(unitId, bookingId); return; }
+    const doAssign = (unitId, bookingId) => {
         const b = bookingById[bookingId];
         const req = b ? cfg.requested(b) : 0;
         const have = b ? cfg.assignedFor(b).length : 0;
@@ -689,6 +698,32 @@ const AssignBoard = ({
             if (hint) toast({ title: 'Different barn than ordered', description: hint });
         }
         cfg.assign(unitId, bookingId);
+    };
+
+    // A click or drag onto a unit that already belongs to a DIFFERENT booking used to
+    // silently hand it over — the previous owner just lost it with no warning, showed
+    // up short a stall, and nobody knew until they looked. Same two-step confirm as
+    // removing a unit, so taking someone else's stall is always a deliberate choice.
+    const tryAssign = (unitId, bookingId) => {
+        const owner = unitOwner(unitId);
+        if (owner === bookingId) { cfg.assign(unitId, bookingId); return; }
+        if (owner) {
+            const unit = findUnit(unitId);
+            setStealConfirm({
+                unitId,
+                bookingId,
+                number: unit?.number,
+                fromName: bookingById[owner]?.exhibitorName || 'another booking',
+                toName: bookingById[bookingId]?.exhibitorName || 'this booking',
+            });
+            return;
+        }
+        doAssign(unitId, bookingId);
+    };
+
+    const confirmSteal = () => {
+        if (stealConfirm) doAssign(stealConfirm.unitId, stealConfirm.bookingId);
+        setStealConfirm(null);
     };
 
     const handleUnitClick = (unit) => {
@@ -1157,6 +1192,18 @@ const AssignBoard = ({
                     </div>
                 )}
             </DragOverlay>
+
+            {/* Assigning a unit that belongs to someone else takes it away from them —
+                confirm first instead of silently handing it over. */}
+            <ConfirmationDialog
+                isOpen={!!stealConfirm}
+                onClose={() => setStealConfirm(null)}
+                onConfirm={confirmSteal}
+                title={`Give ${cfg.unitWord} ${stealConfirm?.number || ''} to ${stealConfirm?.toName || 'this booking'}?`}
+                description={`This ${cfg.unitWord} is currently assigned to "${stealConfirm?.fromName || 'another booking'}". Assigning it to "${stealConfirm?.toName || 'this booking'}" removes it from them, leaving that booking short one.`}
+                confirmText={`Reassign ${cfg.unitWord}`}
+                cancelText="Cancel"
+            />
 
             {/* Two-step removal — confirm before clearing a stall/spot from a booking. */}
             <ConfirmationDialog

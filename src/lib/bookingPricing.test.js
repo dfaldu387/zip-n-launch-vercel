@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeBookingTotal, buildLineItems } from '@/lib/bookingPricing';
+import { computeBookingTotal, buildLineItems, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
 
 // These tests lock in the money math for stall bookings. The cases below are the
 // real ones from the Larimer County Fair show, including the bug where bookings
@@ -242,5 +242,48 @@ describe('buildLineItems', () => {
         const booking = bookingWithStalls({ nights: 1, qty: 2 });
         const [row] = buildLineItems(booking, stalls(2, 50));
         expect(row.description).toContain('A1, A2');
+    });
+});
+
+// pairStallUnits / stallUnitPrice are shared by the invoice (buildStallRows above)
+// AND by the Analytics tab's revenue/cost math. These pin down the exact bug
+// Analytics used to have: every item for a barn re-read ALL of that barn's
+// assigned stalls, so a barn bought as 1 Flat + 1 Nightly, both placed, billed
+// (and Analytics counted) 2 stalls on EACH item — 4 stalls of money for 2 real
+// stalls. Analytics itself lives inline in HousingGroundsManagerPage.jsx and
+// isn't unit-testable directly, so these tests guard the shared logic it now
+// calls instead of duplicating.
+describe('pairStallUnits', () => {
+    it('gives each assigned stall to exactly one item, never both, when a barn was bought Flat + Nightly', () => {
+        const items = [
+            { type: 'stall', refId: 'barn-a', feeType: 'flat', qty: 1 },
+            { type: 'stall', refId: 'barn-a', feeType: 'per_night', qty: 1 },
+        ];
+        const assigned = stalls(2, 75, 'barn-a'); // both physically placed in Barn A
+        const units = pairStallUnits(items, assigned, 2);
+        const placed = units.filter(u => u.stall);
+        expect(placed).toHaveLength(2); // both stalls placed, none dropped
+        expect(new Set(placed.map(u => u.stall))).toEqual(new Set(assigned)); // no stall claimed twice
+        expect(placed.filter(u => u.item === items[0])).toHaveLength(1); // Flat item gets exactly 1
+        expect(placed.filter(u => u.item === items[1])).toHaveLength(1); // Nightly item gets exactly 1
+    });
+
+    it('leaves a unit unpaired (stall: null) when nothing is assigned for it yet', () => {
+        const items = [{ type: 'stall', refId: 'barn-a', qty: 2 }];
+        const units = pairStallUnits(items, [], 1);
+        expect(units).toHaveLength(2);
+        expect(units.every(u => u.stall === null)).toBe(true);
+    });
+});
+
+describe('stallUnitPrice', () => {
+    it('bills Flat at the flat rate only, ignoring nights', () => {
+        expect(stallUnitPrice('flat', 100, 40, 3)).toBe(40);
+    });
+    it('bills Nightly at rate × nights, ignoring the flat rate', () => {
+        expect(stallUnitPrice('per_night', 100, 40, 3)).toBe(300);
+    });
+    it('combines both parts for a legacy item with no feeType', () => {
+        expect(stallUnitPrice(null, 100, 40, 3)).toBe(340);
     });
 });
