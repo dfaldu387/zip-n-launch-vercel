@@ -5,17 +5,74 @@
 // assignment survives a reload even before the spots array is persisted.
 // All functions are non-mutating.
 
-// Turn an RV area's spotCount into a spots[] array, preserving any bookingId
-// already pinned to a spot (matched by its stable number).
+import { sequenceFrom } from '@/lib/numberSequence';
+
+// Turn an RV area's spotCount into a spots[] array, preserving what is already
+// pinned to a spot. Spots are matched by their stable id — the visible number can
+// be typed over (`customNumber`, e.g. 1001), so it is not a safe key. A spot with
+// nothing typed is named R1, R2, … by its position.
 export function ensureRvSpots(area) {
     const count = Math.max(0, Number(area?.spotCount) || 0);
-    const prior = new Map((area?.spots || []).map(s => [s.number, s.bookingId || null]));
+    const priorList = area?.spots || [];
+    const byId = new Map(priorList.map(s => [s.id, s]));
+    // Older saves may not carry the deterministic id; fall back to the default name.
+    const byDefaultName = new Map(priorList.filter(s => !s.customNumber).map(s => [s.number, s]));
     const spots = Array.from({ length: count }, (_, i) => {
         const n = i + 1;
-        const number = `R${n}`;
-        return { id: `${area.id}::spot::${n}`, number, bookingId: prior.get(number) || null };
+        const id = `${area.id}::spot::${n}`;
+        const prior = byId.get(id) || byDefaultName.get(`R${n}`) || null;
+        const typed = String(prior?.customNumber ?? '').trim();
+        return {
+            ...(prior || {}),
+            id,
+            number: typed || `R${n}`,
+            bookingId: prior?.bookingId || null,
+        };
     });
     return { ...area, spots };
+}
+
+// ── Custom spot numbers (a facility that labels its own sites, e.g. 1001, 1002) ──
+// Each returns a NEW spots[] for the area, ready for onUpdate('spots', …).
+
+// Type one spot's number. Empty text clears it (back to R1, R2…).
+export function setRvCustomNumber(area, spotId, value) {
+    const typed = String(value ?? '').trim();
+    const { spots } = ensureRvSpots(area);
+    if (!spots.some(s => s.id === spotId)) return null;
+    return ensureRvSpots({
+        ...area,
+        spots: spots.map(s => {
+            if (s.id !== spotId) return s;
+            const { customNumber, ...rest } = s;
+            return typed ? { ...rest, customNumber: typed } : rest;
+        }),
+    }).spots;
+}
+
+// Number every spot from a start value: "1001" → 1001, 1002…  "A101" → A101, A102…
+export function fillRvSequence(area, start) {
+    const labelAt = sequenceFrom(start);
+    if (!labelAt) return null;
+    const { spots } = ensureRvSpots(area);
+    return ensureRvSpots({ ...area, spots: spots.map((s, k) => ({ ...s, customNumber: labelAt(k) })) }).spots;
+}
+
+// Forget every typed number.
+export function clearRvCustomNumbers(area) {
+    const { spots } = ensureRvSpots(area);
+    return ensureRvSpots({ ...area, spots: spots.map(({ customNumber, ...rest }) => rest) }).spots;
+}
+
+// Numbers used by more than one spot (ignoring case).
+export function duplicateRvNumbers(spots = []) {
+    const seen = new Map();
+    for (const s of spots) {
+        if (!s.number) continue;
+        const key = String(s.number).toLowerCase();
+        seen.set(key, (seen.get(key) || 0) + 1);
+    }
+    return new Set([...seen].filter(([, count]) => count > 1).map(([key]) => key));
 }
 
 // Materialize spots for every RV area.

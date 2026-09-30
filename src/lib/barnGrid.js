@@ -9,6 +9,7 @@
 // column the organizer explicitly touched. Nothing else moves.
 
 import { v4 as uuidv4 } from 'uuid';
+import { sequenceFrom } from '@/lib/numberSequence';
 
 // ── Numbering ──
 
@@ -24,8 +25,13 @@ export const stallPrefix = (name) => {
 //   row        → B1, B2, B3 … the row label joined to the column label, so the stall
 //                name matches what's printed on the chart and stays put when the
 //                grid is reshaped.
+//   custom     → the organizer types each stall's number (1001, 1002… or whatever the
+//                facility already uses). The typed number lives on the stall itself
+//                (`customNumber`), so it follows that stall through every reshape. A
+//                stall with nothing typed yet falls back to its continuous name.
 export const NUMBERING_CONTINUOUS = 'continuous';
 export const NUMBERING_ROW = 'row';
+export const NUMBERING_CUSTOM = 'custom';
 export const numberingMode = (barn) => barn?.numberingMode || NUMBERING_CONTINUOUS;
 
 const isPhysical = (s) => {
@@ -62,6 +68,18 @@ const numberByRowCol = (arr, barn, cols) => {
     });
 };
 
+// Typed number wins; otherwise the continuous name, so a stall added later (new row,
+// painted back to a stall) is never left unnamed.
+const numberCustom = (arr, prefix) => {
+    let n = 0;
+    return arr.map(s => {
+        if (!isPhysical(s)) return { ...s, number: '' };
+        n += 1;
+        const typed = String(s.customNumber ?? '').trim();
+        return { ...s, number: typed || `${prefix}${n}` };
+    });
+};
+
 // `cols` is passed explicitly because a reshape numbers the NEW matrix while the
 // barn still carries its old layoutCols.
 export const renumberStalls = (arr, barn, cols) => {
@@ -69,7 +87,63 @@ export const renumberStalls = (arr, barn, cols) => {
     if (numberingMode(barnObj) === NUMBERING_ROW) {
         return numberByRowCol(arr, barnObj, cols ?? gridCols(barnObj));
     }
+    if (numberingMode(barnObj) === NUMBERING_CUSTOM) {
+        return numberCustom(arr, stallPrefix(barnObj.name));
+    }
     return numberContinuous(arr, stallPrefix(barnObj.name));
+};
+
+// ── Custom numbering helpers ──
+
+// Switching TO custom starts from the numbers the barn already shows, so nothing
+// jumps; the organizer then edits only the ones that differ. Never overwrites a
+// number typed earlier.
+export const seedCustomNumbers = (stalls = []) =>
+    stalls.map(s => (isPhysical(s) && (s.customNumber == null || s.customNumber === '') && s.number)
+        ? { ...s, customNumber: s.number }
+        : s);
+
+// Type one stall's number. Empty text clears it (falls back to the continuous name).
+// Returns the barn patch, or null if the stall isn't found.
+export const setCustomNumber = (barn, stallId, value) => {
+    const stalls = barn.stalls || [];
+    if (!stalls.some(s => s.id === stallId)) return null;
+    const typed = String(value ?? '').trim();
+    const next = stalls.map(s => {
+        if (s.id !== stallId) return s;
+        const { customNumber, ...rest } = s;
+        return typed ? { ...rest, customNumber: typed } : rest;
+    });
+    return { stalls: renumberStalls(next, { ...barn, numberingMode: NUMBERING_CUSTOM }, gridCols(barn)) };
+};
+
+// "1001" → 1001, 1002, 1003…   "A101" → A101, A102…   "007" → 007, 008…
+// Runs in grid order (left→right, top→bottom) over stalls and blocked boxes.
+// Returns the barn patch, or null if the start has no number at the end.
+export const fillCustomSequence = (barn, start) => {
+    const labelAt = sequenceFrom(start);
+    if (!labelAt) return null;
+    let k = 0;
+    const next = (barn.stalls || []).map(s => (isPhysical(s) ? { ...s, customNumber: labelAt(k++) } : s));
+    return { stalls: renumberStalls(next, { ...barn, numberingMode: NUMBERING_CUSTOM }, gridCols(barn)) };
+};
+
+// Forget every typed number; stalls fall back to the continuous names.
+export const clearCustomNumbers = (barn) => {
+    const next = (barn.stalls || []).map(({ customNumber, ...rest }) => rest);
+    return { stalls: renumberStalls(next, barn, gridCols(barn)) };
+};
+
+// Numbers used by more than one stall (ignoring case) — two stalls with the same
+// name would be indistinguishable on the chart, so the editor warns about them.
+export const duplicateStallNumbers = (stalls = []) => {
+    const seen = new Map();
+    for (const s of stalls) {
+        if (!isPhysical(s) || !s.number) continue;
+        const key = String(s.number).toLowerCase();
+        seen.set(key, (seen.get(key) || 0) + 1);
+    }
+    return new Set([...seen].filter(([, count]) => count > 1).map(([key]) => key));
 };
 
 // ── Geometry ──
@@ -271,7 +345,13 @@ export const resizeGrid = (barn, nextRows, nextCols) => {
                 const srcCol = Math.min(col, oldCols - 1);
                 type = existing[srcRow * oldCols + srcCol]?.type || 'stall';
             }
-            line.push(prev ? { id: prev.id, bookingId: prev.bookingId || null, type } : newCell(type));
+            line.push(prev
+                ? {
+                    id: prev.id, bookingId: prev.bookingId || null, type,
+                    // A typed stall number belongs to the stall, not its position.
+                    ...(prev.customNumber ? { customNumber: prev.customNumber } : {}),
+                }
+                : newCell(type));
         }
         built.push(line);
     }

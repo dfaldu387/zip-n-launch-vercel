@@ -37,6 +37,13 @@ import { ConfirmationDialog } from '@/components/ConfirmationDialog';
 import { invokeAsUser } from '@/lib/edgeFunctions';
 import { LogoUploader } from '@/components/show-structure/LogoUploader';
 import AddBookingDialog from '@/components/housing/AddBookingDialog';
+import HousingShowDetailsStep from '@/components/housing/HousingShowDetailsStep';
+import HousingTermsDialog from '@/components/housing/HousingTermsDialog';
+import SaveBarnLayoutDialog from '@/components/housing/SaveBarnLayoutDialog';
+import LoadBarnLayoutDialog from '@/components/housing/LoadBarnLayoutDialog';
+import { applyBarnLayout, barnHasAssignments } from '@/lib/savedBarnLayouts';
+import { buildNewShowRow, nextShowNumber } from '@/lib/housingNewShow';
+import { needsHousingTerms, HOUSING_TERMS_VERSION } from '@/lib/housingTerms';
 import MasterListPanel from '@/components/housing/MasterListPanel';
 import AssignBoard from '@/components/housing/AssignBoard';
 import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
@@ -45,7 +52,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
-import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking } from '@/lib/rvAssignment';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
@@ -57,7 +64,8 @@ import { nightsInRange } from '@/lib/stallNights';
 import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from '@/lib/showDataWrite';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
-    numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS,
+    numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS, NUMBERING_CUSTOM,
+    seedCustomNumbers, setCustomNumber, fillCustomSequence, clearCustomNumbers, duplicateStallNumbers,
     computeGridLabels, labelValue,
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
@@ -646,6 +654,8 @@ const StallMap = ({
     aisleCols = [], aisleRows = [], onToggleAisleCol = null, onToggleAisleRow = null,
     rowLabels = [], colLabels = [], onRenameRow = null, onRenameCol = null,
     onInsertRow = null, onDeleteRow = null, onInsertCol = null, onDeleteCol = null,
+    // Custom numbering: when given, stall/blocked boxes hold a typeable number instead of painting.
+    onRenameStall = null, duplicateNumbers = null,
 }) => {
     // Drag-to-paint: hold the pointer down and sweep across boxes to paint many.
     const paintingRef = React.useRef(false);
@@ -818,6 +828,10 @@ const StallMap = ({
                                     const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
                                     const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
                                     const showCenter = useCenterAisle && ci === leftCount;
+                                    // Typing numbers replaces painting for the whole map.
+                                    const paintable = !!onCellClick && !onRenameStall;
+                                    const typeable = !!onRenameStall && isPhysical;
+                                    const isDuplicate = isPhysical && !!stall.number && !!duplicateNumbers?.has(String(stall.number).toLowerCase());
                                     return (
                                         <React.Fragment key={stall.id}>
                                             {ci > 0 && !showCenter && colGap(ci)}
@@ -827,8 +841,8 @@ const StallMap = ({
                                                 </div>
                                             )}
                                             <div
-                                                onPointerDown={onCellClick ? (e) => { e.preventDefault(); paintingRef.current = true; onCellClick(stall.id); } : undefined}
-                                                onPointerEnter={onCellClick ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
+                                                onPointerDown={paintable ? (e) => { e.preventDefault(); paintingRef.current = true; onCellClick(stall.id); } : undefined}
+                                                onPointerEnter={paintable ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
                                                 title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : typeInfo.label)}
                                                 className={cn(
                                                     'flex items-center justify-center border text-[9px] font-mono font-semibold h-9 w-12 select-none',
@@ -836,11 +850,19 @@ const StallMap = ({
                                                     tight ? 'rounded-none' : 'rounded-md',
                                                     tight && ci > 0 && '-ml-px',
                                                     tight && ri > 0 && '-mt-px',
-                                                    onCellClick && 'cursor-pointer hover:ring-2 hover:ring-primary/40 hover:z-10',
+                                                    paintable && 'cursor-pointer hover:ring-2 hover:ring-primary/40 hover:z-10',
+                                                    isDuplicate && 'ring-2 ring-amber-500 z-10',
                                                     isBooked ? 'bg-blue-600 text-white border-blue-700' : typeInfo.cls
                                                 )}
                                             >
-                                                {label}
+                                                {typeable ? (
+                                                    <GridLabelInput
+                                                        value={stall.number || ''}
+                                                        onCommit={(val) => onRenameStall(stall.id, val)}
+                                                        title="Stall number — click to type your own"
+                                                        className="h-full w-full min-w-0 bg-transparent text-center text-[9px] font-mono font-semibold text-inherit outline-none cursor-text hover:bg-primary/10 focus:bg-primary/20"
+                                                    />
+                                                ) : label}
                                             </div>
                                         </React.Fragment>
                                     );
@@ -887,13 +909,18 @@ const StallMap = ({
 
 // ── Barn/Area Card ──
 
-const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId, liveBookingIds, moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showId, venueName = '', showName = '', liveBookingIds, moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const { toast } = useToast();
+    const [saveLayoutOpen, setSaveLayoutOpen] = useState(false);
+    const [loadLayoutOpen, setLoadLayoutOpen] = useState(false);
     const fileInputRef = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [paintType, setPaintType] = useState('stall');
     const [expanded, setExpanded] = useState(true);
     const [showLayout, setShowLayout] = useState(false);
+    // Custom numbering: true = click a box to type its number; false = click to paint its type.
+    const [editingNumbers, setEditingNumbers] = useState(true);
+    const [fillStart, setFillStart] = useState('1001');
     const totalStalls = (barn.stalls || []).filter(s => (s.type || 'stall') === 'stall').length;
     const booked = (barn.stalls || []).filter(s => s.bookingId && (s.type || 'stall') === 'stall').length;
     const typeInfo = STALL_TYPES.find(t => t.id === barn.stallType) || STALL_TYPES[0];
@@ -961,13 +988,52 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     };
     const hasCustomLabels = (barn.rowLabels || []).some(Boolean) || (barn.colLabels || []).some(Boolean);
 
-    // Switching scheme renames every stall in this barn at once.
+    // Copy a saved layout from the shared catalog into this barn. Only the shape
+    // changes; the barn keeps its name, prices, dates and fees. Refused while
+    // exhibitors are on its stalls — the new boxes would lose those assignments.
+    const loadSavedLayout = (row) => {
+        if (barnHasAssignments(barn)) {
+            toast({
+                title: 'This barn has assigned stalls',
+                description: 'Remove the stall assignments first, then load a layout.',
+                variant: 'destructive',
+            });
+            return;
+        }
+        const label = `${row.facility_name} · ${row.barn_name}`;
+        if (!window.confirm(`Replace this barn's layout with "${label}"?`)) return;
+        const patch = applyBarnLayout(barn, row.layout, uuidv4);
+        if (!patch) {
+            toast({ title: 'That layout can not be used', description: 'It looks damaged. Try another one.', variant: 'destructive' });
+            return;
+        }
+        onUpdateFields(patch);
+        setLoadLayoutOpen(false);
+        toast({ title: 'Layout loaded', description: `${label} · ${patch.stallCount} stalls` });
+    };
+
+    // Switching scheme renames every stall in this barn at once. Going to Custom
+    // starts from the numbers the barn shows now, so nothing jumps.
     const setNumberingMode = (mode) => {
         const nextBarn = { ...barn, numberingMode: mode };
+        const source = mode === NUMBERING_CUSTOM ? seedCustomNumbers(barn.stalls || []) : (barn.stalls || []);
         onUpdateFields({
             numberingMode: mode,
-            stalls: renumberStalls(barn.stalls || [], nextBarn, gridCols(barn)),
+            stalls: renumberStalls(source, nextBarn, gridCols(barn)),
         });
+    };
+
+    // Custom numbering: type a stall's number, fill a run from a start number, or reset.
+    const isCustomNumbering = numberingMode(barn) === NUMBERING_CUSTOM;
+    const duplicateNumbers = isCustomNumbering ? duplicateStallNumbers(barn.stalls || []) : new Set();
+    const renameStall = (stallId, value) => applyPatch(setCustomNumber(barn, stallId, value));
+    const applyFill = () => {
+        const patch = fillCustomSequence(barn, fillStart);
+        if (!patch) {
+            toast({ title: 'Enter a starting number', description: 'For example 1001, or A101.', variant: 'destructive' });
+            return;
+        }
+        applyPatch(patch);
     };
 
     // Paint a box's type, then renumber so stall numbers stay continuous and the
@@ -1171,19 +1237,59 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                 {showLayout ? '▾' : '▸'} Barn Layout ({booked}/{totalStalls} booked)
                                 {locked && <Lock className="h-3 w-3 text-amber-600" />}
                             </button>
-                            {showLayout && !readOnly && (
-                                <Button
-                                    type="button"
-                                    variant={locked ? 'default' : 'outline'}
-                                    size="sm"
-                                    className={cn('h-7 text-xs gap-1', locked && 'bg-amber-500 hover:bg-amber-600 text-white')}
-                                    onClick={() => onUpdate('layoutLocked', !locked)}
-                                >
-                                    <Lock className="h-3.5 w-3.5" />
-                                    {locked ? 'Locked — click to edit' : 'Lock layout'}
-                                </Button>
+                            {showLayout && (
+                                <div className="flex items-center gap-2">
+                                    {/* Saving to the shared catalog changes nothing in this show, so it
+                                        stays available even when the layout or show is locked. */}
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 text-xs gap-1"
+                                        onClick={() => setSaveLayoutOpen(true)}
+                                    >
+                                        <Save className="h-3.5 w-3.5" />
+                                        Save layout
+                                    </Button>
+                                    {!readOnly && !locked && (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs gap-1"
+                                            onClick={() => setLoadLayoutOpen(true)}
+                                        >
+                                            <Search className="h-3.5 w-3.5" />
+                                            Load saved layout
+                                        </Button>
+                                    )}
+                                    {!readOnly && (
+                                        <Button
+                                            type="button"
+                                            variant={locked ? 'default' : 'outline'}
+                                            size="sm"
+                                            className={cn('h-7 text-xs gap-1', locked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+                                            onClick={() => onUpdate('layoutLocked', !locked)}
+                                        >
+                                            <Lock className="h-3.5 w-3.5" />
+                                            {locked ? 'Locked — click to edit' : 'Lock layout'}
+                                        </Button>
+                                    )}
+                                </div>
                             )}
                         </div>
+                        <LoadBarnLayoutDialog
+                            open={loadLayoutOpen}
+                            onOpenChange={setLoadLayoutOpen}
+                            onPick={loadSavedLayout}
+                        />
+                        <SaveBarnLayoutDialog
+                            open={saveLayoutOpen}
+                            onOpenChange={setSaveLayoutOpen}
+                            barn={barn}
+                            defaultFacility={venueName}
+                            defaultLabel={showName}
+                        />
                         {showLayout && (
                             <div className="mt-3 space-y-3 rounded-md border border-dashed bg-muted/30 p-3">
                                 {/* Build the barn: Rows × Columns (+ optional center aisle) */}
@@ -1311,6 +1417,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                         {[
                                             { mode: NUMBERING_CONTINUOUS, label: 'Continuous' },
                                             { mode: NUMBERING_ROW, label: 'By row' },
+                                            { mode: NUMBERING_CUSTOM, label: 'Custom' },
                                         ].map(({ mode, label }) => {
                                             const active = numberingMode(barn) === mode;
                                             const sample = renumberStalls(barn.stalls || [], { ...barn, numberingMode: mode }, gridCols(barn))
@@ -1338,6 +1445,41 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                     </div>
                                 )}
 
+                                {/* Custom numbering tools — for facilities with their own labels (1001, 1002…) */}
+                                {!locked && isCustomNumbering && (
+                                    <div className="rounded-md border border-dashed p-3 space-y-2 text-xs">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="text-muted-foreground">Fill all stalls from:</span>
+                                            <Input
+                                                value={fillStart}
+                                                onChange={(e) => setFillStart(e.target.value)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') applyFill(); }}
+                                                className="h-7 w-24 text-xs"
+                                                placeholder="1001"
+                                            />
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={applyFill}>Fill</Button>
+                                            <span className="text-muted-foreground">(1001, 1002, 1003… left to right, top to bottom)</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => applyPatch(clearCustomNumbers(barn))}
+                                                className="text-muted-foreground hover:text-primary underline ml-auto"
+                                            >
+                                                Reset custom numbers
+                                            </button>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="text-muted-foreground">Click a box to:</span>
+                                            <Button type="button" size="sm" className="h-7 text-xs" variant={editingNumbers ? 'default' : 'outline'} onClick={() => setEditingNumbers(true)}>Type its number</Button>
+                                            <Button type="button" size="sm" className="h-7 text-xs" variant={editingNumbers ? 'outline' : 'default'} onClick={() => setEditingNumbers(false)}>Paint its type</Button>
+                                        </div>
+                                        {duplicateNumbers.size > 0 && (
+                                            <p className="text-amber-600 dark:text-amber-400">
+                                                Two or more stalls share a number ({[...duplicateNumbers].slice(0, 5).join(', ')}{duplicateNumbers.size > 5 ? '…' : ''}). Give each stall its own number so the chart is clear.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+
                                 {locked ? (
                                     /* Locked — read-only notice instead of the paint palette */
                                     <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200 dark:border-amber-700">
@@ -1347,6 +1489,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                 ) : (
                                     <>
                                         {/* Paint palette — pick a type, then click boxes to set them */}
+                                        {!(isCustomNumbering && editingNumbers) && (
                                         <div className="flex flex-wrap items-center gap-1.5">
                                             <span className="text-xs text-muted-foreground mr-1">Click a box to set it as:</span>
                                             {CELL_TYPES.map(t => (
@@ -1362,6 +1505,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                                 </Button>
                                             ))}
                                         </div>
+                                        )}
 
                                         <p className="text-[11px] text-muted-foreground">
                                             {showAisles
@@ -1381,6 +1525,8 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                     centerAisle={barn.centerAisle}
                                     tight={!showAisles}
                                     onCellClick={locked ? undefined : paintCell}
+                                    onRenameStall={locked || !isCustomNumbering || !editingNumbers ? undefined : renameStall}
+                                    duplicateNumbers={duplicateNumbers}
                                     aisleCols={barn.aisleCols || []}
                                     aisleRows={barn.aisleRows || []}
                                     onToggleAisleCol={locked ? undefined : (i) => toggleAisle('aisleCols', i)}
@@ -1438,10 +1584,31 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 
 const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
+    const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
     // must not freeze its price in the Fees tab, and vice-versa.
     const lockField = variant === 'inventory' ? 'locked' : 'feeLocked';
     const sectionLocked = rvArea[lockField] || false;
+
+    // Custom spot numbers (1001, 1002…) — there is no RV map yet, so they are typed
+    // in a simple list. Each is stored on its spot and follows it; bookings stay put.
+    const [showSpotNumbers, setShowSpotNumbers] = useState(false);
+    const [fillStart, setFillStart] = useState('1001');
+    const rvSpots = variant === 'inventory' ? ensureRvSpots(rvArea).spots : [];
+    const rvDuplicates = duplicateRvNumbers(rvSpots);
+    const hasCustomSpotNumbers = rvSpots.some(s => s.customNumber);
+    const renameSpot = (spotId, value) => {
+        const next = setRvCustomNumber(rvArea, spotId, value);
+        if (next) onUpdate('spots', next);
+    };
+    const applySpotFill = () => {
+        const next = fillRvSequence(rvArea, fillStart);
+        if (!next) {
+            toast({ title: 'Enter a starting number', description: 'For example 1001, or A101.', variant: 'destructive' });
+            return;
+        }
+        onUpdate('spots', next);
+    };
 
     return (
         <Card className={cn('border-l-4 border-l-cyan-500', rvArea.isOverflow && 'border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/10')}>
@@ -1556,6 +1723,72 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
                             placeholder="Water hookups, dump station, etc."
                         />
                     </div>
+
+                    {/* Custom spot numbers — for facilities that label their own sites */}
+                    {(rvArea.spotCount || 0) > 0 && (
+                        <div className="border-t pt-3 space-y-2">
+                            <button
+                                type="button"
+                                onClick={() => setShowSpotNumbers(v => !v)}
+                                className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                            >
+                                {showSpotNumbers ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                Spot numbers
+                                <span className="font-normal opacity-70">
+                                    ({rvSpots.slice(0, 2).map(s => s.number).join(', ')}…{hasCustomSpotNumbers ? ' custom' : ''})
+                                </span>
+                            </button>
+                            {showSpotNumbers && (
+                                <div className="rounded-md border border-dashed p-3 space-y-3 text-xs">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-muted-foreground">Fill all spots from:</span>
+                                        <Input
+                                            value={fillStart}
+                                            onChange={(e) => setFillStart(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') applySpotFill(); }}
+                                            className="h-7 w-24 text-xs"
+                                            placeholder="1001"
+                                        />
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={applySpotFill}>Fill</Button>
+                                        <span className="text-muted-foreground">(1001, 1002, 1003…)</span>
+                                        {hasCustomSpotNumbers && (
+                                            <button
+                                                type="button"
+                                                onClick={() => onUpdate('spots', clearRvCustomNumbers(rvArea))}
+                                                className="text-muted-foreground hover:text-primary underline ml-auto"
+                                            >
+                                                Reset custom numbers
+                                            </button>
+                                        )}
+                                    </div>
+                                    <p className="text-muted-foreground">Or click any spot below and type its own number, then press Enter.</p>
+                                    <div className="flex flex-wrap gap-1.5 max-h-56 overflow-y-auto">
+                                        {rvSpots.map(spot => {
+                                            const dup = rvDuplicates.has(String(spot.number).toLowerCase());
+                                            return (
+                                                <GridLabelInput
+                                                    key={spot.id}
+                                                    value={spot.number}
+                                                    title={spot.bookingId ? 'Spot number (booked)' : 'Spot number — click to type your own'}
+                                                    onCommit={(val) => renameSpot(spot.id, val)}
+                                                    className={cn(
+                                                        'h-8 w-16 rounded-sm border text-center text-[11px] font-mono font-semibold outline-none focus:border-primary focus:bg-primary/10',
+                                                        spot.bookingId ? 'bg-blue-600 text-white border-blue-700' : 'bg-background border-muted-foreground/40',
+                                                        dup && 'ring-2 ring-amber-500',
+                                                    )}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+                                    {rvDuplicates.size > 0 && (
+                                        <p className="text-amber-600 dark:text-amber-400">
+                                            Two or more spots share a number ({[...rvDuplicates].slice(0, 5).join(', ')}{rvDuplicates.size > 5 ? '…' : ''}). Give each spot its own number.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
                   </fieldset>
                 </CardContent>
             )}
@@ -5362,6 +5595,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             key={barn.id}
                                             barn={barn}
                                             showId={show.id}
+                                            venueName={pd.venueName || ''}
+                                            showName={pd.showName || show.project_name || ''}
                                             onUpdate={(field, value) => updateBarn(barn.id, field, value)}
                                             onUpdateFields={(patch) => updateBarnFields(barn.id, patch)}
                                             onRemove={() => setBarnToRemove(barn)}
@@ -6779,6 +7014,48 @@ const HousingGroundsManagerPage = () => {
     const [selectedShow, setSelectedShow] = useState(null);
     const [sectionSelectMount, setSectionSelectMount] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [isCreatingShow, setIsCreatingShow] = useState(false);
+    // Terms & Conditions approval, stored once per user on their profile.
+    // `termsProfile` is undefined until loaded (so the dialog never flashes).
+    const [termsProfile, setTermsProfile] = useState(undefined);
+    const [isSavingTerms, setIsSavingTerms] = useState(false);
+
+    useEffect(() => {
+        if (!user) return;
+        let cancelled = false;
+        supabase
+            .from('profiles')
+            .select('housing_terms_accepted_at, housing_terms_version')
+            .eq('id', user.id)
+            .maybeSingle()
+            .then(({ data, error }) => {
+                if (cancelled) return;
+                if (error) console.error('Error loading housing terms status:', error);
+                setTermsProfile(data || {});
+            });
+        return () => { cancelled = true; };
+    }, [user]);
+
+    const termsApproved = termsProfile !== undefined && !needsHousingTerms(termsProfile);
+    const termsPending = termsProfile !== undefined && !termsApproved;
+
+    const approveTerms = async () => {
+        if (!user) return;
+        setIsSavingTerms(true);
+        const stamp = { housing_terms_accepted_at: new Date().toISOString(), housing_terms_version: HOUSING_TERMS_VERSION };
+        const { error } = await supabase.from('profiles').update(stamp).eq('id', user.id);
+        setIsSavingTerms(false);
+        if (error) {
+            toast({ title: 'Could not save approval', description: error.message, variant: 'destructive' });
+            return;
+        }
+        setTermsProfile(stamp);
+    };
+
+    const declineTerms = () => {
+        if (showId) { navigate(`/horse-show-manager/show/${showId}`); return; }
+        setSelectedShow(null);
+    };
 
     const fetchShows = useCallback(async () => {
         if (!user) { setIsLoading(false); return; }
@@ -7042,6 +7319,34 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShowId, commitShowData, toast]);
 
+    // Start a brand-new show from the Show Details step (no linked show).
+    const createShowFromDetails = useCallback(async (details) => {
+        if (!user) return;
+        setIsCreatingShow(true);
+        try {
+            const { data: mine, error: mineError } = await supabase
+                .from('projects')
+                .select('project_data')
+                .eq('project_type', 'show')
+                .eq('user_id', user.id);
+            if (mineError) throw mineError;
+            const row = buildNewShowRow({ details, userId: user.id, showNumber: nextShowNumber(mine), id: uuidv4() });
+            const { data: created, error } = await supabase
+                .from('projects')
+                .insert([row])
+                .select('id, project_name, project_type, project_data, status, created_at')
+                .single();
+            if (error) throw error;
+            setShows(prev => [created, ...prev]);
+            setSelectedShow(created);
+            toast({ title: 'Show created', description: `${created.project_name} is ready for housing and grounds setup.` });
+        } catch (error) {
+            toast({ title: 'Could not create show', description: error.message, variant: 'destructive' });
+        } finally {
+            setIsCreatingShow(false);
+        }
+    }, [user, toast]);
+
     const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, { silent = false } = {}) => {
         if (!selectedShowId) return;
         setIsSaving(true);
@@ -7141,7 +7446,18 @@ const HousingGroundsManagerPage = () => {
                         </div>
                     )}
 
-                    {selectedShow && (
+                    {!selectedShow && !showId && (
+                        <HousingShowDetailsStep onCreate={createShowFromDetails} isCreating={isCreatingShow} />
+                    )}
+
+                    <HousingTermsDialog
+                        open={!!selectedShow && termsPending}
+                        isSaving={isSavingTerms}
+                        onApprove={approveTerms}
+                        onDecline={declineTerms}
+                    />
+
+                    {selectedShow && termsApproved && (
                         <>
                             {/* Event cover image — outside the editor so it stays editable even when Published. */}
                             <Card className="mb-6 border-l-4 border-l-pink-500">
