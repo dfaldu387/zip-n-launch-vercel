@@ -54,6 +54,42 @@ export const stageIndexOf = (order) => {
 
 export const isDelivered = (order) => stageIndexOf(order) === SUPPLY_STAGES.length - 1;
 
+// Shared by the Hay & Shavings per-card "All items" action and the bulk Load
+// Sheet sweep so both compute the exact same per-item stage updates. Pure —
+// no DB/email side effects — which is also what makes it directly testable.
+//
+// allowBackward: a per-order manual action is a human looking at ONE order and
+// deliberately picking a stage, including correcting a mistake by moving an
+// item backward — that must stay allowed (the default). A BULK sweep across
+// many orders (allowBackward: false) is different: nobody is looking at each
+// item first, so it must never knock an item that's already further along
+// (e.g. Delivered) backward just because a SIBLING item on the same order is
+// still behind — stageIndexOf takes the order's slowest item, so a mixed
+// order still counts as "undelivered" and gets swept up.
+export function computeItemStageUpdates(order, targetKey, { allowBackward = true } = {}) {
+    const items = order?.items || [];
+    const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
+    const target = SUPPLY_STAGES[targetIndex];
+    const now = new Date().toISOString();
+    const nextItemStatuses = { ...(order?.itemStatuses || {}) };
+    let anyChanged = false;
+    let anyAdvancedToDelivered = false;
+    let skippedBackward = 0;
+    for (const it of items) {
+        if (!it.refId) continue;
+        const { status, stageTimestamps } = getItemStatus(order, it.refId);
+        const curIdx = SUPPLY_STAGES.findIndex(s => s.key === status);
+        if (curIdx === targetIndex) continue;
+        if (!allowBackward && curIdx > targetIndex) { skippedBackward += 1; continue; }
+        anyChanged = true;
+        const stamps = { ...stageTimestamps };
+        if (targetIndex > curIdx) stamps[target.key] = now;
+        nextItemStatuses[it.refId] = { status: target.key, stageTimestamps: stamps };
+        if (target.key === 'delivered' && targetIndex > curIdx) anyAdvancedToDelivered = true;
+    }
+    return { nextItemStatuses, anyChanged, anyAdvancedToDelivered, skippedBackward, target };
+}
+
 export const getSupplyStage = (order) => SUPPLY_STAGES[stageIndexOf(order)];
 
 // Most recent stage timestamp across every supply item on the order — for

@@ -57,7 +57,7 @@ import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
-import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup } from '@/lib/supplyStatus';
+import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
@@ -2645,26 +2645,14 @@ const ItemStatusRow = ({ order, item, onFulfill, showName, unitOf }) => {
 // delivered, and I get an email." Sends one combined email, same as before.
 // Shared by the per-card "All items" dropdown and the bulk Load Sheet
 // "Mark as Out for Delivery" action so both behave identically.
-const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast, setBusy = () => {} }) => {
+// See computeItemStageUpdates (supplyStatus.js) for the allowBackward rule this
+// shares with the bulk Load Sheet sweep below.
+const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast, setBusy = () => {}, allowBackward = true }) => {
     const items = order.items || [];
-    const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
-    const target = SUPPLY_STAGES[targetIndex];
+    const { nextItemStatuses, anyChanged, anyAdvancedToDelivered, skippedBackward, target } =
+        computeItemStageUpdates(order, targetKey, { allowBackward });
+    if (!anyChanged) return { skippedBackward };
     const now = new Date().toISOString();
-    const nextItemStatuses = { ...(order.itemStatuses || {}) };
-    let anyAdvancedToDelivered = false;
-    let anyChanged = false;
-    for (const it of items) {
-        if (!it.refId) continue;
-        const { status, stageTimestamps } = getItemStatus(order, it.refId);
-        const curIdx = SUPPLY_STAGES.findIndex(s => s.key === status);
-        if (curIdx === targetIndex) continue;
-        anyChanged = true;
-        const stamps = { ...stageTimestamps };
-        if (targetIndex > curIdx) stamps[target.key] = now;
-        nextItemStatuses[it.refId] = { status: target.key, stageTimestamps: stamps };
-        if (target.key === 'delivered' && targetIndex > curIdx) anyAdvancedToDelivered = true;
-    }
-    if (!anyChanged) return;
 
     if (anyAdvancedToDelivered) setBusy(true);
 
@@ -2677,11 +2665,11 @@ const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast
         _activityMessage: `All items marked ${target.label}`,
     });
 
-    if (!anyAdvancedToDelivered) return;
+    if (!anyAdvancedToDelivered) return { skippedBackward };
     if (!order.email) {
         setBusy(false);
         toast({ title: 'Marked delivered', description: 'No email on this order, so no delivery notice was sent.' });
-        return;
+        return { skippedBackward };
     }
     const total = order.totalAmount ?? order.amount ?? 0;
     try {
@@ -2709,6 +2697,7 @@ const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast
     } finally {
         setBusy(false);
     }
+    return { skippedBackward };
 };
 
 const SOURCE_BADGE = {
@@ -4670,13 +4659,24 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const markLoadSheetOutForDelivery = async () => {
         setIsMarkingOutForDelivery(true);
         try {
+            // allowBackward: false — this sweeps many orders at once with nobody looking
+            // at each item, so an item already Delivered must never be knocked back to
+            // "Out for delivery" just because a sibling item on the same order is still
+            // behind (the order itself still counts as "undelivered" by its slowest item).
+            let skippedBackward = 0;
             for (const order of loadSheetOrders) {
-                await applyAllItemsStage({
+                const outcome = await applyAllItemsStage({
                     order, targetKey: 'out_for_delivery',
                     onFulfill: updateBookingFieldsLocal, showName: show.project_name, toast,
+                    allowBackward: false,
                 });
+                skippedBackward += outcome?.skippedBackward || 0;
             }
-            toast({ title: 'Out for delivery', description: `${loadSheetOrders.length} order${loadSheetOrders.length === 1 ? '' : 's'} marked out for delivery.` });
+            toast({
+                title: 'Out for delivery',
+                description: `${loadSheetOrders.length} order${loadSheetOrders.length === 1 ? '' : 's'} marked out for delivery.`
+                    + (skippedBackward > 0 ? ` ${skippedBackward} already-delivered item${skippedBackward === 1 ? '' : 's'} left untouched.` : ''),
+            });
             setLoadSheetIds(new Set());
         } finally {
             setIsMarkingOutForDelivery(false);

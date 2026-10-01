@@ -78,12 +78,26 @@ function flatRateForBarn(barnId: string, stallFees: any[] = []): number {
   }, 0);
 }
 
-// Invoice line items with LIVE amounts. Each ordered stall unit keeps the
-// feeType/nights it was bought under; pairing it with whichever physical
-// stall fulfilled it (capped at the ordered total, same as before) and
-// grouping by (real assigned barn, feeType) prices Flat-bought stalls at
-// their Flat rate and Nightly-bought stalls at their Nightly rate, wherever
-// they actually ended up. Other items keep their stored amount.
+// The per-stall price for one unit — mirrors stallUnitPrice() in
+// src/lib/bookingPricing.js.
+function stallUnitPrice(feeType: string | null, nightlyRate: number, flatRate: number, nights: number): number {
+  if (feeType === "flat") return flatRate;
+  if (feeType === "per_night") return nightlyRate * nights;
+  return nightlyRate * nights + flatRate;
+}
+
+// Invoice line items with LIVE amounts. Mirrors pairStallUnits()/
+// buildStallRows() in src/lib/bookingPricing.js: unrolls each stall item into
+// one "unit" per stall ordered (keeping that item's own feeType/nights), then
+// fills a physical stall into the unit for ITS OWN barn first — only a stall
+// that moved to a different barn than any item ordered spills into whatever
+// units are still open. Replaces matching stalls to units purely by LIST
+// POSITION, which could hand a Barn B stall the Barn A line's Flat/Nightly
+// option on a multi-barn order, and — the money bug this fixes — on a
+// partly-assigned multi-barn order could bill the already-placed barn twice
+// while never billing the barn that's still unassigned (the "deficit" below
+// used one counter consumed in line order, not scoped to each line's own
+// still-open units). Other items keep their stored amount.
 function buildBookingLineItems(projectData: any, booking: any) {
   const rows: Array<{ description: string; total: number }> = [];
   const extraStallFees = projectData?.stallingService?.extraStallFees || [];
@@ -95,11 +109,12 @@ function buildBookingLineItems(projectData: any, booking: any) {
   if (stallItems.length > 0) {
     const orderedTotal = stallItems.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
 
-    const units: Array<{ feeType: string | null; nights: number }> = [];
+    type Unit = { item: any; feeType: string | null; nights: number; stall: { barnId: string; pricePerNight: number } | null };
+    const units: Unit[] = [];
     for (const it of stallItems) {
       const qty = Number(it.qty) || 0;
       const unitNights = it.nights != null ? (Number(it.nights) || bookingNights) : bookingNights;
-      for (let i = 0; i < qty; i++) units.push({ feeType: it.feeType || null, nights: unitNights });
+      for (let i = 0; i < qty; i++) units.push({ item: it, feeType: it.feeType || null, nights: unitNights, stall: null });
     }
 
     const barns = projectData?.stallingService?.barns || [];
@@ -113,43 +128,51 @@ function buildBookingLineItems(projectData: any, booking: any) {
     }
     const used = assignedStalls.slice(0, orderedTotal);
 
+    const moved: typeof used = [];
+    for (const stall of used) {
+      const unit = units.find((u) => !u.stall && u.item.refId === stall.barnId);
+      if (unit) unit.stall = stall; else moved.push(stall);
+    }
+    for (const stall of moved) {
+      const unit = units.find((u) => !u.stall);
+      if (unit) unit.stall = stall;
+    }
+
     const groups = new Map<string, { barnId: string; feeType: string | null; nights: number; count: number; pricePerNight: number }>();
-    for (let i = 0; i < used.length; i++) {
-      const stall = used[i];
-      const unit = units[i];
-      const key = `${stall.barnId}::${unit?.feeType || ""}`;
+    for (const unit of units) {
+      if (!unit.stall) continue;
+      const key = `${unit.stall.barnId}::${unit.feeType || ""}`;
       const g = groups.get(key);
       if (g) {
         g.count += 1;
       } else {
-        groups.set(key, { barnId: stall.barnId, feeType: unit?.feeType || null, nights: unit?.nights ?? bookingNights, count: 1, pricePerNight: stall.pricePerNight });
+        groups.set(key, { barnId: unit.stall.barnId, feeType: unit.feeType, nights: unit.nights, count: 1, pricePerNight: unit.stall.pricePerNight });
       }
     }
 
     for (const { barnId, feeType, nights, count, pricePerNight } of groups.values()) {
       const flatRate = flatRateForBarn(barnId, extraStallFees);
-      const total = feeType === "flat" ? count * flatRate
-        : feeType === "per_night" ? count * nights * pricePerNight
-          : count * (nights * pricePerNight + flatRate);
+      const total = count * stallUnitPrice(feeType, pricePerNight, flatRate, nights);
       rows.push({ description: `Stalls × ${count}`, total });
     }
 
     // Whatever isn't physically assigned yet, priced from each line's own
     // originally-ordered barn (current flat rate if it has one, else the
-    // unitPrice frozen at booking time).
-    let deficit = Math.max(0, orderedTotal - used.length);
+    // unitPrice frozen at booking time). Only the units no stall was paired
+    // with are still open — counted PER LINE, so a line whose stalls are
+    // already placed is never billed a second time.
+    const openByItem = new Map<any, number>();
+    for (const u of units) {
+      if (!u.stall) openByItem.set(u.item, (openByItem.get(u.item) || 0) + 1);
+    }
     for (const it of stallItems) {
-      if (deficit <= 0) break;
-      const take = Math.min(Number(it.qty) || 0, deficit);
+      const take = openByItem.get(it) || 0;
       if (take <= 0) continue;
-      deficit -= take;
 
       const itNights = it.nights != null ? (Number(it.nights) || bookingNights) : bookingNights;
       const nightlyRate = Number(it.unitPrice) || 0;
       const flatRate = flatRateForBarn(it.refId, extraStallFees);
-      const total = it.feeType === "flat" ? take * flatRate
-        : it.feeType === "per_night" ? take * itNights * nightlyRate
-          : take * (itNights * nightlyRate + flatRate);
+      const total = take * stallUnitPrice(it.feeType, nightlyRate, flatRate, itNights);
       rows.push({ description: it.name || "Stalls", total });
     }
   } else if (items.length === 0) {

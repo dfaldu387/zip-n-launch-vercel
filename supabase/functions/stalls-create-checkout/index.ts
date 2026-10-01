@@ -91,8 +91,50 @@ function barnFlatRate(barnId: string, extraStallFees: any[]): number {
   }, 0);
 }
 
-// Live total = assigned stalls priced at whichever option was bought (Flat Fee
-// charges once per stall, Nightly Fee × nights), plus non-stall items.
+// The per-stall price for one unit — mirrors stallUnitPrice() in
+// src/lib/bookingPricing.js.
+function stallUnitPrice(feeType: string | null, nightlyRate: number, flatRate: number, nights: number): number {
+  if (feeType === "flat") return flatRate;
+  if (feeType === "per_night") return nightlyRate * nights;
+  return nightlyRate * nights + flatRate;
+}
+
+// Pair each stall item with the stalls actually assigned to it — mirrors
+// pairStallUnits() in src/lib/bookingPricing.js (Deno functions can't share
+// src/lib imports, so this is a deliberate duplicate — keep both in sync). A
+// stall fills the unit for ITS OWN barn first; only a stall moved to a
+// different barn than any item ordered spills into whatever units are still
+// open. Replaces "every item for a barn re-reads ALL of that barn's assigned
+// stalls" — the bug where a partly-assigned multi-barn order could bill one
+// barn twice while never billing the other barn at all.
+function pairStallUnits(stallItems: any[], assignedStalls: Array<{ barnId: string; pricePerNight: number }>, nights: number) {
+  const orderedTotal = stallItems.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+  const used = (assignedStalls || []).slice(0, orderedTotal);
+
+  type Unit = { item: any; feeType: string | null; nights: number; stall: { barnId: string; pricePerNight: number } | null };
+  const units: Unit[] = [];
+  for (const it of stallItems) {
+    const qty = Number(it.qty) || 0;
+    const unitNights = it.nights != null ? (Number(it.nights) || nights) : nights;
+    for (let i = 0; i < qty; i++) units.push({ item: it, feeType: it.feeType || null, nights: unitNights, stall: null });
+  }
+
+  const moved: typeof used = [];
+  for (const stall of used) {
+    const unit = units.find((u) => !u.stall && u.item.refId === stall.barnId);
+    if (unit) unit.stall = stall; else moved.push(stall);
+  }
+  for (const stall of moved) {
+    const unit = units.find((u) => !u.stall);
+    if (unit) unit.stall = stall;
+  }
+  return units;
+}
+
+// Live total = each assigned stall priced at whichever option it was bought
+// under (Flat Fee once per stall, Nightly Fee × nights), plus non-stall
+// items. Mirrors buildLineItems()/computeBookingTotal() in
+// src/lib/bookingPricing.js.
 function computeBookingTotal(projectData: any, booking: any): number {
   const nights = Number(booking?.nights) || 1;
   const assigned = assignedStallsForBooking(projectData, booking?.id);
@@ -101,28 +143,36 @@ function computeBookingTotal(projectData: any, booking: any): number {
   let total = 0;
 
   if (items.length > 0) {
-    for (const it of items) {
-      if (it.type === "stall") {
-        const stallsInThisBarn = assigned.filter((s) => s.barnId === it.refId);
-        const count = stallsInThisBarn.length || Number(it.qty) || 0;
-        const flatRate = barnFlatRate(it.refId, extraStallFees);
-        const feeType = it.feeType;
+    const stallItems = items.filter((it: any) => it.type === "stall");
+    const otherItems = items.filter((it: any) => it.type !== "stall");
 
-        if (feeType === "flat") {
-          total += count * flatRate;
-        } else if (feeType === "per_night") {
-          const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
-          total += count * nights * price;
-        } else if (flatRate > 0) {
-          // Legacy item with no recorded feeType — same fallback as get_public_booking().
-          total += count * flatRate;
-        } else {
-          const price = stallsInThisBarn[0]?.pricePerNight ?? Number(it.unitPrice) ?? 0;
-          total += count * nights * price;
-        }
-      } else {
-        total += Number(it.amount) || 0;
+    if (stallItems.length > 0) {
+      const units = pairStallUnits(stallItems, assigned, nights);
+      for (const unit of units) {
+        if (!unit.stall) continue;
+        const nightlyRate = unit.stall.pricePerNight ?? 0;
+        const flatRate = barnFlatRate(unit.stall.barnId, extraStallFees);
+        total += stallUnitPrice(unit.feeType, nightlyRate, flatRate, unit.nights);
       }
+      // Whatever isn't physically assigned yet, priced from each line's own
+      // originally-ordered barn/rate — only units no stall was paired with are
+      // still open, counted PER ITEM, so an item whose stalls are already
+      // placed is never billed a second time.
+      const openByItem = new Map<any, number>();
+      for (const u of units) {
+        if (!u.stall) openByItem.set(u.item, (openByItem.get(u.item) || 0) + 1);
+      }
+      for (const it of stallItems) {
+        const take = openByItem.get(it) || 0;
+        if (take <= 0) continue;
+        const barnNights = it.nights != null ? (Number(it.nights) || nights) : nights;
+        const nightlyRate = Number(it.unitPrice) || 0;
+        const flatRate = barnFlatRate(it.refId, extraStallFees);
+        total += take * stallUnitPrice(it.feeType, nightlyRate, flatRate, barnNights);
+      }
+    }
+    for (const it of otherItems) {
+      total += Number(it.amount) || 0;
     }
   } else {
     total += Number(booking?.amount) || 0;

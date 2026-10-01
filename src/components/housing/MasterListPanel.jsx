@@ -261,6 +261,12 @@ const MasterListRow = ({
     const [payError, setPayError] = useState('');
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    // A card/online payment is money Stripe already collected — setting it back to
+    // Unpaid here doesn't refund anything, it only erases THIS APP'S OWN RECORD that
+    // the exhibitor paid. The payment dropdown already blocks picking "Paid (online)"
+    // by hand, but switching AWAY from it to Unpaid was a single click with no
+    // warning. Ask first, same two-step pattern as Delete.
+    const [confirmUnpaidOnline, setConfirmUnpaidOnline] = useState(false);
 
     // Notes have their own Edit button, separate from the booking-fields
     // edit above — Robert's mockup treats them as their own block, and they
@@ -295,15 +301,31 @@ const MasterListRow = ({
     const cancelEdit = () => { setDraft(null); setIsEditing(false); setPayError(''); };
     const saveEdit = () => {
         if (!draft) { setIsEditing(false); return; }
+        const currentPay = booking.paymentStatus || 'unpaid';
         // Paid by check needs both the check number and the amount — that's what
         // the show is billed from at the end, so neither may be left blank.
-        const currentPay = booking.paymentStatus || 'unpaid';
         const checkAmountNum = Number(draft.checkAmount) || 0;
         const checkNumberTrim = String(draft.checkNumber || '').trim();
         if (draft.paymentStatus === 'check' && (!checkNumberTrim || checkAmountNum <= 0)) {
             setPayError('Enter the check number and the amount paid.');
             return;
         }
+        // Switching a real online payment back to Unpaid erases that payment record —
+        // confirm first instead of silently applying it.
+        if (draft.paymentStatus === 'unpaid' && (currentPay === 'paid' || currentPay === 'partial')) {
+            setConfirmUnpaidOnline(true);
+            return;
+        }
+        commitSaveEdit();
+    };
+
+    // The actual save — runs immediately for every other edit, and after
+    // confirmation for the one dangerous case above.
+    const commitSaveEdit = () => {
+        if (!draft) { setIsEditing(false); return; }
+        const currentPay = booking.paymentStatus || 'unpaid';
+        const checkAmountNum = Number(draft.checkAmount) || 0;
+        const checkNumberTrim = String(draft.checkNumber || '').trim();
         const checkChanged = draft.paymentStatus === 'check'
             && (currentPay !== 'check'
                 || checkAmountNum !== r.paidAmount
@@ -340,6 +362,7 @@ const MasterListRow = ({
         if (changedLabels.length) onLogActivity?.(booking.id, `Updated: ${changedLabels.join(', ')}`);
         setDraft(null);
         setIsEditing(false);
+        setConfirmUnpaidOnline(false);
     };
     const setDraftField = (field, value) => setDraft(d => ({ ...d, [field]: value }));
 
@@ -499,6 +522,19 @@ const MasterListRow = ({
                 }
                 confirmText={deleting ? 'Deleting…' : 'Delete booking'}
                 cancelText="Keep booking"
+            />
+            <ConfirmationDialog
+                isOpen={confirmUnpaidOnline}
+                onClose={() => setConfirmUnpaidOnline(false)}
+                onConfirm={commitSaveEdit}
+                title="Erase this online payment?"
+                description={
+                    `"${booking.exhibitorName || 'This booking'}" shows ${r.paymentStatus === 'partial' ? 'a partial online payment of' : 'paid online,'} `
+                    + `${fmtMoney(r.paidAmount)}. Setting it to Unpaid does NOT refund the exhibitor — `
+                    + `it only erases this app's record that they paid. Are you sure?`
+                }
+                confirmText="Yes, set to Unpaid"
+                cancelText="Keep payment record"
             />
             {isOpen && (
                 <tr className="border-b bg-muted/30">
