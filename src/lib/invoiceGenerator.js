@@ -6,6 +6,48 @@ import { buildLineItems, computeBookingTotal } from '@/lib/bookingPricing';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
+// Estimated US card rate — same STRIPE_PCT/STRIPE_FLAT_CENTS formula as
+// PublicBookingPage.jsx and the stalls-create-invoice/stalls-create-checkout
+// edge functions (each keeps its own copy — a plain JS file here, Deno
+// elsewhere, can't share one import). Used only when the show has "Customer
+// pays the fee" turned on, so this downloadable PDF preview shows the same
+// total Stripe will actually charge, instead of silently leaving the fee off.
+const STRIPE_PCT = 0.029;
+const STRIPE_FLAT_CENTS = 30;
+
+export function estimatedProcessingFee(subtotal) {
+    const subtotalCents = Math.round(subtotal * 100);
+    const grossedCents = Math.ceil((subtotalCents + STRIPE_FLAT_CENTS) / (1 - STRIPE_PCT));
+    return (grossedCents - subtotalCents) / 100;
+}
+
+/**
+ * Work out whether the "Customer pays the fee" line belongs on this invoice,
+ * and the resulting totals — split out from generateInvoicePdf (which needs
+ * jsPDF) so this one piece of money math is directly testable.
+ *
+ * The fee is computed on the OUTSTANDING balance only (never retroactively on
+ * money already paid), same as the real Stripe invoice (stalls-create-invoice:
+ * due = total − paid, THEN grossed up). Computing it on the full items
+ * subtotal instead would make a booking already Paid in full wrongly show a
+ * leftover balance due equal to the fee, even though nothing more is owed —
+ * the regression this function's tests pin down.
+ *
+ * @param {number} itemsSubtotal   Sum of the booking's own line items (no fee)
+ * @param {number} amountPaid      Already recorded as paid
+ * @param {string} processingFeeMode 'customer' adds the fee line; anything else doesn't
+ * @returns {{ feeAmount: number, subtotal: number, balanceDue: number|null }}
+ */
+export function invoiceProcessingFeeLine(itemsSubtotal, amountPaid, processingFeeMode) {
+    const dueBeforeFee = Math.max((Number(itemsSubtotal) || 0) - (Number(amountPaid) || 0), 0);
+    const feeAmount = (processingFeeMode === 'customer' && dueBeforeFee > 0)
+        ? estimatedProcessingFee(dueBeforeFee)
+        : 0;
+    const subtotal = (Number(itemsSubtotal) || 0) + feeAmount;
+    const balanceDue = (Number(amountPaid) || 0) > 0 ? Math.max(subtotal - amountPaid, 0) : null;
+    return { feeAmount, subtotal, balanceDue };
+}
+
 const safeDate = (iso, fmt = 'MMM d, yyyy') => {
     if (!iso) return '';
     try { return format(parseISO(iso), fmt); } catch { return String(iso).slice(0, 10); }
@@ -224,6 +266,10 @@ function drawFooter(doc, { booking, show, organizerContact }) {
  * @param {object} params.show             { id, name, startDate, endDate, venueFacility }
  * @param {Array}  [params.assignedStalls] Optional: pre-computed stall assignments to print
  * @param {Array}  [params.extraStallFees] Show's stall fees, for Flat-fee-priced barns
+ * @param {string} [params.processingFeeMode] 'customer' adds the estimated card
+ *                                     processing fee as its own line (matching the
+ *                                     real Stripe invoice/checkout) — any other
+ *                                     value (the default, 'show') leaves it off.
  * @param {object} [params.options]
  * @param {string} [params.options.brandName]        Header name (default: "EquiPatterns")
  * @param {string} [params.options.invoiceNumber]    Custom invoice number (default: derived from booking id)
@@ -232,7 +278,7 @@ function drawFooter(doc, { booking, show, organizerContact }) {
  * @param {string} [params.options.organizerContact] Email/phone shown in footer
  * @param {number} [params.options.amountPaid]       Amount already paid (default 0)
  */
-export async function generateInvoicePdf({ booking, show, assignedStalls = [], extraStallFees = [], options = {} }) {
+export async function generateInvoicePdf({ booking, show, assignedStalls = [], extraStallFees = [], processingFeeMode = 'show', options = {} }) {
     // Async so jsPDF (~350 KB) loads when an invoice is actually generated, not
     // when the Housing page opens. This module also exports plain pricing
     // helpers that the page needs at render time.
@@ -268,12 +314,26 @@ export async function generateInvoicePdf({ booking, show, assignedStalls = [], e
 
     // Line items table
     const items = buildLineItems(booking || {}, assignedStalls, extraStallFees);
-    const subtotal = items.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    const itemsSubtotal = items.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    const amountPaid = Number(options.amountPaid) || 0;
+    const { feeAmount, subtotal, balanceDue } = invoiceProcessingFeeLine(itemsSubtotal, amountPaid, processingFeeMode);
+
+    // "Customer pays the fee" — add it as its own line, same wording as the
+    // real Stripe invoice/checkout.
+    const displayItems = [...items];
+    if (feeAmount > 0) {
+        displayItems.push({
+            description: 'Card processing fee (estimated)',
+            qty: 1,
+            unitPrice: feeAmount,
+            total: feeAmount,
+        });
+    }
 
     autoTable(doc, {
         startY: tableStartY,
         head: [['Description', 'Qty', 'Unit Price', 'Total']],
-        body: items.map(r => [
+        body: displayItems.map(r => [
             r.description,
             String(r.qty),
             fmtMoney(r.unitPrice),
@@ -296,9 +356,6 @@ export async function generateInvoicePdf({ booking, show, assignedStalls = [], e
         theme: 'striped',
         alternateRowStyles: { fillColor: [248, 250, 252] },
     });
-
-    const amountPaid = Number(options.amountPaid) || 0;
-    const balanceDue = amountPaid > 0 ? Math.max(subtotal - amountPaid, 0) : null;
 
     drawTotals(doc, {
         subtotal,

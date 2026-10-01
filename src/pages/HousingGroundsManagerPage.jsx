@@ -4544,6 +4544,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             },
             assignedStalls,
             extraStallFees,
+            // So this downloadable PDF shows the same total Stripe will actually
+            // charge when "Customer pays the fee" is on — it used to always leave
+            // the fee off, understating it versus the public page and the real
+            // emailed Stripe invoice (both already included it).
+            processingFeeMode,
             options: {
                 organizerContact: pd?.showDetails?.general?.managerContactEmail,
                 // Without this the PDF always printed "Total" and never showed
