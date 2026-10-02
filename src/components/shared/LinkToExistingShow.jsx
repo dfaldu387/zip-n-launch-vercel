@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { groupShowRecords } from '@/lib/showGrouping';
 import { Card } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,15 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
+
+// A record that is only a pattern book, with no show behind it, is tagged; a real
+// show has no tag.
+const optionLabel = (p, hideProjectType) => {
+  const tag = hideProjectType
+    ? (p.project_type === 'pattern_book' ? ' · Pattern book only' : '')
+    : ` (${p.project_type})`;
+  return `${p.project_name || 'Untitled'}${tag}`;
+};
 
 /**
  * Reusable "Link to Existing Show" card.
@@ -25,14 +35,25 @@ export const LinkToExistingShow = ({
   linkedProjectId,
   onLink,
   onDuplicated,
+  hideProjectType = true,
+  disabled = false,
   description = 'Link this to an existing show or pattern book project to auto-fill show details.',
 }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [isDuplicating, setIsDuplicating] = useState(false);
 
-  const selectedProject = linkedProjectId
-    ? existingProjects.find((p) => p.id === linkedProjectId)
+  // One entry per real show. A show and its pattern book are separate saved rows, so
+  // every page that listed them raw showed the same show 2-3 times. Pages may also
+  // pass in rows already grouped; grouping those again changes nothing.
+  const groups = useMemo(() => groupShowRecords(existingProjects), [existingProjects]);
+  const options = groups.map((g) => g.primary);
+  const shownLinkedId = linkedProjectId
+    ? (groups.find((g) => g.members.some((m) => m.id === linkedProjectId))?.primary.id || linkedProjectId)
+    : null;
+
+  const selectedProject = shownLinkedId
+    ? existingProjects.find((p) => p.id === shownLinkedId)
     : null;
 
   const handleDuplicate = async () => {
@@ -111,17 +132,16 @@ export const LinkToExistingShow = ({
       </div>
       <p className="text-xs text-muted-foreground">{description}</p>
       <div className="flex items-center gap-2">
-        <Select value={linkedProjectId || 'none'} onValueChange={onLink}>
+        <Select value={shownLinkedId || 'none'} onValueChange={onLink} disabled={disabled}>
           <SelectTrigger className="max-w-md">
             <SelectValue placeholder="Select a project..." />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">No linked project</SelectItem>
-            {existingProjects.map((p) => {
-              const year = p.project_data?.startDate?.slice(0, 4);
+            {options.map((p) => {
               return (
                 <SelectItem key={p.id} value={p.id}>
-                  {p.project_name || 'Untitled'}{year ? ` - ${year}` : ''} ({p.project_type})
+                  {optionLabel(p, hideProjectType)}
                 </SelectItem>
               );
             })}

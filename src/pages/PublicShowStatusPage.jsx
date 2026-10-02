@@ -11,7 +11,8 @@ import {
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { ModuleStatusBadge } from '@/components/show-builder/ModuleStatusBadge';
-import { migrateLegacyStatus, MODULE_STATUS } from '@/lib/moduleStatusService';
+import { migrateLegacyStatus, MODULE_STATUS, STATUS_META } from '@/lib/moduleStatusService';
+import { groupShowRecords } from '@/lib/showGrouping';
 
 // Robert's ask (2026-09-20 video): "I think it is as simple as just having its own
 // page, which has a list of everything that's publicly displayed" — one place to see,
@@ -45,7 +46,7 @@ export default function PublicShowStatusPage() {
             if (!user) { setIsLoading(false); return; }
             const { data, error } = await supabase
                 .from('projects')
-                .select('id, project_name, project_data, status')
+                .select('id, project_name, project_type, project_data, status')
                 .eq('user_id', user.id)
                 .not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")')
                 .order('created_at', { ascending: false });
@@ -56,19 +57,26 @@ export default function PublicShowStatusPage() {
         fetchShows();
     }, [user]);
 
-    const rows = useMemo(() => shows.map(show => {
-        const pd = show.project_data || {};
+    // One row per real show: the show's pattern book is stored as its own project row, so
+    // group them and read the pattern book status across all of the show's records.
+    const rows = useMemo(() => groupShowRecords(shows).map(({ primary, members }) => {
+        const pd = primary.project_data || {};
         const housingStatus = housingStatusOf(pd);
+        const patternBookStatus = members
+            .map(m => patternBookStatusOf(m.project_data || {}))
+            .reduce((best, s) => ((STATUS_META[s]?.rank ?? 0) > (STATUS_META[best]?.rank ?? 0) ? s : best), MODULE_STATUS.DRAFT);
         return {
-            id: show.id,
-            name: show.project_name || 'Untitled Show',
+            id: primary.id,
+            // No Housing show behind this row — it is only a pattern book.
+            patternOnly: primary.project_type === 'pattern_book',
+            name: primary.project_name || 'Untitled Show',
             startDate: pd.startDate || null,
             endDate: pd.endDate || null,
             housingStatus,
             isPublic: housingStatus === MODULE_STATUS.PUBLISHED,
             billingMode: pd.stallingService?.billingMode || 'invoice_after',
-            patternBookStatus: patternBookStatusOf(pd),
-            chartPublic: chartPublicOf(pd),
+            patternBookStatus,
+            chartPublic: members.some(m => chartPublicOf(m.project_data || {})),
         };
     }), [shows]);
 
@@ -148,7 +156,14 @@ export default function PublicShowStatusPage() {
                             <tbody className="divide-y">
                                 {visibleRows.map(r => (
                                     <tr key={r.id} className="hover:bg-muted/20">
-                                        <td className="px-4 py-3 font-medium truncate max-w-[220px]">{r.name}</td>
+                                        <td className="px-4 py-3 font-medium max-w-[220px]">
+                                            <div className="truncate">{r.name}</div>
+                                            {r.patternOnly && (
+                                                <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                                    Pattern book only
+                                                </span>
+                                            )}
+                                        </td>
                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                                             {r.startDate ? new Date(r.startDate).toLocaleDateString() : '—'}
                                             {r.endDate ? ` – ${new Date(r.endDate).toLocaleDateString()}` : ''}
@@ -169,7 +184,7 @@ export default function PublicShowStatusPage() {
                                         </td>
                                         <td className="px-4 py-3 text-right">
                                             <Button asChild variant="outline" size="sm" className="h-7 text-xs gap-1">
-                                                <Link to={`/horse-show-manager/housing-grounds-manager/${r.id}`}>
+                                                <Link to={r.patternOnly ? `/pattern-book-builder/${r.id}` : `/horse-show-manager/housing-grounds-manager/${r.id}`}>
                                                     Open <ExternalLink className="h-3 w-3" />
                                                 </Link>
                                             </Button>

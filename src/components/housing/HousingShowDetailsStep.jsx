@@ -40,7 +40,12 @@ const DatePickerField = ({ label, value, onChange, disabledBefore, error }) => (
 
 // First page of Housing & Grounds when no existing show is linked: just the
 // basic show details. Next creates the show and opens the housing setup.
-export const HousingShowDetailsStep = ({ onCreate, isCreating }) => {
+export const HousingShowDetailsStep = ({
+    onCreate,
+    isCreating,
+    title = 'Show Details',
+    description = 'Enter the basic details of your event to start building housing and grounds. You can also link an existing show above instead.',
+}) => {
     const [details, setDetails] = useState({ showName: '', startDate: '', endDate: '', venueName: '', venueAddress: '' });
     const [showErrors, setShowErrors] = useState(false);
     const errors = validateShowDetails(details);
@@ -54,10 +59,8 @@ export const HousingShowDetailsStep = ({ onCreate, isCreating }) => {
     return (
         <Card>
             <CardHeader>
-                <CardTitle>Show Details</CardTitle>
-                <CardDescription>
-                    Enter the basic details of your event to start building housing and grounds. You can also link an existing show above instead.
-                </CardDescription>
+                <CardTitle>{title}</CardTitle>
+                <CardDescription>{description}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

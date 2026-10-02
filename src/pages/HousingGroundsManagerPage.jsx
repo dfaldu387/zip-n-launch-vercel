@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { groupShowRecords } from '@/lib/showGrouping';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
@@ -7094,6 +7095,10 @@ const HousingGroundsManagerPage = () => {
 
     useEffect(() => { fetchShows(); }, [fetchShows]);
 
+    // The "Link to Existing Show" dropdown lists one entry per real show, not one per
+    // saved record (a show and its pattern book are separate rows).
+    const showGroups = useMemo(() => groupShowRecords(shows), [shows]);
+
     // Refetch when tab regains focus so kiosk-side changes appear here automatically.
     useEffect(() => {
         const onVisible = () => {
@@ -7439,8 +7444,9 @@ const HousingGroundsManagerPage = () => {
                     {!showId && (
                         <div className="mb-6">
                             <LinkToExistingShow
-                                existingProjects={shows}
-                                linkedProjectId={selectedShow?.id || null}
+                                existingProjects={showGroups.map(g => g.primary)}
+                                linkedProjectId={showGroups.find(g => g.members.some(m => m.id === selectedShow?.id))?.primary.id || selectedShow?.id || null}
+                                hideProjectType
                                 onLink={(projectId) => {
                                     if (projectId === 'none') { setSelectedShow(null); return; }
                                     const show = shows.find(s => s.id === projectId);

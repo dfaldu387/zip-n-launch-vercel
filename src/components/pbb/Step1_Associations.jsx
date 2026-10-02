@@ -3,9 +3,21 @@ import { Lock, Unlock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AssociationSelection } from '@/components/shared/AssociationSelection';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { groupShowRecords } from '@/lib/showGrouping';
+import { useNavigate } from 'react-router-dom';
+import { useToast } from '@/components/ui/use-toast';
 
 export const Step1_Associations = ({ isHub, selectedPurposeName, isReadOnly = false, isLocked = false, onUnlock, existingProjects = [], formData, setFormData, ...props }) => {
   const effectiveReadOnly = isReadOnly || isLocked;
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
+  // One dropdown entry per real show; linking copies pattern selections, so the
+  // pattern book record stands for the group.
+  const showGroups = React.useMemo(
+    () => groupShowRecords(existingProjects, { preferType: 'pattern_book' }),
+    [existingProjects],
+  );
 
   const handleLinkProject = (projectId) => {
     if (projectId === 'none') {
@@ -21,6 +33,17 @@ export const Step1_Associations = ({ isHub, selectedPurposeName, isReadOnly = fa
       return;
     }
     const project = existingProjects.find((p) => p.id === projectId);
+
+    // A show has ONE pattern book. Picking a show that already has one, from a book
+    // that has not been saved yet, opens that book. Linking used to copy it into a
+    // brand-new row every time, which is how one show ended up with 3-4 books.
+    // (To start next year's book from this one, use "Duplicate Show".)
+    if (project?.project_type === 'pattern_book' && !formData?.id && projectId !== formData?.id) {
+      toast({ title: 'Opened the existing pattern book', description: `"${project.project_name || 'This show'}" already has a pattern book, so it was opened instead of making a copy.` });
+      navigate(`/pattern-book-builder/${projectId}`);
+      return;
+    }
+
     if (project?.project_data) {
       const pd = project.project_data;
       setFormData((prev) => ({
@@ -66,10 +89,16 @@ export const Step1_Associations = ({ isHub, selectedPurposeName, isReadOnly = fa
       {!isHub && (
       <div className="mb-4">
         <LinkToExistingShow
-          existingProjects={existingProjects}
-          linkedProjectId={formData?.linkedProjectId || null}
+          existingProjects={showGroups.map(g => g.primary)}
+          linkedProjectId={showGroups.find(g => g.members.some(m => m.id === formData?.linkedProjectId))?.primary.id || formData?.linkedProjectId || null}
+          hideProjectType
+          // Linking copies another show's details over this book. Once the book is saved
+          // that would overwrite its real content, so linking is for a new book only.
+          disabled={!!formData?.id}
           onLink={handleLinkProject}
-          description="Link to an existing show or pattern book project to auto-fill show details."
+          description={formData?.id
+            ? 'This pattern book is already saved, so it can no longer be linked. To link to a show, start a new pattern book.'
+            : 'Link to an existing show or pattern book project to auto-fill show details.'}
         />
       </div>
       )}

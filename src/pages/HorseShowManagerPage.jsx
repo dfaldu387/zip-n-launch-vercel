@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -10,9 +10,16 @@ import {
   DollarSign, LayoutGrid, Building2, Radio, Award,
   Plus, Loader2, FolderOpen, Hash, Calendar, ChevronRight,
   Search, MapPin, Trash2, Shield, Crown, ArrowLeft,
-  Users, UserPlus, X, Mail, Bed, Ticket, Globe,
+  Users, UserPlus, X, Mail, BookOpen, Globe,
 } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
+import HousingShowDetailsStep from '@/components/housing/HousingShowDetailsStep';
+import { buildNewShowRow, nextShowNumber } from '@/lib/housingNewShow';
 import { Link, useNavigate } from 'react-router-dom';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import Navigation from '@/components/Navigation';
 import { useToast } from '@/components/ui/use-toast';
@@ -102,7 +109,8 @@ const sections = [
   {
     icon: FolderCreateIcon,
     title: 'Create New Show',
-    link: '/horse-show-manager/create',
+    // The only card with a Get Started button — it opens the quick show-details pop-up.
+    hasGetStarted: true,
     items: [
       { icon: CalendarDays, label: 'Horse Show Schedule Builder', link: '/horse-show-manager/create' },
       { icon: Info, label: 'Show Structure & Expenses', link: '/horse-show-manager/show-structure-expenses' },
@@ -112,7 +120,6 @@ const sections = [
   {
     icon: FolderEmployeeIcon,
     title: 'Employee Management',
-    link: '/horse-show-manager/employee-management',
     items: [
       { icon: DollarSign, label: 'Employee Budgeting Tool', link: '/horse-show-manager/employee-budgeting' },
       { icon: LayoutGrid, label: 'Employee / Arena Scheduling', link: '/horse-show-manager/employee-scheduling' },
@@ -122,22 +129,26 @@ const sections = [
   {
     icon: FolderManagementIcon,
     title: 'Horse Show Management',
-    link: '/horse-show-manager/housing-grounds-manager',
     items: [
       { icon: Radio, label: 'Equipment Management', link: '/horse-show-manager/equipment-planning', line: 1 },
       { icon: Award, label: 'Awards Management', link: '/horse-show-manager/awards-management', line: 2 },
       { icon: DollarSign, label: 'Horse Show Financials / Analytics', link: '/horse-show-manager/financials', line: 3 },
-      { icon: Building2, label: 'Housing & Grounds Manager', link: '/horse-show-manager/housing-grounds-manager', line: 4 },
-      { icon: Bed, label: 'Book Stalls', link: '/book-stalls', line: 5 },
-      { icon: Ticket, label: 'My Booking', link: '/find-booking', line: 5 },
-      { icon: Globe, label: 'Public Status — All Shows', link: '/horse-show-manager/public-status', line: 6 },
     ],
   },
 ];
 
+// Housing & Grounds, Pattern Book Builder and Public Status work across ALL your
+// shows, so they sit below the three tool cards as their own links. Book Stalls and
+// My Booking are managed inside Housing & Grounds, so they no longer have a link here.
+const quickLinks = [
+  { icon: Building2, title: 'Housing & Grounds Manager', description: 'Stalls, RV spots, supplies and bookings', link: '/horse-show-manager/housing-grounds-manager' },
+  { icon: BookOpen, title: 'Pattern Book Builder', description: 'Build and manage your pattern books', link: '/pattern-book-builder' },
+  { icon: Globe, title: 'Public Status — All Shows', description: 'See which shows are open for public booking', link: '/horse-show-manager/public-status' },
+];
+
 /* ── Section card component ── */
 
-const SectionCard = ({ icon: Icon, title, link, items }) => {
+const SectionCard = ({ icon: Icon, title, items, onGetStarted }) => {
   const { toast } = useToast();
 
   const handleUnimplemented = (e) => {
@@ -159,7 +170,7 @@ const SectionCard = ({ icon: Icon, title, link, items }) => {
           <h2 className="text-xl font-bold tracking-tight text-foreground">{title}</h2>
         </div>
 
-        <div className="flex-grow space-y-4 mb-7">
+        <div className={cn('flex-grow space-y-4', onGetStarted && 'mb-7')}>
           {(() => {
             const groups = [];
             items.forEach((item) => {
@@ -205,13 +216,35 @@ const SectionCard = ({ icon: Icon, title, link, items }) => {
           })()}
         </div>
 
-        <Button asChild className="w-fit bg-blue-500 hover:bg-blue-600 text-white rounded-lg px-6">
-          <Link to={link}>Get Started</Link>
-        </Button>
+        {onGetStarted && (
+          <Button onClick={onGetStarted} className="w-fit bg-blue-500 hover:bg-blue-600 text-white rounded-lg px-6">
+            Get Started
+          </Button>
+        )}
       </div>
     </motion.div>
   );
 };
+
+/* ── Quick link card (works across all shows) ── */
+
+const QuickLinkCard = ({ icon: Icon, title, description, link }) => (
+  <motion.div whileHover={{ y: -4, boxShadow: '0 8px 30px -6px rgba(0, 0, 0, 0.10)' }} className="h-full">
+    <Link
+      to={link}
+      className="h-full flex items-center gap-4 bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-5 shadow-sm"
+    >
+      <div className="h-11 w-11 shrink-0 rounded-xl bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center">
+        <Icon className="h-5 w-5 text-blue-500" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-[15px] font-bold text-foreground">{title}</h3>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
+    </Link>
+  </motion.div>
+);
 
 /* ── Section Admin scopes ── */
 // Mirrors the module keys on ShowWorkspacePage's tool cards, so a Section
@@ -243,6 +276,10 @@ const HorseShowManagerPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingId, setDeletingId] = useState(null);
   const [showLimitModal, setShowLimitModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showGetStarted, setShowGetStarted] = useState(false);
+  const [isCreatingShow, setIsCreatingShow] = useState(false);
+  const creatingShowRef = useRef(false);
 
   // Manage Access (admin sharing) state
   const [manageAccessShow, setManageAccessShow] = useState(null);
@@ -262,10 +299,72 @@ const HorseShowManagerPage = () => {
     }
   };
 
-  const handleDelete = async (e, show) => {
+  // Get Started on "Create New Show": a small pop-up with just the basic show details
+  // (name, dates, venue). Same free-show limit as the New Horse Show button.
+  const handleGetStarted = () => {
+    if (canCreate) {
+      setShowGetStarted(true);
+    } else {
+      setShowLimitModal(true);
+    }
+  };
+
+  const createShowFromDetails = async (details) => {
+    if (!user || creatingShowRef.current) return;
+    creatingShowRef.current = true;
+    setIsCreatingShow(true);
+    try {
+      // Same name and dates as a show you already have means it is the same show —
+      // open it instead of saving a second copy.
+      const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const existing = shows.find((s) => {
+        const pd = s.project_data || {};
+        return norm(s.project_name) === norm(details.showName)
+          && (pd.startDate || '') === details.startDate
+          && (pd.endDate || '') === details.endDate;
+      });
+      if (existing) {
+        toast({ title: 'This show already exists', description: `"${existing.project_name}" has the same name and dates, so it was opened.` });
+        setShowGetStarted(false);
+        navigate(`/horse-show-manager/show/${existing.id}`);
+        return;
+      }
+
+      const { data: mine, error: mineError } = await supabase
+        .from('projects')
+        .select('project_data')
+        .eq('project_type', 'show')
+        .eq('user_id', user.id);
+      if (mineError) throw mineError;
+      const row = buildNewShowRow({ details, userId: user.id, showNumber: nextShowNumber(mine), id: uuidv4() });
+      const { data: created, error } = await supabase
+        .from('projects')
+        .insert([row])
+        .select('id, project_name')
+        .single();
+      if (error) throw error;
+      toast({ title: 'Show created', description: `${created.project_name} is ready.` });
+      setShowGetStarted(false);
+      navigate(`/horse-show-manager/show/${created.id}`);
+    } catch (error) {
+      toast({ title: 'Could not create show', description: error.message, variant: 'destructive' });
+    } finally {
+      creatingShowRef.current = false;
+      setIsCreatingShow(false);
+    }
+  };
+
+  // The trash icon only asks; the delete runs from the confirm dialog below.
+  const handleDelete = (e, show) => {
     e.stopPropagation();
+    setDeleteTarget(show);
+  };
+
+  const confirmDelete = async () => {
+    const show = deleteTarget;
+    if (!show) return;
+    setDeleteTarget(null);
     const name = show.project_name || 'Untitled Show';
-    if (!window.confirm(`Are you sure you want to delete "${name}"? This cannot be undone.`)) return;
     setDeletingId(show.id);
     const { error } = await supabase.from('projects').delete().eq('id', show.id).eq('user_id', user.id);
     if (error) {
@@ -644,12 +743,57 @@ const HorseShowManagerPage = () => {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.2 + index * 0.1 }}
                 >
-                  <SectionCard {...section} />
+                  <SectionCard {...section} onGetStarted={section.hasGetStarted ? handleGetStarted : undefined} />
+                </motion.div>
+              ))}
+            </div>
+
+            {/* Tools that work across all your shows */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-8">
+              {quickLinks.map((q, index) => (
+                <motion.div
+                  key={q.title}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5 + index * 0.1 }}
+                >
+                  <QuickLinkCard {...q} />
                 </motion.div>
               ))}
             </div>
           </div>
         </main>
+
+        {/* Delete show — confirm */}
+        <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this show?</AlertDialogTitle>
+              <AlertDialogDescription>
+                "{deleteTarget?.project_name || 'Untitled Show'}" will be permanently deleted. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700 text-white">
+                Delete show
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Get Started — basic show details */}
+        <Dialog open={showGetStarted} onOpenChange={(open) => !isCreatingShow && setShowGetStarted(open)}>
+          <DialogContent className="max-w-3xl p-0 border-0 bg-transparent shadow-none">
+            <DialogTitle className="sr-only">Create New Show</DialogTitle>
+            <HousingShowDetailsStep
+              onCreate={createShowFromDetails}
+              isCreating={isCreatingShow}
+              title="Create New Show"
+              description="Enter the basic details of your event to get started. You can fill in the rest later."
+            />
+          </DialogContent>
+        </Dialog>
 
         {/* Free Limit Reached Modal */}
         <Dialog open={showLimitModal} onOpenChange={setShowLimitModal}>
