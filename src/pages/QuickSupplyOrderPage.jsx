@@ -222,17 +222,8 @@ const QuickSupplyOrderPage = () => {
             // not look like a failed order — log it and still show the confirmation.
             try {
                 await supabase.functions.invoke('send-supply-order-email', {
-                    body: {
-                        kind: 'receipt',
-                        to: bookingPayload.email,
-                        customerName: bookingPayload.exhibitorName,
-                        showName: show?.name || 'the show',
-                        orderRef: bookingShortId,
-                        items: bookingPayload.items.map(it => ({ name: it.name, amount: it.amount })),
-                        total: bookingPayload.totalAmount,
-                        stableWith: bookingPayload.stableWith,
-                        stallNumber: bookingPayload.stallNumber,
-                    },
+                    // The function reads everything else from the saved order.
+                    body: { kind: 'receipt', bookingId: data },
                 });
             } catch (mailErr) {
                 console.error('Receipt email failed:', mailErr);

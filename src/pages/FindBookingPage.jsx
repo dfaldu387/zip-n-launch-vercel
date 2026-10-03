@@ -41,8 +41,8 @@ const FindBookingPage = () => {
         e?.preventDefault?.();
         const cleanEmail = email.trim();
         const cleanRef = shortRef.trim();
-        if (!cleanEmail && !cleanRef) {
-            toast({ title: 'Enter your email or booking reference', variant: 'destructive' });
+        if (!cleanEmail || cleanRef.length !== 8) {
+            toast({ title: 'Enter your email and the 8-character booking reference', variant: 'destructive' });
             return;
         }
         setIsSearching(true);
@@ -76,14 +76,14 @@ const FindBookingPage = () => {
                             <Search className="h-10 w-10 mx-auto mb-3 text-primary" />
                             <h1 className="text-3xl md:text-4xl font-bold mb-2">Find My Booking</h1>
                             <p className="text-muted-foreground">
-                                Lost your booking link? Enter your email or 8-character booking reference (e.g., <span className="font-mono text-foreground">4BDBA7BC</span>) below.
+                                Lost your booking link? Enter the email you booked with and the 8-character booking reference from your confirmation email (e.g., <span className="font-mono text-foreground">4BDBA7BC</span>).
                             </p>
                         </div>
 
                         <Card className="max-w-2xl mx-auto">
                             <CardHeader className="pb-3">
                                 <CardTitle className="text-lg">Look up your reservation</CardTitle>
-                                <CardDescription>Provide either field — both is more accurate.</CardDescription>
+                                <CardDescription>Both fields are required.</CardDescription>
                             </CardHeader>
                             <CardContent>
                                 <form onSubmit={handleSearch} className="space-y-4">
@@ -102,8 +102,7 @@ const FindBookingPage = () => {
                                             />
                                         </div>
                                     </div>
-                                    <div className="text-center text-xs text-muted-foreground">— OR —</div>
-                                    <div>
+                                                                        <div>
                                         <Label htmlFor="ref">Booking Reference (8 chars)</Label>
                                         <div className="relative">
                                             <Hash className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -137,7 +136,7 @@ const FindBookingPage = () => {
                                             <AlertCircle className="h-10 w-10 mx-auto mb-3 text-amber-600" />
                                             <p className="font-semibold mb-1">No bookings found</p>
                                             <p className="text-sm text-muted-foreground">
-                                                Double-check your email and reference. If you can't find it, contact the show organizer directly.
+                                                Double-check your email and reference. If you can't find them, contact the show organizer directly.
                                             </p>
                                         </CardContent>
                                     </Card>

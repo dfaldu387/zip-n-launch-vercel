@@ -63,6 +63,7 @@ import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from '@/lib/showDataWrite';
+import { diffUnitAssignments, applyUnitChanges, overlayAssignments } from '@/lib/unitAssignmentMerge';
 import {
     stallPrefix, renumberStalls, gridCols, gridRows, describeGrid,
     numberingMode, NUMBERING_ROW, NUMBERING_CONTINUOUS, NUMBERING_CUSTOM,
@@ -2569,18 +2570,13 @@ const applyItemStage = async ({ order, item, targetKey, onFulfill, showName, toa
         return;
     }
     try {
-        const { error } = await supabase.functions.invoke('send-supply-order-email', {
-            body: {
-                kind: 'delivered',
-                to: order.email,
-                customerName: order.exhibitorName || 'there',
-                showName: showName || 'the show',
-                orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
-                items: [{ name: item.name, amount: item.amount }],
-                total: item.amount,
-                stableWith: order.stableWith || order.trainerName || '',
-                stallNumber: order.stallNumber || '',
-            },
+        // invokeAsUser: the function checks the caller can manage this show. The
+        // recipient and customer details come from the saved order, not from here.
+        const { error } = await invokeAsUser('send-supply-order-email', {
+            kind: 'delivered',
+            bookingId: order.id,
+            items: [{ name: item.name, amount: item.amount }],
+            total: item.amount,
         });
         if (error) throw error;
         toast({ title: 'Delivered', description: `${item.name} delivery email sent to ${order.email}.` });
@@ -2674,18 +2670,11 @@ const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast
     }
     const total = order.totalAmount ?? order.amount ?? 0;
     try {
-        const { error } = await supabase.functions.invoke('send-supply-order-email', {
-            body: {
-                kind: 'delivered',
-                to: order.email,
-                customerName: order.exhibitorName || 'there',
-                showName: showName || 'the show',
-                orderRef: String(order.id || '').slice(0, 8).toUpperCase(),
-                items: items.map(it => ({ name: it.name, amount: it.amount })),
-                total,
-                stableWith: order.stableWith || order.trainerName || '',
-                stallNumber: order.stallNumber || '',
-            },
+        const { error } = await invokeAsUser('send-supply-order-email', {
+            kind: 'delivered',
+            bookingId: order.id,
+            items: items.map(it => ({ name: it.name, amount: it.amount })),
+            total,
         });
         if (error) throw error;
         toast({ title: 'Delivered', description: `Delivery email sent to ${order.email}.` });
@@ -4315,10 +4304,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const assignSingleStall = async (booking, stallId) => {
         let next = unassignBookingStalls(barns, booking.id);
         if (stallId) next = assignStallToBooking(next, stallId, booking.id);
-        logStallAssignmentChanges(barns, next);
+        const prevBarns = barns;
         setBarns(next);
         updateBooking(booking.id, 'stallId', stallId || '');
-        if (onUpdateBarns) await onUpdateBarns(next);
+        try {
+            const shown = onUpdateBarns ? await onUpdateBarns(next, prevBarns) : next;
+            if (shown && shown !== next) setBarns(shown);
+            logStallAssignmentChanges(prevBarns, next);
+        } catch (err) {
+            setBarns(err?.latest ? overlayAssignments(prevBarns, err.latest, 'stalls') : prevBarns);
+            updateBooking(booking.id, 'stallId', booking.stallId || '');
+        }
     };
 
     // Diff two barns arrays' stall.bookingId pins and log what changed for each
@@ -6233,14 +6229,28 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         rvAreas={rvAreas}
                         supplies={supplies}
                         onApplyBarns={async (newBarns) => {
-                            logStallAssignmentChanges(barns, newBarns);
+                            const prevBarns = barns;
                             setBarns(newBarns);
-                            if (onUpdateBarns) await onUpdateBarns(newBarns);
+                            try {
+                                const shown = onUpdateBarns ? await onUpdateBarns(newBarns, prevBarns) : newBarns;
+                                if (shown && shown !== newBarns) setBarns(shown);
+                                logStallAssignmentChanges(prevBarns, newBarns);
+                            } catch (err) {
+                                // Save refused or failed (the toast already says why). Show what is
+                                // really saved instead of leaving stalls looking assigned.
+                                setBarns(err?.latest ? overlayAssignments(prevBarns, err.latest, 'stalls') : prevBarns);
+                            }
                         }}
                         onApplyRvAreas={async (newRvAreas) => {
-                            logRvAssignmentChanges(rvAreas, newRvAreas);
+                            const prevRvAreas = rvAreas;
                             setRvAreas(newRvAreas);
-                            if (onUpdateRvAreas) await onUpdateRvAreas(newRvAreas);
+                            try {
+                                const shown = onUpdateRvAreas ? await onUpdateRvAreas(newRvAreas, prevRvAreas) : newRvAreas;
+                                if (shown && shown !== newRvAreas) setRvAreas(shown);
+                                logRvAssignmentChanges(prevRvAreas, newRvAreas);
+                            } catch (err) {
+                                setRvAreas(err?.latest ? overlayAssignments(prevRvAreas, err.latest, 'spots') : prevRvAreas);
+                            }
                         }}
                         // Manual grouping: move an exhibitor into (or out of) a trainer block.
                         // '' clears the override and falls back to the trainer they booked with.
@@ -7135,39 +7145,64 @@ const HousingGroundsManagerPage = () => {
         return result;
     }), [enqueueWrite, selectedShowId]);
 
-    // Persist updated barns array immediately (used by Smart Auto-Assign + ManageStallsDialog).
-    // This commits stall->booking assignments without requiring "Save All".
-    const updateBarnsImmediate = useCallback(async (nextBarns) => {
-        if (!selectedShowId) return;
+    // Persist stall / RV-spot assignments immediately (Assign board, Smart Auto-Assign).
+    // Sends only the stalls THIS tab changed and applies them on top of the newest
+    // saved copy, so a second staff tab's assignments are kept instead of replaced.
+    // If someone else already took one of the stalls, nothing is saved: the toast
+    // says so and the error carries `latest` so the caller can refresh the board.
+    // A barn / stall edit (rename, add, delete) is not an assignment change, so it
+    // still saves the whole array like before. `prev` is this tab's copy before the click.
+    // Returns the layout to show: this tab's own copy with who-holds-what from the saved one.
+    const saveUnitAssignments = useCallback(async ({ field, unitsKey, noun, next, prev }) => {
+        if (!selectedShowId) return next;
+        const diff = prev ? diffUnitAssignments(prev, next, unitsKey) : { assignmentOnly: false, changes: [] };
         try {
-            await commitShowData(latest => ({
-                data: stampModuleStatusOnSave({
-                    ...latest,
-                    stallingService: { ...(latest.stallingService || {}), barns: nextBarns },
-                }, 'housing'),
-            }));
+            const saved = await commitShowData(latest => {
+                const svc = latest.stallingService || {};
+                let groups = next;
+                if (diff.assignmentOnly) {
+                    const merged = applyUnitChanges(svc[field] || [], diff.changes, unitsKey);
+                    if (merged.conflicts.length) {
+                        const err = new Error(`That ${noun} was just changed by someone else.`);
+                        err.code = 'ASSIGN_CONFLICT';
+                        err.latest = svc[field] || [];
+                        throw err;
+                    }
+                    groups = merged.groups;
+                }
+                return {
+                    data: stampModuleStatusOnSave({
+                        ...latest,
+                        stallingService: { ...svc, [field]: groups },
+                    }, 'housing'),
+                    result: groups,
+                };
+            });
+            return diff.assignmentOnly ? overlayAssignments(next, saved, unitsKey) : next;
         } catch (error) {
-            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+            if (error.code === 'ASSIGN_CONFLICT') {
+                toast({
+                    title: `That ${noun} was just changed`,
+                    description: 'Someone else assigned it a moment ago. The board has been refreshed — please check and try again.',
+                    variant: 'destructive',
+                });
+            } else {
+                toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+            }
             throw error;
         }
     }, [selectedShowId, commitShowData, toast]);
 
-    // Persist updated rvAreas immediately (used by the RV assignment board).
-    // Commits camper spot -> booking assignments without requiring "Save All".
-    const updateRvAreasImmediate = useCallback(async (nextRvAreas) => {
-        if (!selectedShowId) return;
-        try {
-            await commitShowData(latest => ({
-                data: stampModuleStatusOnSave({
-                    ...latest,
-                    stallingService: { ...(latest.stallingService || {}), rvAreas: nextRvAreas },
-                }, 'housing'),
-            }));
-        } catch (error) {
-            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
-            throw error;
-        }
-    }, [selectedShowId, commitShowData, toast]);
+    const updateBarnsImmediate = useCallback(
+        (nextBarns, prevBarns) => saveUnitAssignments({ field: 'barns', unitsKey: 'stalls', noun: 'stall', next: nextBarns, prev: prevBarns }),
+        [saveUnitAssignments]
+    );
+
+    // Same for camper spots.
+    const updateRvAreasImmediate = useCallback(
+        (nextRvAreas, prevRvAreas) => saveUnitAssignments({ field: 'rvAreas', unitsKey: 'spots', noun: 'RV spot', next: nextRvAreas, prev: prevRvAreas }),
+        [saveUnitAssignments]
+    );
 
     // Persist the cover image URL immediately so it shows on the public event card.
     const updateCoverImageImmediate = useCallback(async (url) => {

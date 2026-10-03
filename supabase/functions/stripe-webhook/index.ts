@@ -536,8 +536,11 @@ serve(async (req: Request): Promise<Response> => {
         break;
       }
 
-      case "invoice.paid":
-      case "invoice.payment_succeeded": {
+      // Stripe sends BOTH invoice.paid and invoice.payment_succeeded for one paid
+      // invoice, each with its own event id, so the event-id guard above cannot
+      // catch the pair. Recording is additive, so handling both doubled the
+      // payment. Handle invoice.paid only; invoice.payment_succeeded is ignored.
+      case "invoice.paid": {
         const invoice = event.data.object;
         // Only our housing invoices carry this metadata; subscription invoices don't.
         if (invoice.metadata?.type === "stall_booking") {
