@@ -4425,9 +4425,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // was actually written — otherwise the barn map would keep showing the released
     // stalls as booked until the page was reloaded.
     const changeBookingStatus = async (bookingId, newStatus, activityMessage) => {
-        const wasAlreadyConfirmed = bookings.find(b => b.id === bookingId)?.status === 'confirmed';
+        const previousStatus = bookings.find(b => b.id === bookingId)?.status;
+        const wasAlreadyConfirmed = previousStatus === 'confirmed';
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: newStatus } : b));
         const result = onUpdateBookingStatus ? await onUpdateBookingStatus(bookingId, newStatus) : null;
+        // The save failed (it already showed its own error). Put the booking back to
+        // what is really saved — otherwise a failed Cancel keeps showing "Cancelled"
+        // with its stalls released while the database still holds them.
+        if (onUpdateBookingStatus && !result) {
+            setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: previousStatus } : b));
+            return;
+        }
         // Cancelling releases stalls AND RV spots server-side (see
         // updateBookingStatusImmediate) — mirror both into local state, same as barns
         // already did, so the Assign boards show them free right away instead of only
@@ -4510,8 +4518,21 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     }, [pd?.stallingService?.barns, pd?.stallingService?.rvAreas, pd?.stallingService?.bookings]);
 
     const removeBooking = async (bookingId) => {
+        const removedIndex = bookings.findIndex(b => b.id === bookingId);
+        const removedBooking = removedIndex >= 0 ? bookings[removedIndex] : null;
         setBookings(prev => prev.filter(b => b.id !== bookingId));
         const result = onRemoveBookingImmediate ? await onRemoveBookingImmediate(bookingId) : null;
+        // The delete did not save (it already showed its own error): bring the booking
+        // back in its old place instead of leaving it looking deleted until a reload.
+        if (onRemoveBookingImmediate && !result && removedBooking) {
+            setBookings(prev => {
+                if (prev.some(b => b.id === bookingId)) return prev;
+                const next = [...prev];
+                next.splice(Math.min(removedIndex, next.length), 0, removedBooking);
+                return next;
+            });
+            return;
+        }
         // Deleting releases the booking's stalls and RV spots in the database — mirror
         // both into local state (same as changeBookingStatus does for cancel) so the
         // Assign boards show them free immediately, not only after a reload.

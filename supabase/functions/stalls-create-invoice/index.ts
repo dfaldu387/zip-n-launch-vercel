@@ -325,8 +325,10 @@ serve(async (req: Request): Promise<Response> => {
     // the connected account's own balance, so "show absorbs" needs no extra
     // math) or the customer, billed the estimated fee as its own line item.
     const processingFeeMode = project.project_data?.stallingService?.processingFeeMode || "show";
+    // Follows the booking page, which shows this fee whenever the show chose
+    // "customer pays" — with or without a connected payout account.
     const feeCents =
-      connectedAccountId && processingFeeMode === "customer"
+      processingFeeMode === "customer"
         ? grossUpForCustomerFee(amountCents) - amountCents
         : 0;
 
@@ -351,6 +353,9 @@ serve(async (req: Request): Promise<Response> => {
       "metadata[type]": "stall_booking",
       "metadata[showId]": showId,
       "metadata[bookingId]": bookingId,
+      // What the booking is owed, WITHOUT the card fee line — the webhook records
+      // this as the payment, not invoice.amount_paid (which includes the fee).
+      "metadata[baseAmountCents]": String(amountCents),
     };
     if (connectedAccountId) {
       invoiceParams["application_fee_amount"] = String(

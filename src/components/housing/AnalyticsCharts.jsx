@@ -241,7 +241,7 @@ const StatusChart = ({ bookings }) => {
                         />
                         <div className="space-y-2">
                             {data.map(d => {
-                                const pct = Math.round((d.value / total) * 100);
+                                const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
                                 return (
                                     <div key={d.status} className="flex items-center justify-between text-sm">
                                         <div className="flex items-center gap-2 min-w-0">

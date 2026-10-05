@@ -209,15 +209,19 @@ const isAllowedRedirect = (url: unknown): boolean => {
   }
 };
 
+// idempotencyKey: Stripe returns the SAME result for a repeat call with the same key
+// and the same parameters, instead of creating a second object.
 async function stripePost(
   endpoint: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  idempotencyKey?: string
 ): Promise<any> {
   const response = await fetch(`https://api.stripe.com/v1/${endpoint}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
       "Content-Type": "application/x-www-form-urlencoded",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
     },
     body: new URLSearchParams(params).toString(),
   });
@@ -316,8 +320,11 @@ serve(async (req: Request): Promise<Response> => {
     // matches every show's behavior before this setting existed) or the
     // customer, charged extra on top at checkout.
     const processingFeeMode = project.project_data?.stallingService?.processingFeeMode || "show";
+    // The booking page shows this fee whenever the show chose "customer pays", with
+    // or without a connected payout account, so the charge follows the same rule —
+    // otherwise the page promises one total and Stripe charges another.
     const chargeCents =
-      connectedAccountId && processingFeeMode === "customer"
+      processingFeeMode === "customer"
         ? grossUpForCustomerFee(amountCents)
         : amountCents;
 
@@ -332,6 +339,10 @@ serve(async (req: Request): Promise<Response> => {
       "metadata[type]": "stall_booking",
       "metadata[showId]": showId,
       "metadata[bookingId]": bookingId,
+      // What the booking is owed, WITHOUT the card fee. The webhook records this
+      // as the payment — session.amount_total includes the fee the customer paid
+      // on top, which is not part of the booking balance.
+      "metadata[baseAmountCents]": String(amountCents),
     };
 
     const email = customerEmail || booking.email;
@@ -350,7 +361,19 @@ serve(async (req: Request): Promise<Response> => {
       params["payment_intent_data[transfer_data][destination]"] = connectedAccountId;
     }
 
-    const session = await stripePost("checkout/sessions", params);
+    // A second click (or a second tab) on an unchanged balance must not open a second
+    // payable session — if both were paid the customer would be charged twice. The key
+    // is a fingerprint of everything that defines the session plus a 2-hour window, so
+    // the same balance gives back the same checkout link, while a changed balance or
+    // email gives a new one and an old link never lingers.
+    const fingerprint = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(params) + "|" + Math.floor(Date.now() / (2 * 60 * 60 * 1000)))
+    );
+    const idempotencyKey =
+      "stall-checkout-" +
+      Array.from(new Uint8Array(fingerprint)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const session = await stripePost("checkout/sessions", params, idempotencyKey);
     if (session.error) {
       throw new Error(session.error.message);
     }

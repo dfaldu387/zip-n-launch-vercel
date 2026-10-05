@@ -352,7 +352,10 @@ serve(async (req: Request): Promise<Response> => {
 
         // ── Housing / stall booking payment (guest checkout, no supabase user) ──
         if (session.metadata?.type === "stall_booking") {
-          const paidDollars = (session.amount_total || 0) / 100;
+          // Record what the booking was owed, not what the card was charged: when the
+          // customer covers the card fee, amount_total includes that fee on top.
+          const baseCents = Number(session.metadata?.baseAmountCents);
+          const paidDollars = (baseCents > 0 ? baseCents : (session.amount_total || 0)) / 100;
           console.log(`stall_booking checkout paid: +$${paidDollars}`);
           await markStallBookingPaid(
             adminClient,
@@ -544,7 +547,11 @@ serve(async (req: Request): Promise<Response> => {
         const invoice = event.data.object;
         // Only our housing invoices carry this metadata; subscription invoices don't.
         if (invoice.metadata?.type === "stall_booking") {
-          const paidDollars = (invoice.amount_paid || 0) / 100;
+          // Same as checkout: the invoice carries a card-fee line when the customer
+          // covers it, which is not part of the booking balance.
+          const baseCents = Number(invoice.metadata?.baseAmountCents);
+          const paidCents = invoice.amount_paid || 0;
+          const paidDollars = (baseCents > 0 && paidCents >= baseCents ? baseCents : paidCents) / 100;
           console.log(`stall_booking invoice paid: +$${paidDollars}`);
           await markStallBookingPaid(
             adminClient,
