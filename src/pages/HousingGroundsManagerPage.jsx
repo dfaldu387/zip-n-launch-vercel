@@ -76,6 +76,7 @@ import {
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
 } from '@/lib/barnGrid';
+import { netAfterFees, estimateBookingCount, moneyNum } from '@/lib/netRevenue';
 import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee, barnPerStallTotal as computeBarnPerStallTotal, barnPerStallCost as computeBarnPerStallCost } from '@/lib/extraStallFees';
 import { ALL_RV_AREAS, nightlyRateForRvArea, flatRateForRvArea, nightlyCostForRvArea, flatCostForRvArea, scopeLabelForRvFee } from '@/lib/extraRvFees';
 
@@ -3777,6 +3778,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         return v === undefined || v === '' ? actual : (Number(v) || 0);
     };
     const setWhatIfQty = (id, value) => setWhatIfCounts(prev => ({ ...prev, [id]: value }));
+    // Stripe's $0.30 is charged per booking, so the What-If needs a guess at how
+    // many units one exhibitor books at a time. One number for the whole calculator.
+    const [whatIfPerBooking, setWhatIfPerBooking] = useState(5);
+    // Gross -> what the show keeps. Fees only apply once payouts are connected
+    // (before that, every payment stays on the platform account).
+    const whatIfFees = (gross, units, includeFlat = true) => {
+        if (!payoutsEnabled || gross <= 0) return { gross, totalFees: 0, net: gross };
+        return netAfterFees(gross, estimateBookingCount(units, whatIfPerBooking), processingFeeMode, includeFlat);
+    };
 
     // Stall fees: a circuit fee across the whole facility, a fee on one or several
     // barns, or a barn's own per-night rate. appliesTo is 'all' (every barn) or an
@@ -5008,8 +5018,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 const costPerUnit = nightlyCostForBarn(barn.id, extraStallFees) * showNights;
                 rows.push({
                     key: `${barn.id}::night`, name: barn.name, tag: null,
-                    priceLabel: `$${(barn.pricePerNight || 0).toFixed(0)}/night`,
-                    costLabel: `$${nightlyCostForBarn(barn.id, extraStallFees).toFixed(0)}/night`,
+                    priceLabel: `$${moneyNum((barn.pricePerNight || 0))}/night`,
+                    costLabel: `$${moneyNum(nightlyCostForBarn(barn.id, extraStallFees))}/night`,
                     nightsLabel: showNights, perUnit, costPerUnit, capacity,
                 });
             }
@@ -5018,8 +5028,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 const costPerUnit = flatCostForBarn(barn.id, extraStallFees);
                 rows.push({
                     key: `${barn.id}::flat`, name: barn.name, tag: null,
-                    priceLabel: `$${perUnit.toFixed(0)} flat`,
-                    costLabel: `$${costPerUnit.toFixed(0)} flat`,
+                    priceLabel: `$${moneyNum(perUnit)} flat`,
+                    costLabel: `$${moneyNum(costPerUnit)} flat`,
                     nightsLabel: '—', perUnit, costPerUnit, capacity,
                 });
             }
@@ -5040,8 +5050,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 const costPerUnit = nightlyCostForRvArea(rv.id, extraRvFees) * showNights;
                 rows.push({
                     key: `${rv.id}::night`, name: rv.name, tag: '(RV)',
-                    priceLabel: `$${nightlyRateForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
-                    costLabel: `$${nightlyCostForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
+                    priceLabel: `$${moneyNum(nightlyRateForRvArea(rv.id, extraRvFees))}/night`,
+                    costLabel: `$${moneyNum(nightlyCostForRvArea(rv.id, extraRvFees))}/night`,
                     nightsLabel: showNights, perUnit, costPerUnit, capacity,
                 });
             }
@@ -5050,8 +5060,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 const costPerUnit = flatCostForRvArea(rv.id, extraRvFees);
                 rows.push({
                     key: `${rv.id}::flat`, name: rv.name, tag: '(RV)',
-                    priceLabel: `$${perUnit.toFixed(0)} flat`,
-                    costLabel: `$${costPerUnit.toFixed(0)} flat`,
+                    priceLabel: `$${moneyNum(perUnit)} flat`,
+                    costLabel: `$${moneyNum(costPerUnit)} flat`,
                     nightsLabel: '—', perUnit, costPerUnit, capacity,
                 });
             }
@@ -5065,6 +5075,34 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         }
         return rows;
     })();
+
+    // Stall Fee Calculator numbers. Capacity mode stays gross (max you could list);
+    // What-If mode takes the card/platform fees off, so Est. Revenue is what the
+    // show actually keeps and Est. Profit is that minus cost.
+    // Supplies join the same table. Unlimited stock (0) has no capacity to sell,
+    // so it starts at 0 until a What-If number is typed. Supplies are bought with
+    // the stalls, so they don't add their own $0.30 card charge.
+    const supplyCalcRows = supplies.map(s => ({
+        key: `supply::${s.id}`, name: s.name, tag: '(Supply)', isSupply: true,
+        priceLabel: `$${(s.price || 0).toFixed(2)}/${s.unit || 'unit'}`,
+        costLabel: `$${(s.cost || 0).toFixed(2)}/${s.unit || 'unit'}`,
+        nightsLabel: '—', perUnit: s.price || 0, costPerUnit: s.cost || 0, capacity: s.stockQty || 0,
+    }));
+    const calcRows = [...pricingRows, ...supplyCalcRows].map(row => {
+        const qty = whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity;
+        const gross = row.perUnit * qty;
+        const f = whatIfMode ? whatIfFees(gross, qty, !row.isSupply) : { totalFees: 0, net: gross };
+        return { ...row, qty, fees: f.totalFees, revenue: f.net, profit: f.net - row.costPerUnit * qty };
+    });
+    const calcTotals = calcRows.reduce((t, r) => ({
+        qty: t.qty + r.qty, fees: t.fees + r.fees, revenue: t.revenue + r.revenue, profit: t.profit + r.profit,
+    }), { qty: 0, fees: 0, revenue: 0, profit: 0 });
+    // Whole dollars stay clean ($228); cents always show two digits ($26.60); negatives read −$12.
+    const fmt$ = (n) => {
+        const v = Math.round(n * 100) / 100;
+        const body = Math.abs(v).toLocaleString(undefined, Number.isInteger(v) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return `${v < 0 ? '−' : ''}$${body}`;
+    };
 
     // "Booked" counts for the Pricing Summary — reservations that aren't cancelled,
     // measured in physical spaces. Stalls use the modern stall→booking pin
@@ -5103,6 +5141,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         // same way revenue is priced live off current Amount fields (see below).
         // Support spaces carry no cost basis, so they contribute revenue only.
         let realizedCost = 0;
+        // Card + platform fees on what's been collected — worked out booking by
+        // booking, because Stripe's $0.30 is charged once per payment. Only once
+        // payouts are connected (before that every payment stays on the platform).
+        let realizedFees = 0;
 
         // Per-area breakdowns — Robert reads occupancy and revenue barn by barn and
         // by RV hookup type, not as one show-wide number.
@@ -5148,6 +5190,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         for (const b of relevantBookings) {
             if (b.status === 'cancelled') { cancelledCount += 1; continue; }
             const isActive = ACTIVE_STATUSES.has(b.status);
+            const revenueBeforeBooking = realizedRevenue;
 
             // Stall money is priced live — assigned stalls (or the booked quantity, if
             // none are assigned yet) × nights × the barn's CURRENT price. The stored
@@ -5270,6 +5313,10 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 const barn = barns.find(x => (x.stalls || []).some(s => s.id === b.stallId));
                 if (barn) recordDemand(barn.id, barn.name, 'stall');
             }
+
+            if (isActive && payoutsEnabled) {
+                realizedFees += netAfterFees(realizedRevenue - revenueBeforeBooking, 1, processingFeeMode).totalFees;
+            }
         }
 
         // Peak demand zone (most-requested area)
@@ -5311,7 +5358,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             // using each item's current Cost field (barn/RV/supply/fee). Support
             // spaces have no cost basis and are revenue-only.
             cost: { total: realizedCost },
-            profit: { total: realizedRevenue - realizedCost },
+            // fees = card/platform fees on collected money; net = what the show keeps;
+            // profit is AFTER fees (net − cost).
+            fees: { total: realizedFees },
+            net: { total: realizedRevenue - realizedFees },
+            profit: { total: realizedRevenue - realizedFees - realizedCost },
             noShow: { count: cancelledCount, total: totalBookingsCount, rate: noShowRate },
             peakDemand,
             demandList: demandList.slice(0, 5),
@@ -5326,7 +5377,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             bySupplyItem: [...supplyStats.values()],
             facilityFeeRevenue,
         };
-    }, [bookings, barns, extraStallFees, rvAreas, extraRvFees, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits]);
+    }, [bookings, barns, extraStallFees, rvAreas, extraRvFees, supplies, activeBookingIds, occupancyRate, occupiedUnits, confirmedBookings, totalUnits, payoutsEnabled, processingFeeMode]);
 
     const persist = useCallback(async (opts = {}) => {
         // The debounced auto-save below can fire up to 1.5s after the edit that
@@ -5860,7 +5911,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <div className="flex items-center gap-2">
                                         <DollarSign className="h-4 w-4 text-emerald-600" />
                                         <h4 className="text-sm font-semibold">Card processing fee</h4>
-                                        <span className="text-[11px] text-muted-foreground">Who covers Stripe's processing cost</span>
+                                        <span className="text-[11px] text-muted-foreground">Who covers Stripe's processing cost — 2.9% + $0.30 per transaction</span>
                                     </div>
                                     <div className="grid gap-2 sm:grid-cols-2">
                                         {[
@@ -6420,16 +6471,14 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             <th className="text-right px-2 py-1 font-medium">Cost</th>
                                             <th className="text-center px-2 py-1 font-medium">Nights</th>
                                             <th className="text-right px-2 py-1 font-medium">Per Stall Total</th>
-                                            <th className="text-center px-2 py-1 font-medium">{whatIfMode ? 'Est. Sold' : 'Stalls'}</th>
+                                            <th className="text-center px-2 py-1 font-medium">{whatIfMode ? 'Est. Sold' : 'Units'}</th>
+                                            {whatIfMode && payoutsEnabled && <th className="text-right px-2 py-1 font-medium">Fees</th>}
                                             <th className="text-right px-2 py-1 font-medium">{whatIfMode ? 'Est. Revenue' : 'Max Revenue'}</th>
                                             <th className="text-right px-2 py-1 font-medium">{whatIfMode ? 'Est. Profit' : 'Max Profit'}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {pricingRows.map(row => {
-                                            const qty = whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity;
-                                            const maxRev = row.perUnit * qty;
-                                            const maxProfit = (row.perUnit - row.costPerUnit) * qty;
+                                        {calcRows.map(row => {
                                             return (
                                                 <tr key={row.key} className="border-t border-indigo-100 dark:border-indigo-800/50">
                                                     <td className="px-2 py-1.5 font-medium">
@@ -6438,7 +6487,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                     <td className="px-2 py-1.5 text-right">{row.priceLabel}</td>
                                                     <td className="px-2 py-1.5 text-right text-muted-foreground">{row.costLabel}</td>
                                                     <td className="px-2 py-1.5 text-center">{row.nightsLabel}</td>
-                                                    <td className="px-2 py-1.5 text-right font-semibold">${row.perUnit.toFixed(0)}</td>
+                                                    <td className="px-2 py-1.5 text-right font-semibold">{fmt$(row.perUnit)}</td>
                                                     <td className="px-2 py-1.5 text-center">
                                                         {whatIfMode ? (
                                                             <Input
@@ -6450,8 +6499,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             />
                                                         ) : row.capacity}
                                                     </td>
-                                                    <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">${maxRev.toLocaleString()}</td>
-                                                    <td className="px-2 py-1.5 text-right font-bold text-emerald-700 dark:text-emerald-400">${maxProfit.toLocaleString()}</td>
+                                                    {whatIfMode && payoutsEnabled && (
+                                                        <td className="px-2 py-1.5 text-right text-muted-foreground">{row.fees > 0 ? `−${fmt$(row.fees)}` : '—'}</td>
+                                                    )}
+                                                    <td className="px-2 py-1.5 text-right font-bold text-indigo-700 dark:text-indigo-300">{fmt$(row.revenue)}</td>
+                                                    <td className="px-2 py-1.5 text-right font-bold text-emerald-700 dark:text-emerald-400">{fmt$(row.profit)}</td>
                                                 </tr>
                                             );
                                         })}
@@ -6459,21 +6511,33 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <tfoot>
                                         <tr className="border-t-2 border-indigo-200 dark:border-indigo-700 font-bold">
                                             <td className="px-2 py-1.5" colSpan={5}>Total</td>
-                                            <td className="px-2 py-1.5 text-center">
-                                                {whatIfMode
-                                                    ? pricingRows.reduce((s, row) => s + whatIfQtyFor(row.key, row.capacity), 0)
-                                                    : totalUnits}
-                                            </td>
-                                            <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">
-                                                ${pricingRows.reduce((sum, row) => sum + (whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity) * row.perUnit, 0).toLocaleString()}
-                                            </td>
-                                            <td className="px-2 py-1.5 text-right text-emerald-700 dark:text-emerald-400">
-                                                ${pricingRows.reduce((sum, row) => sum + (whatIfMode ? whatIfQtyFor(row.key, row.capacity) : row.capacity) * (row.perUnit - row.costPerUnit), 0).toLocaleString()}
-                                            </td>
+                                            <td className="px-2 py-1.5 text-center">{calcTotals.qty}</td>
+                                            {whatIfMode && payoutsEnabled && (
+                                                <td className="px-2 py-1.5 text-right text-muted-foreground">{calcTotals.fees > 0 ? `−${fmt$(calcTotals.fees)}` : '—'}</td>
+                                            )}
+                                            <td className="px-2 py-1.5 text-right text-indigo-700 dark:text-indigo-300">{fmt$(calcTotals.revenue)}</td>
+                                            <td className="px-2 py-1.5 text-right text-emerald-700 dark:text-emerald-400">{fmt$(calcTotals.profit)}</td>
                                         </tr>
                                     </tfoot>
                                 </table>
                             </div>
+                            {whatIfMode && payoutsEnabled && (
+                                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-indigo-700 dark:text-indigo-300">
+                                    <span>Stalls per booking</span>
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        value={whatIfPerBooking}
+                                        onChange={(e) => setWhatIfPerBooking(e.target.value)}
+                                        className="h-6 w-14 text-xs text-center"
+                                    />
+                                    <span className="text-muted-foreground">
+                                        {processingFeeMode === 'customer'
+                                            ? '— customer pays the card fee, so only the 5% platform fee comes off.'
+                                            : '— the show pays 5% + 2.9% + $0.30 per booking, so smaller bookings cost more.'}
+                                    </span>
+                                </div>
+                            )}
 
                             {/* A barn's own Flat/Per-Night fee is already folded into its row
                                 above — this lists what's still charged on top, at booking time
@@ -6541,8 +6605,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         if (barnHasNightly(barn)) {
                                                             variants.push({
                                                                 key: `${barn.id}::night`,
-                                                                priceLabel: `$${(barn.pricePerNight || 0).toFixed(0)}/night`,
-                                                                costLabel: `$${nightlyCostForBarn(barn.id, extraStallFees).toFixed(0)}/night`,
+                                                                priceLabel: `$${moneyNum((barn.pricePerNight || 0))}/night`,
+                                                                costLabel: `$${moneyNum(nightlyCostForBarn(barn.id, extraStallFees))}/night`,
                                                                 perUnit: nightlyRateForBarn(barn.id, extraStallFees) * (showNights || 3),
                                                                 costPerUnit: nightlyCostForBarn(barn.id, extraStallFees) * (showNights || 3),
                                                             });
@@ -6550,8 +6614,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         if (barnIsFlat(barn)) {
                                                             variants.push({
                                                                 key: `${barn.id}::flat`,
-                                                                priceLabel: `$${barnFlatTotal(barn).toFixed(0)} flat`,
-                                                                costLabel: `$${flatCostForBarn(barn.id, extraStallFees).toFixed(0)} flat`,
+                                                                priceLabel: `$${moneyNum(barnFlatTotal(barn))} flat`,
+                                                                costLabel: `$${moneyNum(flatCostForBarn(barn.id, extraStallFees))} flat`,
                                                                 perUnit: barnFlatTotal(barn),
                                                                 costPerUnit: flatCostForBarn(barn.id, extraStallFees),
                                                             });
@@ -6588,8 +6652,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         if (nightlyRateForRvArea(rv.id, extraRvFees) > 0) {
                                                             variants.push({
                                                                 key: `${rv.id}::night`,
-                                                                priceLabel: `$${nightlyRateForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
-                                                                costLabel: `$${nightlyCostForRvArea(rv.id, extraRvFees).toFixed(0)}/night`,
+                                                                priceLabel: `$${moneyNum(nightlyRateForRvArea(rv.id, extraRvFees))}/night`,
+                                                                costLabel: `$${moneyNum(nightlyCostForRvArea(rv.id, extraRvFees))}/night`,
                                                                 perUnit: nightlyRateForRvArea(rv.id, extraRvFees) * (showNights || 3),
                                                                 costPerUnit: nightlyCostForRvArea(rv.id, extraRvFees) * (showNights || 3),
                                                             });
@@ -6597,8 +6661,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         if (rvIsFlat(rv)) {
                                                             variants.push({
                                                                 key: `${rv.id}::flat`,
-                                                                priceLabel: `$${rvFlatTotal(rv).toFixed(0)} flat`,
-                                                                costLabel: `$${flatCostForRvArea(rv.id, extraRvFees).toFixed(0)} flat`,
+                                                                priceLabel: `$${moneyNum(rvFlatTotal(rv))} flat`,
+                                                                costLabel: `$${moneyNum(flatCostForRvArea(rv.id, extraRvFees))} flat`,
                                                                 perUnit: rvFlatTotal(rv),
                                                                 costPerUnit: flatCostForRvArea(rv.id, extraRvFees),
                                                             });
@@ -6767,6 +6831,34 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 </>
                             )}
 
+                            {/* What confirmed bookings really bring in, fee by fee. Unlike the
+                                Max columns above (what you COULD sell), this is real money:
+                                each booking's card/platform fee is worked out on its own. */}
+                            {analytics.revenue.total > 0 && (
+                                <div className="mt-4 rounded-lg border p-3">
+                                    <p className="text-sm font-semibold mb-2">
+                                        Collected so far <span className="font-normal text-muted-foreground text-xs">— confirmed bookings, after fees</span>
+                                    </p>
+                                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                                        {[
+                                            { label: 'Booked', value: fmt$(analytics.revenue.total), cls: '' },
+                                            { label: payoutsEnabled ? (processingFeeMode === 'customer' ? 'Platform fee (5%)' : 'Platform + card fees') : 'Fees', value: analytics.fees.total > 0 ? `−${fmt$(analytics.fees.total)}` : '—', cls: 'text-muted-foreground' },
+                                            { label: 'You keep', value: fmt$(analytics.net.total), cls: 'text-indigo-700 dark:text-indigo-300' },
+                                            { label: 'Cost', value: `−${fmt$(analytics.cost.total)}`, cls: 'text-muted-foreground' },
+                                            { label: 'Profit', value: fmt$(analytics.profit.total), cls: analytics.profit.total < 0 ? 'text-red-600' : 'text-emerald-700 dark:text-emerald-400' },
+                                        ].map(t => (
+                                            <div key={t.label} className="rounded-md bg-muted/30 px-2 py-1.5">
+                                                <div className="text-[10px] uppercase text-muted-foreground">{t.label}</div>
+                                                <div className={cn('text-sm font-bold', t.cls)}>{t.value}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {!payoutsEnabled && (
+                                        <p className="text-[11px] text-muted-foreground mt-1.5">Fees show once payouts are connected.</p>
+                                    )}
+                                </div>
+                            )}
+
                             {projectedRevenue > 0 && (
                                 <div className="mt-4 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200">
                                     <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">
@@ -6830,10 +6922,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 {/* 3. Profit — Revenue minus each item's Cost / Expense field */}
                                 <div className="rounded-xl border-2 p-5 bg-teal-50 dark:bg-teal-950/20 border-teal-200">
                                     <p className="text-xs font-semibold text-teal-700 dark:text-teal-300 uppercase tracking-wide mb-1">Realized Profit</p>
-                                    <p className="text-4xl font-bold text-teal-900 dark:text-teal-200">${analytics.profit.total.toLocaleString()}</p>
-                                    <p className="text-xs text-teal-700/80 dark:text-teal-400/80 mt-2">
-                                        Cost: ${analytics.cost.total.toLocaleString()}
-                                    </p>
+                                    <p className="text-4xl font-bold text-teal-900 dark:text-teal-200">{fmt$(analytics.profit.total)}</p>
+                                    <div className="text-xs text-teal-700/80 dark:text-teal-400/80 mt-2 space-y-0.5">
+                                        <p>Booked: {fmt$(analytics.revenue.total)}</p>
+                                        {payoutsEnabled && <p>Fees: −{fmt$(analytics.fees.total)}</p>}
+                                        <p>You keep: {fmt$(analytics.net.total)}</p>
+                                        <p>Cost: −{fmt$(analytics.cost.total)}</p>
+                                    </div>
                                 </div>
 
                                 {/* 4. No-show / cancel rate */}
