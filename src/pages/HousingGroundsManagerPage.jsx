@@ -21,7 +21,7 @@ import {
     Building2, Warehouse, Car, ShoppingCart, AlertCircle, Wand2, Moon,
     Beef, PawPrint, Copy, ExternalLink, Link as LinkIcon,
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
-    ChevronDown, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
+    ChevronDown, ChevronLeft, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
     ClipboardList, Package, Truck, ArrowUpDown, BarChart3, Printer, MoreHorizontal,
     Map as MapIcon, List as ListIcon,
 } from 'lucide-react';
@@ -42,6 +42,10 @@ import HousingShowDetailsStep from '@/components/housing/HousingShowDetailsStep'
 import HousingTermsDialog from '@/components/housing/HousingTermsDialog';
 import SaveBarnLayoutDialog from '@/components/housing/SaveBarnLayoutDialog';
 import LoadBarnLayoutDialog from '@/components/housing/LoadBarnLayoutDialog';
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { applyBarnLayout, barnHasAssignments } from '@/lib/savedBarnLayouts';
 import { buildNewShowRow, nextShowNumber } from '@/lib/housingNewShow';
 import { needsHousingTerms, HOUSING_TERMS_VERSION } from '@/lib/housingTerms';
@@ -114,6 +118,14 @@ const SUPPLY_PRESETS = [
     { name: 'Shavings', unit: 'bag', defaultPrice: 12 },
     { name: 'Stall Mat Rental', unit: 'per stall', defaultPrice: 25 },
 ];
+
+// Hay sells per bale, shavings per bag — anything else keeps Per Stall.
+const supplyUnitType = (unit) => {
+    const u = String(unit || '').toLowerCase();
+    if (u.includes('bale')) return 'per_bale';
+    if (u.includes('bag')) return 'per_bag';
+    return 'per_stall';
+};
 
 // Cycled across the top KPI row so each section's stat cards stay visually
 // distinct without hand-picking a color per card (some sections, like
@@ -283,7 +295,7 @@ const FeeDetailsFields = ({ item, onUpdate, unitDefault = 'per_night', showHeade
                 />
             </div>
             <div className="space-y-1">
-                <Label className="text-xs">Late Fee ($)</Label>
+                <Label className="text-xs">Late Fee / Price after due date ($)</Label>
                 <Input
                     type="number"
                     min={0}
@@ -667,6 +679,30 @@ const StallMap = ({
         return () => window.removeEventListener('pointerup', stop);
     }, []);
 
+    // Wide barns (e.g. 28 columns) run past the screen — slide controls sit above the
+    // map so they're never hidden at the bottom of a tall grid.
+    const scrollRef = React.useRef(null);
+    const [scrollInfo, setScrollInfo] = React.useState({ pos: 0, max: 0 });
+    const syncScroll = React.useCallback(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const max = Math.max(0, el.scrollWidth - el.clientWidth);
+        setScrollInfo(prev => (prev.pos === el.scrollLeft && prev.max === max ? prev : { pos: el.scrollLeft, max }));
+    }, []);
+    React.useEffect(() => {
+        syncScroll();
+        const el = scrollRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        const ro = new ResizeObserver(syncScroll);
+        ro.observe(el);
+        if (el.firstElementChild) ro.observe(el.firstElementChild);
+        return () => ro.disconnect();
+    }, [syncScroll, stalls?.length, cols]);
+    const slideBy = (dir) => {
+        const el = scrollRef.current;
+        if (el) el.scrollBy({ left: dir * Math.max(200, el.clientWidth * 0.7), behavior: 'smooth' });
+    };
+
     if (!stalls || stalls.length === 0) {
         return (
             <p className="text-xs text-muted-foreground italic">
@@ -742,8 +778,26 @@ const StallMap = ({
     const colLabelCls = 'h-6 w-12 text-center text-[10px] font-semibold text-muted-foreground bg-transparent outline-none cursor-text rounded-sm border border-dashed border-muted-foreground/25 hover:border-primary hover:bg-primary/5 focus:border-primary focus:border-solid focus:bg-primary/10 focus:text-foreground';
 
     return (
-        <div className="space-y-2">
-            <div className="overflow-x-auto">
+        <div className="space-y-2 w-full max-w-full min-w-0">
+            {scrollInfo.max > 0 && (
+                <div className="flex items-center gap-2">
+                    <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs shrink-0"
+                        disabled={scrollInfo.pos <= 0} onClick={() => slideBy(-1)}>
+                        <ChevronLeft className="h-3.5 w-3.5" /> Slide left
+                    </Button>
+                    <input
+                        type="range" min={0} max={scrollInfo.max} value={Math.min(scrollInfo.pos, scrollInfo.max)}
+                        onChange={(e) => { if (scrollRef.current) scrollRef.current.scrollLeft = Number(e.target.value); }}
+                        className="flex-1 min-w-0 accent-primary cursor-pointer"
+                        aria-label="Slide the barn layout left and right"
+                    />
+                    <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs shrink-0"
+                        disabled={scrollInfo.pos >= scrollInfo.max - 1} onClick={() => slideBy(1)}>
+                        Slide right <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                </div>
+            )}
+            <div ref={scrollRef} onScroll={syncScroll} className="overflow-x-auto w-full max-w-full">
                 <div className={cn('inline-flex flex-col rounded-md border bg-background/60 p-3', tight ? 'gap-0' : 'gap-1.5')}>
                     {/* Column handles — insert a column here / remove this column */}
                     {canEditGrid && (
@@ -993,6 +1047,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     // Copy a saved layout from the shared catalog into this barn. Only the shape
     // changes; the barn keeps its name, prices, dates and fees. Refused while
     // exhibitors are on its stalls — the new boxes would lose those assignments.
+    const [pendingLayout, setPendingLayout] = useState(null);
     const loadSavedLayout = (row) => {
         if (barnHasAssignments(barn)) {
             toast({
@@ -1002,8 +1057,13 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
             });
             return;
         }
+        setPendingLayout(row); // asks first — see the confirm window below
+    };
+    const confirmLoadLayout = () => {
+        const row = pendingLayout;
+        setPendingLayout(null);
+        if (!row) return;
         const label = `${row.facility_name} · ${row.barn_name}`;
-        if (!window.confirm(`Replace this barn's layout with "${label}"?`)) return;
         const patch = applyBarnLayout(barn, row.layout, uuidv4);
         if (!patch) {
             toast({ title: 'That layout can not be used', description: 'It looks damaged. Try another one.', variant: 'destructive' });
@@ -1029,8 +1089,8 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     const isCustomNumbering = numberingMode(barn) === NUMBERING_CUSTOM;
     const duplicateNumbers = isCustomNumbering ? duplicateStallNumbers(barn.stalls || []) : new Set();
     const renameStall = (stallId, value) => applyPatch(setCustomNumber(barn, stallId, value));
-    const applyFill = () => {
-        const patch = fillCustomSequence(barn, fillStart);
+    const applyFill = (direction = 'ltr') => {
+        const patch = fillCustomSequence(barn, fillStart, direction);
         if (!patch) {
             toast({ title: 'Enter a starting number', description: 'For example 1001, or A101.', variant: 'destructive' });
             return;
@@ -1138,7 +1198,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
             </CardHeader>
             {expanded && (
                 <CardContent className="pt-2">
-                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block', sectionLocked && READONLY_FIELDS)}>
+                  <fieldset disabled={sectionLocked} className={cn('space-y-3 block min-w-0', sectionLocked && READONLY_FIELDS)}>
                     <MoveInOutCard
                         moveInDate={moveInDate}
                         moveOutDate={moveOutDate}
@@ -1285,6 +1345,22 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                             onOpenChange={setLoadLayoutOpen}
                             onPick={loadSavedLayout}
                         />
+                        <AlertDialog open={!!pendingLayout} onOpenChange={(o) => { if (!o) setPendingLayout(null); }}>
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>Replace this barn's layout?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        This barn will take the shape and stall numbers of
+                                        {' '}<span className="font-semibold text-foreground">{pendingLayout ? `${pendingLayout.facility_name} · ${pendingLayout.barn_name}` : ''}</span>
+                                        {pendingLayout ? ` (${pendingLayout.stall_count} stalls).` : '.'} Its prices, dates and fees stay as they are.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction onClick={confirmLoadLayout}>Replace layout</AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
                         <SaveBarnLayoutDialog
                             open={saveLayoutOpen}
                             onOpenChange={setSaveLayoutOpen}
@@ -1455,12 +1531,14 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                             <Input
                                                 value={fillStart}
                                                 onChange={(e) => setFillStart(e.target.value)}
-                                                onKeyDown={(e) => { if (e.key === 'Enter') applyFill(); }}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') applyFill('ltr'); }}
                                                 className="h-7 w-24 text-xs"
                                                 placeholder="1001"
                                             />
-                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={applyFill}>Fill</Button>
-                                            <span className="text-muted-foreground">(1001, 1002, 1003… left to right, top to bottom)</span>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => applyFill('ltr')}>Fill left → right</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => applyFill('rtl')}>Fill right → left</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => applyFill('zigzag')} title="Row 1 left → right, row 2 right → left, and so on">Fill zigzag</Button>
+                                            <span className="text-muted-foreground">(1001, 1002, 1003… each row top to bottom)</span>
                                             <button
                                                 type="button"
                                                 onClick={() => applyPatch(clearCustomNumbers(barn))}
@@ -1978,7 +2056,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
 
           <fieldset disabled={locked} className="space-y-3 block">
             {/* Fee details — same questions as the Fee Structure page */}
-            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault={item.unit === 'bale' ? 'per_bale' : 'per_bag'} unitOptions={['flat', 'per_bale', 'per_bag', 'per_night', 'custom']} dueDateRequiresFlag="preBedding" />
+            <FeeDetailsFields item={item} onUpdate={onUpdate} unitDefault={supplyUnitType(item.unit) === 'per_stall' ? 'per_bag' : supplyUnitType(item.unit)} unitOptions={['flat', 'per_bale', 'per_bag', 'per_night', 'custom']} dueDateRequiresFlag="preBedding" />
 
             {/* Delivery options — independent checkboxes; can be pre-delivered, sold at the show, or both */}
             <div className="border-t pt-2 space-y-2">
@@ -1990,7 +2068,7 @@ const SupplyItemCard = ({ item, onUpdate, onRemove, variant = 'fees', sold = 0 }
                             onUpdate('preBedding', !!checked);
                             // Pre-bed is ordered ahead of the show — nudge the fee defaults to match.
                             if (checked) {
-                                onUpdate('unitType', 'per_stall');
+                                onUpdate('unitType', supplyUnitType(item.unit));
                                 onUpdate('paymentTiming', 'pre_entry');
                             } else {
                                 // Without pre-delivery there's nothing to be due by.
@@ -4232,7 +4310,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             unit: p.unit,
             stockQty: 0,
             preBedding: p.preBedding || false,
-            ...(p.preBedding ? { unitType: 'per_stall', paymentTiming: 'pre_entry' } : {}),
+            unitType: supplyUnitType(p.unit),
+            ...(p.preBedding ? { paymentTiming: 'pre_entry' } : {}),
         })));
         toast({ title: 'Auto-Generated', description: '3 barns, 1 RV area, and 5 supply items created.' });
     };
@@ -4275,7 +4354,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             stockQty: 0,
             preBedding: preset?.preBedding || false,
             // Pre-bedding is sold ahead of the show, so the fee defaults accordingly.
-            ...(preset?.preBedding ? { unitType: 'per_stall', paymentTiming: 'pre_entry' } : {}),
+            ...(preset ? { unitType: supplyUnitType(preset.unit) } : {}),
+            ...(preset?.preBedding ? { paymentTiming: 'pre_entry' } : {}),
         }]);
     };
 
@@ -5585,8 +5665,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 </div>
 
                 {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
-                <TabsContent value="inventory" className="mt-4">
-                          <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && READONLY_FIELDS)}>
+                <TabsContent value="inventory" className="mt-4 min-w-0">
+                          <fieldset disabled={isLocked} className={cn('space-y-4 min-w-0', isLocked && READONLY_FIELDS)}>
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <Building2 className="h-5 w-5 text-primary" />
@@ -5848,7 +5928,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 fee at the same price on each. A barn's own nightly rate is just a
                                 Per Night fee scoped to it — add as many fees per barn as needed and
                                 they add up (e.g. a facility-wide Circuit Fee plus one barn's rate). */}
-                            <div className="space-y-2">
+                            <div className="space-y-3 rounded-lg border bg-card p-4 mb-6 shadow-sm">
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <Building2 className="h-4 w-4 text-primary" />
@@ -5857,7 +5937,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         <BulkAdjustControl label="Stall" onApply={bulkAdjustStallFees} />
-                                        <Button onClick={addExtraStallFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={barns.length === 0}>
+                                        <Button onClick={addExtraStallFee} size="sm" className="h-8 text-xs shrink-0" disabled={barns.length === 0}>
                                             <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
                                         </Button>
                                     </div>
@@ -5889,7 +5969,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             {/* RV & Camping Fees — same model as Stall Fees: pick which RV areas
                                 each fee applies to (one, several, or all); an area with no fee
                                 of its own falls back to "All RV areas" instead of stacking. */}
-                            <div className="space-y-2">
+                            <div className="space-y-3 rounded-lg border bg-card p-4 mb-6 shadow-sm">
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                         <Car className="h-4 w-4 text-cyan-600" />
@@ -5898,7 +5978,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         <BulkAdjustControl label="RV" onApply={bulkAdjustRvFees} />
-                                        <Button onClick={addExtraRvFee} variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled={rvAreas.length === 0}>
+                                        <Button onClick={addExtraRvFee} size="sm" className="h-8 text-xs shrink-0" disabled={rvAreas.length === 0}>
                                             <Plus className="h-3.5 w-3.5 mr-1" /> Add Fee
                                         </Button>
                                     </div>
@@ -6596,7 +6676,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             <th className="text-right px-3 py-2 font-medium">Profit</th>
                                                             <th className="text-center px-3 py-2 font-medium">Unit</th>
                                                             <th className="text-center px-3 py-2 font-medium">Due</th>
-                                                            <th className="text-right px-3 py-2 font-medium">Late Fee</th>
+                                                            <th className="text-right px-3 py-2 font-medium">Late Fee / Price after due date</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>

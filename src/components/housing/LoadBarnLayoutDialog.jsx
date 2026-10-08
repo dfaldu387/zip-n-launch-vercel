@@ -3,6 +3,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Loader2, Search, Trash2 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -67,8 +71,9 @@ export const LoadBarnLayoutDialog = ({ open, onOpenChange, onPick }) => {
 
     useEffect(() => { if (!open) setQuery(''); }, [open]);
 
+    const [toDelete, setToDelete] = useState(null);
     const handleDelete = async (row) => {
-        if (!window.confirm(`Delete your saved layout "${row.facility_name} · ${row.barn_name}"? This cannot be undone.`)) return;
+        setToDelete(null);
         try {
             await deleteBarnLayout(row.id);
             setResults(prev => prev.filter(r => r.id !== row.id));
@@ -131,7 +136,7 @@ export const LoadBarnLayoutDialog = ({ open, onOpenChange, onPick }) => {
                                     {mine && (
                                         <button
                                             type="button"
-                                            onClick={() => handleDelete(row)}
+                                            onClick={() => setToDelete(row)}
                                             className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive"
                                         >
                                             <Trash2 className="h-3 w-3" /> Delete
@@ -143,6 +148,20 @@ export const LoadBarnLayoutDialog = ({ open, onOpenChange, onPick }) => {
                     })}
                 </div>
             </DialogContent>
+            <AlertDialog open={!!toDelete} onOpenChange={(o) => { if (!o) setToDelete(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete this saved layout?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            "{toDelete?.facility_name} · {toDelete?.barn_name}" will be removed from the catalog. This cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => handleDelete(toDelete)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete layout</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </Dialog>
     );
 };

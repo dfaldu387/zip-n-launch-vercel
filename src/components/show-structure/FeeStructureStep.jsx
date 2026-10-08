@@ -203,7 +203,7 @@ const EditableFeeItem = ({ fee, onUpdate, onRemove, associations, allAssociation
                 </Popover>
             </div>
             <div className="space-y-1.5">
-                <Label>Late Fee ($)</Label>
+                <Label>Late Fee / Price after due date ($)</Label>
                 <Input type="number" value={fee.late_fee_amount || ''} onChange={(e) => onUpdate(fee.id, 'late_fee_amount', e.target.value)} placeholder="e.g., 25.00" disabled={managed} />
             </div>
             {feeNeedsAdvanced(fee) && (

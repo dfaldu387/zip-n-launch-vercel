@@ -120,11 +120,31 @@ export const setCustomNumber = (barn, stallId, value) => {
 // "1001" → 1001, 1002, 1003…   "A101" → A101, A102…   "007" → 007, 008…
 // Runs in grid order (left→right, top→bottom) over stalls and blocked boxes.
 // Returns the barn patch, or null if the start has no number at the end.
-export const fillCustomSequence = (barn, start) => {
+// direction 'rtl' runs each row right→left instead (rows still go top→bottom).
+export const FILL_LTR = 'ltr';
+export const FILL_RTL = 'rtl';
+export const FILL_ZIGZAG = 'zigzag';
+export const fillCustomSequence = (barn, start, direction = FILL_LTR) => {
     const labelAt = sequenceFrom(start);
     if (!labelAt) return null;
+    const stalls = barn.stalls || [];
+    const cols = Math.max(1, gridCols(barn));
+    // Visit order: grid order, or each row reversed for right→left.
+    const order = stalls.map((_, i) => i);
+    if (direction === FILL_RTL || direction === FILL_ZIGZAG) {
+        order.sort((a, b) => {
+            const rowA = Math.floor(a / cols);
+            const rowDiff = rowA - Math.floor(b / cols);
+            if (rowDiff !== 0) return rowDiff;
+            // Zigzag: row 1 runs left→right, row 2 right→left, and so on.
+            const reversed = direction === FILL_RTL || rowA % 2 === 1;
+            return reversed ? (b % cols) - (a % cols) : (a % cols) - (b % cols);
+        });
+    }
+    const labels = new Map();
     let k = 0;
-    const next = (barn.stalls || []).map(s => (isPhysical(s) ? { ...s, customNumber: labelAt(k++) } : s));
+    order.forEach(i => { if (isPhysical(stalls[i])) labels.set(i, labelAt(k++)); });
+    const next = stalls.map((s, i) => (labels.has(i) ? { ...s, customNumber: labels.get(i) } : s));
     return { stalls: renumberStalls(next, { ...barn, numberingMode: NUMBERING_CUSTOM }, gridCols(barn)) };
 };
 

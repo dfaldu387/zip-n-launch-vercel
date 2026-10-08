@@ -50,6 +50,24 @@ describe('custom numbering', () => {
         expect(numbers({ stalls: fillCustomSequence(barn, '1001').stalls })).toEqual(['1001', '1002', '1003', '1004', '1005', '1006']);
     });
 
+    it('fills right → left, top → bottom', () => {
+        const barn = makeBarn({ numberingMode: NUMBERING_CUSTOM });
+        expect(numbers({ stalls: fillCustomSequence(barn, '1001', 'rtl').stalls })).toEqual(['1003', '1002', '1001', '1006', '1005', '1004']);
+    });
+
+    it('right → left skips aisles and keeps ids and bookings', () => {
+        const barn = makeBarn({ numberingMode: NUMBERING_CUSTOM });
+        const withAisle = { ...barn, stalls: barn.stalls.map((s, i) => (i === 2 ? { ...s, type: 'aisle' } : s)) };
+        const filled = fillCustomSequence(withAisle, '1', 'rtl').stalls;
+        expect(filled.map(s => s.number)).toEqual(['2', '1', '', '5', '4', '3']);
+        expect(filled[1]).toMatchObject({ id: 's1', bookingId: 'b1' });
+    });
+
+    it('zigzag fill runs row 1 left → right, row 2 right → left', () => {
+        const barn = makeBarn({ numberingMode: NUMBERING_CUSTOM });
+        expect(numbers({ stalls: fillCustomSequence(barn, '1001', 'zigzag').stalls })).toEqual(['1001', '1002', '1003', '1006', '1005', '1004']);
+    });
+
     it('fills with a prefix and keeps leading zeros', () => {
         const barn = makeBarn({ numberingMode: NUMBERING_CUSTOM });
         expect(fillCustomSequence(barn, 'W101').stalls.map(s => s.number).slice(0, 2)).toEqual(['W101', 'W102']);
