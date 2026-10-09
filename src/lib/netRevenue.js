@@ -42,6 +42,20 @@ export function netAfterFees(gross, bookings = 1, mode = 'show', includeFlat = t
     return { gross: round2(g), platformFee, stripeFee, totalFees, net: round2(g - totalFees) };
 }
 
+// Planning estimate (calculator, Max Revenue/Profit): a simple flat rate, not the
+// per-booking math above. Customer pays -> 5%. Show absorbs -> about 8%
+// (5% + Stripe's ~2.9% + the $0.30 spread out), nearly the same at any booking size.
+// Real bookings still use netAfterFees for exact, to-the-penny numbers.
+export const ESTIMATE_CUSTOMER_PCT = 0.05;
+export const ESTIMATE_SHOW_PCT = 0.08;
+
+export function estimateNetAfterFees(gross, mode = 'show') {
+    const g = Math.max(Number(gross) || 0, 0);
+    const pct = mode === 'customer' ? ESTIMATE_CUSTOMER_PCT : ESTIMATE_SHOW_PCT;
+    const totalFees = round2(g * pct);
+    return { gross: round2(g), totalFees, net: round2(g - totalFees) };
+}
+
 /**
  * What-If helper: how many card payments does "units sold" turn into?
  * Rounds up (11 stalls at 5 per booking = 3 payments); never below 1 if any sold.

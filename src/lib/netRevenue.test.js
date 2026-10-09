@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { netAfterFees, estimateBookingCount, moneyNum } from './netRevenue';
+import { netAfterFees, estimateBookingCount, estimateNetAfterFees, moneyNum } from './netRevenue';
 
 // Numbers come straight from Robert's 2026-10-07 video and the follow-up table.
 
@@ -74,5 +74,18 @@ describe('estimateBookingCount', () => {
 
     it('bad per-booking value falls back safely', () => {
         expect(estimateBookingCount(10, 0)).toBe(10);
+    });
+});
+
+describe('estimateNetAfterFees', () => {
+    it('customer pays: 5% off', () => {
+        expect(estimateNetAfterFees(200, 'customer').net).toBe(190);
+    });
+    it('show absorbs: about 8% off, any size', () => {
+        expect(estimateNetAfterFees(262, 'show').net).toBe(241.04);
+        expect(estimateNetAfterFees(1, 'show').totalFees).toBe(0.08);
+    });
+    it('nothing sold means nothing off', () => {
+        expect(estimateNetAfterFees(0, 'show').net).toBe(0);
     });
 });
