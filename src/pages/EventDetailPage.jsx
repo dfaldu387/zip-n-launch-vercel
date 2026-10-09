@@ -184,6 +184,8 @@ const EventDetailPage = () => {
             publicationDate: patternPd.publicationDate || projectDataObj.publicationDate,
             // Public-page settings are saved from Housing & Grounds Manager, so prefer that record.
             publicPage: housingRec?.project_data?.publicPage || projectDataObj.publicPage,
+            // The cover image is also set from Housing & Grounds Manager.
+            coverImageUrl: housingRec?.project_data?.coverImageUrl || projectDataObj.coverImageUrl,
             moduleStatuses: {
               ...(projectDataObj.moduleStatuses || {}),
               housing: housingRec ? 'published' : projectDataObj.moduleStatuses?.housing,
@@ -627,10 +629,23 @@ const EventDetailPage = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8 }}
         >
-          <div className="relative h-64 md:h-96 rounded-lg overflow-hidden mb-8">
-            <img-replace alt={event.name} className="w-full h-full object-cover" />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
-            <div className="absolute bottom-8 left-8 text-white">
+          <div className="relative h-72 md:h-96 rounded-lg overflow-hidden mb-8 bg-blue-900">
+            {projectData?.coverImageUrl ? (
+              <>
+                {/* A soft blurred copy fills the banner, and the whole picture sits on the right
+                    uncropped — so a flyer or wide photo is never cut off or stretched.
+                    A blue tint (not black) keeps the photo's colors and matches the site. */}
+                <img src={projectData.coverImageUrl} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-90 blur-2xl saturate-150" />
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-950/85 via-blue-900/55 to-blue-700/20" />
+                <div className="absolute inset-y-6 right-6 hidden w-[42%] items-center justify-center md:flex">
+                  <img src={projectData.coverImageUrl} alt={`${event.name} cover`} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl ring-1 ring-white/20" />
+                </div>
+              </>
+            ) : (
+              <img-replace alt={event.name} className="w-full h-full object-cover" />
+            )}
+            {!projectData?.coverImageUrl && <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />}
+            <div className={`absolute bottom-8 left-8 right-8 text-white ${projectData?.coverImageUrl ? 'md:right-auto md:max-w-[50%]' : ''}`}>
               {eventLogo && (
                 <img src={eventLogo} alt={`${publicName} logo`} className="mb-3 h-16 w-16 md:h-20 md:w-20 rounded-lg bg-white object-contain p-1.5 shadow-md" />
               )}
