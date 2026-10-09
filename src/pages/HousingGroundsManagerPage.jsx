@@ -50,6 +50,8 @@ import { applyBarnLayout, barnHasAssignments } from '@/lib/savedBarnLayouts';
 import { buildNewShowRow, nextShowNumber } from '@/lib/housingNewShow';
 import { needsHousingTerms, HOUSING_TERMS_VERSION } from '@/lib/housingTerms';
 import MasterListPanel from '@/components/housing/MasterListPanel';
+import PublicPageEditor from '@/components/housing/PublicPageEditor';
+import EventQrCard from '@/components/housing/EventQrCard';
 import AssignBoard from '@/components/housing/AssignBoard';
 import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // Recharts is ~355 KB and the charts only appear on the Analytics tab, and only
@@ -3748,7 +3750,7 @@ const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer, brandingContent }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const { profile, refreshProfile } = useAuth();
@@ -5570,6 +5572,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 { value: 'inventory', label: 'Inventory' },
                 { value: 'fees', label: 'Fees' },
                 { value: 'pricing', label: 'Pricing Summary' },
+                { value: 'branding', label: 'Event Branding & Public Links' },
             ],
         },
         {
@@ -5628,7 +5631,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 this generic row would just repeat the same numbers a second time. */}
             {activeSection === 'supplyorders' ? (
                 <SupplyOrderStatTiles {...supplyOrderCounts} />
-            ) : activeSection !== 'masterlist' && (
+            ) : activeSection !== 'masterlist' && activeSection !== 'branding' && (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                     {sectionStats.map((stat, i) => {
                         const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
@@ -5761,6 +5764,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         )}
                     </div>
                 </div>
+
+                {/* ── Event Branding & Public Links — cover image + public booking link ── */}
+                <TabsContent value="branding" className="mt-4 min-w-0">
+                    {brandingContent}
+                </TabsContent>
 
                 {/* ── Inventory Tab — Livestock Housing only (counts + layouts) ── */}
                 <TabsContent value="inventory" className="mt-4 min-w-0">
@@ -7495,6 +7503,18 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShowId, commitShowData, toast]);
 
+    // Public event page settings (hide / edit text). Saved straight away, like the cover image.
+    // `change` gets the newest saved publicPage and returns the next one.
+    const updatePublicPageImmediate = useCallback(async (change) => {
+        if (!selectedShowId) return;
+        try {
+            await commitShowData(latest => ({ data: { ...latest, publicPage: change(latest.publicPage || {}) } }));
+            toast({ title: 'Public page updated', description: 'The event page now shows your changes.' });
+        } catch (error) {
+            toast({ title: 'Save failed', description: error.message, variant: 'destructive' });
+        }
+    }, [selectedShowId, commitShowData, toast]);
+
     // Persist a single booking's status immediately (no Save All needed).
     const updateBookingStatusImmediate = useCallback(async (bookingId, newStatus) => {
         if (!selectedShowId) return null;
@@ -7752,7 +7772,7 @@ const HousingGroundsManagerPage = () => {
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                    <PageHeader title="Housing & Grounds Manager" backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
+                    <PageHeader title="Housing & Grounds Manager" subtitle={selectedShow?.project_name} backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
 
                     {selectedShow && <div ref={setSectionSelectMount} className="mb-4" />}
 
@@ -7785,35 +7805,47 @@ const HousingGroundsManagerPage = () => {
 
                     {selectedShow && termsApproved && (
                         <>
-                            {/* Event cover image — outside the editor so it stays editable even when Published. */}
-                            <Card className="mb-6 border-l-4 border-l-pink-500">
-                                <CardContent className="py-3 flex flex-wrap items-center justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        {selectedShow.project_data?.coverImageUrl ? (
-                                            <img src={selectedShow.project_data.coverImageUrl} alt="Event cover" className="h-12 w-20 rounded object-cover border" />
-                                        ) : (
-                                            <div className="h-12 w-20 rounded border bg-muted flex items-center justify-center">
-                                                <ImagePlus className="h-5 w-5 text-muted-foreground" />
-                                            </div>
-                                        )}
-                                        <div>
-                                            <p className="text-sm font-semibold">Event cover image</p>
-                                            <p className="text-[11px] text-muted-foreground">Shown on the public Events page card. Optional — a colored banner is used if none.</p>
-                                        </div>
-                                    </div>
-                                    <LogoUploader
-                                        fieldId="cover"
-                                        showId={selectedShow.id}
-                                        currentLogoUrl={selectedShow.project_data?.coverImageUrl || ''}
-                                        onUploadComplete={(url) => updateCoverImageImmediate && updateCoverImageImmediate(url)}
-                                    />
-                                </CardContent>
-                            </Card>
-
-                            <BookingLinkCard show={selectedShow} />
                             <StallingDashboard
                                 key={selectedShow.id}
                                 show={selectedShow}
+                                brandingContent={(
+                                    <>
+                                        {/* Event cover image — outside the editor so it stays editable even when Published. */}
+                                        <Card className="mb-6 border-l-4 border-l-pink-500">
+                                            <CardContent className="py-3 flex flex-wrap items-center justify-between gap-3">
+                                                <div className="flex items-center gap-3">
+                                                    {selectedShow.project_data?.coverImageUrl ? (
+                                                        <img src={selectedShow.project_data.coverImageUrl} alt="Event cover" className="h-12 w-20 rounded object-cover border" />
+                                                    ) : (
+                                                        <div className="h-12 w-20 rounded border bg-muted flex items-center justify-center">
+                                                            <ImagePlus className="h-5 w-5 text-muted-foreground" />
+                                                        </div>
+                                                    )}
+                                                    <div>
+                                                        <p className="text-sm font-semibold">Event cover image</p>
+                                                        <p className="text-[11px] text-muted-foreground">Shown on the public Events page card. Optional — a colored banner is used if none.</p>
+                                                    </div>
+                                                </div>
+                                                <LogoUploader
+                                                    fieldId="cover"
+                                                    showId={selectedShow.id}
+                                                    currentLogoUrl={selectedShow.project_data?.coverImageUrl || ''}
+                                                    onUploadComplete={(url) => updateCoverImageImmediate && updateCoverImageImmediate(url)}
+                                                />
+                                            </CardContent>
+                                        </Card>
+
+                                        {/* Booking link on the left, QR code on the right (stacks on a phone). */}
+                                        <div className="grid gap-6 lg:grid-cols-3 items-start mb-6">
+                                            <div className="lg:col-span-2 [&>*]:!mb-0">
+                                                <BookingLinkCard show={selectedShow} />
+                                            </div>
+                                            <EventQrCard show={selectedShow} className="!mb-0" />
+                                        </div>
+
+                                        <PublicPageEditor pd={selectedShow.project_data || {}} onChange={updatePublicPageImmediate} showId={selectedShow.id} />
+                                    </>
+                                )}
                                 onSave={handleSave}
                                 isSaving={isSaving}
                                 onUpdateBookingStatus={updateBookingStatusImmediate}

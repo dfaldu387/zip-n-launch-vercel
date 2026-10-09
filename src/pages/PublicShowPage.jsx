@@ -9,6 +9,8 @@ import React, { useState, useEffect } from 'react';
     import { useToast } from '@/components/ui/use-toast';
     import { format, parseISO } from 'date-fns';
     import Navigation from '@/components/Navigation';
+    import { isHiddenOnPublicPage, publicText, publicLogo, publicWelcome } from '@/lib/publicPage';
+    import PublicContactCards from '@/components/public/PublicContactCards';
 
     const DetailItem = ({ icon: Icon, label, value }) => (
         <div className="flex items-start">
@@ -96,7 +98,9 @@ import React, { useState, useEffect } from 'react';
             );
         }
 
-        const project_name = showData.name;
+        // Organizer's "what the public sees" choices (hide / edited text).
+        const pageSettings = { publicPage: showData.publicPage };
+        const project_name = publicText(pageSettings, 'showName', showData.name);
         const details = showData.details || {};
         const { general = {}, venue = {}, officials = {}, fees = [], entry = {}, scheduling = {}, awards = {} } = details;
         const stalling = showData.inventory || {};
@@ -119,7 +123,9 @@ import React, { useState, useEffect } from 'react';
         const feeHighlights = fees.length > 0 ? fees : housingFees;
         const marketing = showData.marketing || {};
         // A show with no dates set used to render "Invalid Date to Invalid Date".
-        const { start: showStart, end: showEnd } = showData.showWindow || {};
+        const dateOverride = showData.publicPage?.dates || {};
+        const showStart = dateOverride.start || showData.showWindow?.start;
+        const showEnd = dateOverride.end || showData.showWindow?.end;
         const showDates = showStart
             ? `${format(parseISO(showStart), 'PPP')}${showEnd ? ` to ${format(parseISO(showEnd), 'PPP')}` : ''}`
             : 'Dates to be announced';
@@ -140,7 +146,13 @@ import React, { useState, useEffect } from 'react';
                     <main className="container mx-auto px-4 py-12">
                         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
                             <CardHeader className="text-center px-0 mb-8">
+                                {publicLogo(pageSettings.publicPage) && (
+                                    <img src={publicLogo(pageSettings.publicPage)} alt={`${project_name} logo`} className="mx-auto mb-4 h-20 w-20 rounded-lg border bg-white object-contain p-1.5" />
+                                )}
                                 <CardTitle className="text-4xl md:text-5xl font-bold">{project_name}</CardTitle>
+                                {publicWelcome(pageSettings.publicPage) && (
+                                    <p className="mx-auto mt-3 max-w-2xl whitespace-pre-line text-base text-muted-foreground">{publicWelcome(pageSettings.publicPage)}</p>
+                                )}
                                 {general.eventHost && <CardDescription className="text-xl text-muted-foreground">Hosted by {general.eventHost}</CardDescription>}
                                 {socialLinks.length > 0 && (
                                     <div className="flex items-center justify-center gap-3 mt-3">
@@ -192,19 +204,19 @@ import React, { useState, useEffect } from 'react';
                                             <DetailItem icon={Calendar} label="Show Dates" value={showDates} />
                                             {/* Fall back to the flat wizard fields (venueName/venueAddress)
                                                 when the nested showDetails.venue isn't present. */}
-                                            <DetailItem icon={Info} label="Venue" value={[venue.facilityName || details.venueName, venue.address || details.venueAddress].filter(Boolean).join(' — ')} />
-                                            {/* Only show Manager / Secretary when they were actually filled in. */}
-                                            {general.managerName && (
-                                                <DetailItem icon={Users} label="Show Manager" value={`${general.managerName}${general.managerContactEmail ? ` (${general.managerContactEmail})` : ''}`} />
-                                            )}
-                                            {general.secretaryName && (
-                                                <DetailItem icon={Users} label="Show Secretary" value={`${general.secretaryName}${general.secretaryContactEmail ? ` (${general.secretaryContactEmail})` : ''}`} />
-                                            )}
+                                            <DetailItem icon={Info} label="Venue" value={[
+                                                isHiddenOnPublicPage(pageSettings, 'venueName') ? '' : publicText(pageSettings, 'venueName', venue.facilityName || details.venueName),
+                                                isHiddenOnPublicPage(pageSettings, 'venueAddress') ? '' : publicText(pageSettings, 'venueAddress', venue.address || details.venueAddress),
+                                            ].filter(Boolean).join(' — ')} />
                                         </CardContent>
                                     </Card>
 
+                                    {/* Show Manager / Secretary now live in the Contact Information card
+                                        (Show Details values are used when nothing was typed in). */}
+                                    <PublicContactCards publicPage={showData.publicPage} general={general} />
+
                                     {/* Only show the Officials & Staff card when officials exist. */}
-                                    {Object.keys(officials).length > 0 && (
+                                    {Object.keys(officials).length > 0 && !isHiddenOnPublicPage(pageSettings, 'officials') && (
                                         <Card>
                                             <CardHeader><CardTitle className="flex items-center"><Users className="mr-2" /> Officials & Staff</CardTitle></CardHeader>
                                             <CardContent>

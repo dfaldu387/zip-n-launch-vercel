@@ -16,6 +16,8 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { isShowPublished } from '@/lib/showPublishing';
+import { isHiddenOnPublicPage, publicText, mapsUrl, formatShowDate, publicLogo, publicWelcome } from '@/lib/publicPage';
+import PublicContactCards from '@/components/public/PublicContactCards';
 
 // Some patterns are organizer-uploaded PDFs (custom requests) rather than database
 // image-patterns. Render their first page inline with react-pdf — worker set once here.
@@ -180,6 +182,8 @@ const EventDetailPage = () => {
           const mergedProjectData = {
             ...projectDataObj,
             publicationDate: patternPd.publicationDate || projectDataObj.publicationDate,
+            // Public-page settings are saved from Housing & Grounds Manager, so prefer that record.
+            publicPage: housingRec?.project_data?.publicPage || projectDataObj.publicPage,
             moduleStatuses: {
               ...(projectDataObj.moduleStatuses || {}),
               housing: housingRec ? 'published' : projectDataObj.moduleStatuses?.housing,
@@ -555,6 +559,34 @@ const EventDetailPage = () => {
 
   // --- Download / print (single pattern + branded pattern book) ---
   const showName = projectData?.showName || event.name || 'EquiPatterns';
+
+  // What the organizer chose to show publicly (Event Branding & Public Links).
+  // The page title always stays; hiding "Show name" only removes the Show Details row.
+  const publicName = publicText(projectData, 'showName', event.name);
+  const publicLocation = event.isFromProjects
+    ? [
+        isHiddenOnPublicPage(projectData, 'venueName') ? '' : publicText(projectData, 'venueName', projectData?.venueName),
+        isHiddenOnPublicPage(projectData, 'venueAddress') ? '' : publicText(projectData, 'venueAddress', projectData?.venueAddress),
+      ].filter(Boolean)[0] || ''
+    : event.location;
+  const eventLogo = publicLogo(projectData?.publicPage);
+  const welcomeText = publicWelcome(projectData?.publicPage);
+  const editedAssociations = projectData?.publicPage?.lists?.associations;
+  const publicAssociation = isHiddenOnPublicPage(projectData, 'associations')
+    ? ''
+    : (Array.isArray(editedAssociations) ? editedAssociations.join(', ') : event.association);
+  // Start / end shown to the public (organizer can hide them or type different text).
+  const dateOverride = projectData?.publicPage?.dates || {};
+  const startText = dateOverride.start
+    ? formatShowDate(dateOverride.start)
+    : (event.startDate ? format(new Date(event.startDate), 'MMM d, yyyy') : '');
+  const endText = dateOverride.end
+    ? formatShowDate(dateOverride.end)
+    : (event.endDate ? format(new Date(event.endDate), 'MMM d, yyyy') : '');
+  const publicDates = isHiddenOnPublicPage(projectData, 'showDates')
+    ? ''
+    : publicText(projectData, 'showDates', [startText, endText].filter(Boolean).join(' - '));
+  const datesAreEdited = !!projectData?.publicPage?.text?.showDates?.trim();
   const patternMeta = (p) => ({
     showName,
     divisions: p.divisions,
@@ -599,20 +631,21 @@ const EventDetailPage = () => {
             <img-replace alt={event.name} className="w-full h-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
             <div className="absolute bottom-8 left-8 text-white">
-              {event.association && (
-                <Badge className="mb-2 bg-primary/80 backdrop-blur-sm text-primary-foreground">{event.association}</Badge>
+              {eventLogo && (
+                <img src={eventLogo} alt={`${publicName} logo`} className="mb-3 h-16 w-16 md:h-20 md:w-20 rounded-lg bg-white object-contain p-1.5 shadow-md" />
               )}
-              <h1 className="text-3xl md:text-5xl font-bold">{event.name}</h1>
+              {publicAssociation && (
+                <Badge className="mb-2 bg-primary/80 backdrop-blur-sm text-primary-foreground">{publicAssociation}</Badge>
+              )}
+              <h1 className="text-3xl md:text-5xl font-bold">{publicName}</h1>
               <div className="flex items-center text-lg mt-2 gap-4 flex-wrap">
-                {event.startDate && (
+                {publicDates && (
                   <span className="flex items-center gap-2">
-                    <Calendar className="h-5 w-5" /> 
-                    {format(new Date(event.startDate), 'MMM d, yyyy')} 
-                    {event.endDate && ` - ${format(new Date(event.endDate), 'MMM d, yyyy')}`}
+                    <Calendar className="h-5 w-5" /> {publicDates}
                   </span>
                 )}
-                {event.location && (
-                  <span className="flex items-center gap-2"><MapPin className="h-5 w-5" /> {event.location}</span>
+                {publicLocation && (
+                  <span className="flex items-center gap-2"><MapPin className="h-5 w-5" /> {publicLocation}</span>
                 )}
               </div>
             </div>
@@ -630,38 +663,84 @@ const EventDetailPage = () => {
                     <CardDescription>Complete information about this show</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {/* Welcome message — written in Event Branding & Public Links */}
+                    {welcomeText && (
+                      <p className="whitespace-pre-line rounded-lg bg-background/60 px-4 py-3 text-sm text-foreground">{welcomeText}</p>
+                    )}
+
                     {/* Show Name - from projectData */}
-                    {projectData?.showName && (
+                    {!isHiddenOnPublicPage(projectData, 'showName') && publicText(projectData, 'showName', projectData?.showName) && (
                       <div>
                         <h3 className="font-semibold text-primary mb-1">Show Name</h3>
-                        <p className="text-foreground">{projectData.showName}</p>
+                        <p className="text-foreground">{publicText(projectData, 'showName', projectData?.showName)}</p>
+                      </div>
+                    )}
+
+                    {/* Show Dates — start and end, or the text the organizer typed */}
+                    {publicDates && (
+                      <div>
+                        <h3 className="font-semibold text-primary mb-1">Show Dates</h3>
+                        {datesAreEdited || !startText ? (
+                          <p className="text-foreground flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /> {publicDates}</p>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-3 max-w-md">
+                            <div className="rounded-md bg-background/60 px-3 py-2">
+                              <p className="text-[11px] text-muted-foreground">Start Date</p>
+                              <p className="text-sm text-foreground flex items-center gap-2"><Calendar className="h-3.5 w-3.5 text-muted-foreground" /> {startText}</p>
+                            </div>
+                            {endText && (
+                              <div className="rounded-md bg-background/60 px-3 py-2">
+                                <p className="text-[11px] text-muted-foreground">End Date</p>
+                                <p className="text-sm text-foreground flex items-center gap-2"><Calendar className="h-3.5 w-3.5 text-muted-foreground" /> {endText}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
                     {/* Show Type */}
-                    {(event.show_type || projectData?.showType) && (
+                    {!isHiddenOnPublicPage(projectData, 'showType') && (event.show_type || projectData?.showType) && (
                       <div>
                         <h3 className="font-semibold text-primary mb-1">Show Type</h3>
-                        <Badge variant="outline">{event.show_type || projectData.showType}</Badge>
+                        <Badge variant="outline">{publicText(projectData, 'showType', event.show_type || projectData.showType)}</Badge>
                       </div>
                     )}
 
                     {/* Venue Information */}
-                    {(event.venue_name || event.venue_address || projectData?.venueName || projectData?.venueAddress) && (
-                      <div>
-                        <h3 className="font-semibold text-primary mb-1">Venue</h3>
-                        {(event.venue_name || projectData?.venueName) && <p className="text-foreground">{event.venue_name || projectData.venueName}</p>}
-                        {(event.venue_address || projectData?.venueAddress) && <p className="text-muted-foreground text-sm">{event.venue_address || projectData.venueAddress}</p>}
-                      </div>
-                    )}
+                    {(() => {
+                      const vName = isHiddenOnPublicPage(projectData, 'venueName') ? '' : publicText(projectData, 'venueName', event.venue_name || projectData?.venueName);
+                      const vAddr = isHiddenOnPublicPage(projectData, 'venueAddress') ? '' : publicText(projectData, 'venueAddress', event.venue_address || projectData?.venueAddress);
+                      if (!vName && !vAddr) return null;
+                      return (
+                        <div>
+                          <h3 className="font-semibold text-primary mb-1">Venue</h3>
+                          <div className="flex items-center justify-between gap-3 rounded-md bg-background/60 px-3 py-2">
+                            <div className="min-w-0">
+                              {vName && <p className="text-foreground">{vName}</p>}
+                              {vAddr && <p className="text-muted-foreground text-sm">{vAddr}</p>}
+                            </div>
+                            <Button asChild variant="outline" size="sm" className="shrink-0 h-8 text-xs gap-1.5 text-primary">
+                              <a href={mapsUrl(vName, vAddr)} target="_blank" rel="noopener noreferrer">
+                                <MapPin className="h-3.5 w-3.5" /> View on Map
+                              </a>
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Associations */}
-                    {(() => {
+                    {!isHiddenOnPublicPage(projectData, 'associations') && (() => {
                       let associations = [];
                       if (event.associations) {
                         associations = Array.isArray(event.associations) ? event.associations : [];
                       } else if (projectData?.associations && Object.keys(projectData.associations).length > 0) {
                         associations = Object.keys(projectData.associations).filter(key => projectData.associations[key]);
+                      }
+                      // The organizer's edited list (added / removed tags) wins when there is one.
+                      if (Array.isArray(projectData?.publicPage?.lists?.associations)) {
+                        associations = projectData.publicPage.lists.associations;
                       }
                       if (associations.length > 0) {
                         return (
@@ -679,12 +758,16 @@ const EventDetailPage = () => {
                     })()}
 
                     {/* Disciplines */}
-                    {(() => {
+                    {!isHiddenOnPublicPage(projectData, 'disciplines') && (() => {
                       let disciplines = [];
                       if (event.disciplines) {
                         disciplines = Array.isArray(event.disciplines) ? event.disciplines : [];
                       } else if (projectData?.disciplines && projectData.disciplines.length > 0) {
                         disciplines = projectData.disciplines;
+                      }
+                      // The organizer's edited list (added / removed tags) wins when there is one.
+                      if (Array.isArray(projectData?.publicPage?.lists?.disciplines)) {
+                        disciplines = projectData.publicPage.lists.disciplines;
                       }
                       if (disciplines.length > 0) {
                         return (
@@ -702,7 +785,7 @@ const EventDetailPage = () => {
                     })()}
 
                     {/* Officials */}
-                    {(() => {
+                    {!isHiddenOnPublicPage(projectData, 'officials') && (() => {
                       let officials = [];
                       if (event.officials) {
                         if (typeof event.officials === 'object' && !Array.isArray(event.officials)) {
@@ -734,7 +817,7 @@ const EventDetailPage = () => {
                     })()}
 
                     {/* Judges */}
-                    {(() => {
+                    {!isHiddenOnPublicPage(projectData, 'judges') && (() => {
                       let judges = [];
                       if (event.judges) {
                         judges = Array.isArray(event.judges) ? event.judges : [];
@@ -766,6 +849,15 @@ const EventDetailPage = () => {
                       }
                       return null;
                     })()}
+
+                    {/* Contacts, sponsor hotel and show documents — set in Event Branding & Public Links. */}
+                    {event.isFromProjects && (
+                      <PublicContactCards
+                        inline
+                        publicPage={projectData?.publicPage}
+                        general={projectData?.showDetails?.general}
+                      />
+                    )}
                   </CardContent>
                 </Card>
               </motion.div>
@@ -1298,9 +1390,9 @@ const EventDetailPage = () => {
                 </CardHeader>
                 <CardContent>
                    <div className="bg-background p-3 rounded-md text-sm text-muted-foreground">
-                    Check out the highlights from {event.name}! Incredible performances in {event.classes?.map(c => c.name).slice(0, 2).join(' & ')}. Congratulations to all competitors! #EquiPatterns #{event.association} #{event.name.replace(/\s+/g, '')}
+                    Check out the highlights from {publicName}! Incredible performances in {event.classes?.map(c => c.name).slice(0, 2).join(' & ')}. Congratulations to all competitors! #EquiPatterns #{publicAssociation} #{publicName.replace(/\s+/g, '')}
                    </div>
-                    <Button variant="ghost" size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(`Check out the highlights from ${event.name}! #EquiPatterns`).then(() => toast({title: "Copied to clipboard!"}))}>
+                    <Button variant="ghost" size="sm" className="mt-2" onClick={() => navigator.clipboard.writeText(`Check out the highlights from ${publicName}! #EquiPatterns`).then(() => toast({title: "Copied to clipboard!"}))}>
                         Copy Summary
                     </Button>
                 </CardContent>
