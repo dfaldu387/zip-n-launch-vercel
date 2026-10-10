@@ -393,6 +393,14 @@ const BookingStatusPage = () => {
                                     const paid = Number(booking.paidAmount) || 0;
                                     const balanceDue = Number(booking.balanceDue ?? Math.max(0, total - paid));
                                     if (total <= 0) return null;
+                                    // A customer-pays-fee show adds the card fee on top of the
+                                    // balance at checkout (same formula as stalls-create-checkout),
+                                    // so the pay button shows what the card will really be charged.
+                                    let cardFee = 0;
+                                    if (show?.processingFeeMode === 'customer' && balanceDue > 0) {
+                                        const balCents = Math.round(balanceDue * 100);
+                                        cardFee = (Math.ceil((balCents + 30) / (1 - 0.029)) - balCents) / 100;
+                                    }
                                     return (
                                         <div className="space-y-2">
                                             <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs text-muted-foreground">
@@ -409,10 +417,15 @@ const BookingStatusPage = () => {
                                                     <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
                                                         Balance due: {money(balanceDue)}
                                                     </p>
+                                                    {cardFee > 0 && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            + {money(cardFee)} card processing fee (charged by Stripe) = {money(balanceDue + cardFee)} total at checkout
+                                                        </p>
+                                                    )}
                                                     <Button className="w-full" onClick={payBalance} disabled={isPaying}>
                                                         {isPaying
                                                             ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Opening payment…</>
-                                                            : <><CreditCard className="h-4 w-4 mr-2" /> Pay {money(balanceDue)} now</>}
+                                                            : <><CreditCard className="h-4 w-4 mr-2" /> Pay {money(balanceDue + cardFee)} now</>}
                                                     </Button>
                                                 </div>
                                             ) : (

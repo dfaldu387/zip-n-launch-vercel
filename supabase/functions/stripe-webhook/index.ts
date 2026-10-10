@@ -120,7 +120,10 @@ async function markStallBookingPaid(
 async function sendPaymentReceivedEmail(
   adminClient: any,
   bookingId: string,
-  paidDollars: number
+  paidDollars: number,
+  // What the card was actually charged. Differs from paidDollars (the booking
+  // amount credited) only when the customer covered the card processing fee.
+  chargedDollars: number = paidDollars
 ): Promise<void> {
   if (!POSTMARK_API_TOKEN) {
     console.error("POSTMARK_API_TOKEN not set — skipping payment-received email");
@@ -146,6 +149,9 @@ async function sendPaymentReceivedEmail(
     const totalPaid = Number(booking.paidAmount) || 0;
     const balanceDue = Number(booking.balanceDue ?? Math.max(0, total - totalPaid));
     const bookingUrl = `${SITE_URL}/booking/${bookingId}`;
+    // Card fee the customer covered on this payment — shown so the receipt adds
+    // up to exactly what their card was charged.
+    const cardFee = Math.max(0, Math.round((chargedDollars - paidDollars) * 100) / 100);
 
     const response = await fetch("https://api.postmarkapp.com/email", {
       method: "POST",
@@ -183,7 +189,7 @@ async function sendPaymentReceivedEmail(
             <td style="padding: 30px 30px 8px;">
               <p style="color: #374151; font-size: 16px; line-height: 26px; margin: 0 0 16px;">
                 Hi ${escapeHtml(booking.exhibitorName || "there")}, thanks — we've received your payment of
-                <strong>${money(paidDollars)}</strong> for ${escapeHtml(showName)}.
+                <strong>${money(chargedDollars)}</strong> for ${escapeHtml(showName)}.
               </p>
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f0fdfa; border-left: 4px solid #0d9488; border-radius: 6px; margin: 0 0 20px;">
                 <tr>
@@ -199,6 +205,19 @@ async function sendPaymentReceivedEmail(
           <tr>
             <td style="padding: 0 30px;">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                ${cardFee > 0 ? `
+                <tr>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1;"><p style="margin: 0; color: #6b7280; font-size: 14px;">Reservation amount</p></td>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1; text-align: right;"><p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">${money(paidDollars)}</p></td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1;"><p style="margin: 0; color: #6b7280; font-size: 14px;">Card processing fee</p></td>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1; text-align: right;"><p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">${money(cardFee)}</p></td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1;"><p style="margin: 0; color: #111827; font-size: 14px; font-weight: 700;">Total charged to your card</p></td>
+                  <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1; text-align: right;"><p style="margin: 0; color: #111827; font-size: 14px; font-weight: 700;">${money(chargedDollars)}</p></td>
+                </tr>` : ""}
                 <tr>
                   <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1;"><p style="margin: 0; color: #6b7280; font-size: 14px;">Total paid to date</p></td>
                   <td style="padding: 8px 0; border-bottom: 1px solid #e6ebf1; text-align: right;"><p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">${money(totalPaid)}</p></td>
@@ -363,7 +382,12 @@ serve(async (req: Request): Promise<Response> => {
             session.metadata.bookingId,
             paidDollars
           );
-          await sendPaymentReceivedEmail(adminClient, session.metadata.bookingId, paidDollars);
+          await sendPaymentReceivedEmail(
+            adminClient,
+            session.metadata.bookingId,
+            paidDollars,
+            (session.amount_total || 0) / 100 || paidDollars
+          );
           break;
         }
 
@@ -559,7 +583,12 @@ serve(async (req: Request): Promise<Response> => {
             invoice.metadata.bookingId,
             paidDollars
           );
-          await sendPaymentReceivedEmail(adminClient, invoice.metadata.bookingId, paidDollars);
+          await sendPaymentReceivedEmail(
+            adminClient,
+            invoice.metadata.bookingId,
+            paidDollars,
+            paidCents / 100 || paidDollars
+          );
         }
         break;
       }

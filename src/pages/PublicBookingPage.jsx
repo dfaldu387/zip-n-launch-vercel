@@ -1446,6 +1446,18 @@ const PublicBookingPage = () => {
     }
 
     if (confirmation) {
+        // The stored booking total never includes the card fee (see handleSubmit),
+        // but a customer-pays-fee show charges it on top at checkout. Add the same
+        // estimate here so the receipt matches the amount actually charged.
+        const baseTotal = Number(confirmation.payload?.totalAmount) || 0;
+        let receiptFee = 0;
+        if (show?.processingFeeMode === 'customer' && baseTotal > 0
+            && (confirmation.paid || billingMode === 'at_booking')) {
+            const baseCents = Math.round(baseTotal * 100);
+            receiptFee = (Math.ceil((baseCents + 30) / (1 - 0.029)) - baseCents) / 100;
+        }
+        const receiptTotal = baseTotal + receiptFee;
+
         return (
             <>
                 <Helmet>
@@ -1477,7 +1489,7 @@ const PublicBookingPage = () => {
                                     {/* Payment status / pay-now */}
                                     {confirmation.paid ? (
                                         <div className="rounded-lg border border-emerald-500 bg-emerald-500/10 p-3 text-sm font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
-                                            <CheckCircle2 className="h-4 w-4" /> Paid in full — {money(confirmation.payload?.totalAmount)}
+                                            <CheckCircle2 className="h-4 w-4" /> Paid in full — {money(receiptTotal)}
                                         </div>
                                     ) : billingMode === 'at_booking' ? (
                                         <div className="rounded-lg border border-amber-400 bg-amber-500/10 p-3 space-y-2">
@@ -1496,7 +1508,7 @@ const PublicBookingPage = () => {
                                                     }
                                                 }}
                                             >
-                                                Pay {money(confirmation.payload?.totalAmount)} now
+                                                Pay {money(receiptTotal)} now
                                             </Button>
                                         </div>
                                     ) : (
@@ -1530,7 +1542,7 @@ const PublicBookingPage = () => {
                                         </div>
                                         <div>
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Total</p>
-                                            <p className="text-lg font-bold">{money(confirmation.payload.totalAmount)}</p>
+                                            <p className="text-lg font-bold">{money(receiptTotal)}</p>
                                         </div>
                                         <div>
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Email</p>
@@ -1553,6 +1565,12 @@ const PublicBookingPage = () => {
                                                     <span className="font-semibold tabular-nums">{money(it.amount)}</span>
                                                 </div>
                                             ))}
+                                            {receiptFee > 0 && (
+                                                <div className="flex justify-between p-2">
+                                                    <span>Card processing fee</span>
+                                                    <span className="font-semibold tabular-nums">{money(receiptFee)}</span>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                     )}

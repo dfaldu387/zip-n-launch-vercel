@@ -1642,7 +1642,7 @@ const ContainerChart = ({
                                     <div className="w-8 shrink-0 text-center text-[10px] font-semibold text-muted-foreground">{rl}</div>
                                     {/* Boxes overlap by 1px (-ml-px) so their borders merge into one grid
                                         line; the strip has to subtract those overlaps or it overhangs. */}
-                                    <div className="h-2 my-px rounded-sm bg-muted-foreground/10 border border-dashed border-muted-foreground/20"
+                                    <div className="h-4 my-0.5 rounded-sm bg-muted-foreground/10 border border-dashed border-muted-foreground/20"
                                         style={{ width: c * S.px - (c - 1) }} title="Aisle / walkway" />
                                 </div>
                             );
