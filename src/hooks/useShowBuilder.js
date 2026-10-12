@@ -102,51 +102,78 @@ export const useShowBuilder = (showId) => {
   // undefined = nothing set up yet; null = set up for a new, unsaved show.
   const initialisedForRef = useRef(undefined);
 
+  // The discipline, association and division lists are the same for every show, so they
+  // are fetched once per page visit. Without this the whole loader (and the full-page
+  // spinner) ran again when the sign-in finished and again after the first save moved
+  // the URL from /create to /edit/ID.
+  const referenceLoadedRef = useRef(false);
+
   const fetchInitialData = useCallback(async () => {
-    setIsLoading(true);
+    // A show this session just created is already in memory and was saved from that
+    // same memory, so it does not need to be read back.
+    if (showId && createdIdRef.current === showId) {
+      initialisedForRef.current = showId;
+    }
+    const needsReference = !referenceLoadedRef.current;
+    const needsShowWork = showId
+      ? initialisedForRef.current !== showId
+      : initialisedForRef.current !== null;
+
+    // Only the first real load covers the form with the spinner. A re-run for a new
+    // sign-in or a new URL just refreshes the "existing shows" list in the background.
+    if (needsReference || needsShowWork) setIsLoading(true);
     try {
       const projectsQuery = user
         ? supabase.from('projects').select('id, project_name, project_type, project_data, status').eq('user_id', user.id).not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")').in('status', ['Draft', 'draft', 'In progress', 'in progress', 'Locked', 'locked', 'Final', 'final', 'published', 'Lock & Approve Mode', 'Publication']).order('created_at', { ascending: false })
         : Promise.resolve({ data: [], error: null });
 
-      const [disciplinesRes, associationsRes, divisionsRes, projectsRes] = await Promise.all([
-        supabase.from('disciplines').select('*').order('sort_order'),
-        supabase.from('associations').select('*').order('position').order('name'),
-        supabase.from('divisions').select('*, division_levels(*)').order('sort_order'),
+      const referenceQueries = needsReference
+        ? [
+            supabase.from('disciplines').select('*').order('sort_order'),
+            supabase.from('associations').select('*').order('position').order('name'),
+            supabase.from('divisions').select('*, division_levels(*)').order('sort_order'),
+          ]
+        : [];
+
+      const [projectsRes, disciplinesRes, associationsRes, divisionsRes] = await Promise.all([
         projectsQuery,
+        ...referenceQueries,
       ]);
 
-      if (disciplinesRes.error) throw disciplinesRes.error;
-      if (associationsRes.error) throw associationsRes.error;
-      if (divisionsRes.error) throw divisionsRes.error;
       if (projectsRes.error) throw projectsRes.error;
-
       setExistingProjects(projectsRes.data || []);
 
-      const formattedDisciplines = disciplinesRes.data.map(d => ({
-        ...d,
-        associations: d.association_id ? [{ association_id: d.association_id, sub_association_type: d.sub_association_type }] : []
-      }));
-      setDisciplineLibrary(formattedDisciplines);
-      setAssociationsData(associationsRes.data);
-      
-      const divisionsByAssoc = (divisionsRes.data || []).reduce((acc, div) => {
-          const key = div.association_id;
-          
-          if (!acc[key]) acc[key] = [];
-          
-          div.division_levels.sort((a, b) => a.sort_order - b.sort_order);
-          
-          acc[key].push({ 
-              group: div.name, 
-              levels: div.division_levels.map(l => l.name),
-              sub_association_type: div.sub_association_type 
-          });
-          return acc;
-      }, {});
-      setDivisionsData(divisionsByAssoc);
+      if (needsReference) {
+        if (disciplinesRes.error) throw disciplinesRes.error;
+        if (associationsRes.error) throw associationsRes.error;
+        if (divisionsRes.error) throw divisionsRes.error;
 
-      if (showId) {
+        const formattedDisciplines = disciplinesRes.data.map(d => ({
+          ...d,
+          associations: d.association_id ? [{ association_id: d.association_id, sub_association_type: d.sub_association_type }] : []
+        }));
+        setDisciplineLibrary(formattedDisciplines);
+        setAssociationsData(associationsRes.data);
+
+        const divisionsByAssoc = (divisionsRes.data || []).reduce((acc, div) => {
+            const key = div.association_id;
+
+            if (!acc[key]) acc[key] = [];
+
+            div.division_levels.sort((a, b) => a.sort_order - b.sort_order);
+
+            acc[key].push({
+                group: div.name,
+                levels: div.division_levels.map(l => l.name),
+                sub_association_type: div.sub_association_type
+            });
+            return acc;
+        }, {});
+        setDivisionsData(divisionsByAssoc);
+        referenceLoadedRef.current = true;
+      }
+
+      if (showId && needsShowWork) {
         if (initialisedForRef.current !== showId) {
           // A different show — drop any id this session created for the previous one.
           createdIdRef.current = null;
@@ -176,7 +203,7 @@ export const useShowBuilder = (showId) => {
           setStep(savedStep);
           setCompletedSteps(new Set(savedCompleted));
         }
-      } else if (initialisedForRef.current !== null) {
+      } else if (!showId && needsShowWork) {
         // Brand-new builder session. Only reset when this really is a fresh start
         // (first run, or arriving from a saved show), never on a re-run for the
         // same empty builder — that would unbind the row already created.
@@ -340,6 +367,27 @@ export const useShowBuilder = (showId) => {
       // Silent save — no popup during normal editing
       return data;
     } else {
+      // Same name and same dates as a show you already have is the same show. Linking an
+      // existing show in a new one copies its name, number and dates, and saving then
+      // inserted a second identical show. Open the existing one instead of copying it
+      // (the Horse Show Manager's "Get Started" does the same).
+      const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (formData.startDate && formData.endDate) {
+        const sameShow = (existingProjects || []).find(p =>
+          p.project_type === 'show'
+          && normName(p.project_name) === normName(trimmedName)
+          && (p.project_data?.startDate || '') === formData.startDate
+          && (p.project_data?.endDate || '') === formData.endDate
+        );
+        if (sameShow) {
+          toast({
+            title: 'This show already exists',
+            description: `"${sameShow.project_name}" has the same name and dates, so it was opened instead of saving a copy.`,
+          });
+          return { id: sameShow.id, alreadyExisted: true };
+        }
+      }
+
       // Preserve a user-entered show number; only auto-generate a sequential
       // one when the field was left blank.
       let showNumber = formData.showNumber != null && String(formData.showNumber).trim() !== ''

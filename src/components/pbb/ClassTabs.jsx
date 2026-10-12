@@ -12,7 +12,6 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
     import { ScheduleOrganizer } from '@/components/pbb/ScheduleOrganizer';
     import { cn } from '@/lib/utils';
     import { parseDivisionId } from '@/lib/showBillUtils';
-    import { supabase } from '@/lib/supabaseClient';
     import { useToast } from '@/components/ui/use-toast';
 
     // Strip a division (by its base identifier, e.g. "AQHA-Horsemanship - Level 1")
@@ -198,40 +197,15 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
             setIsSavingCustomDivision(true);
             
             try {
-                // Save to database
-                const { data: maxSortOrder } = await supabase
-                    .from('divisions')
-                    .select('sort_order')
-                    .eq('association_id', customDivisionAssocId)
-                    .order('sort_order', { ascending: false })
-                    .limit(1)
-                    .single();
-                
-                const newSortOrder = (maxSortOrder?.sort_order || 0) + 1;
-                
-                const { error: insertError } = await supabase
-                    .from('divisions')
-                    .insert({
-                        name: customDivisionName.trim(),
-                        association_id: customDivisionAssocId,
-                        sort_order: newSortOrder
-                    });
-                
-                if (insertError) {
-                    console.error('Error saving custom division to DB:', insertError);
-                    toast({
-                        title: "Database Save Failed",
-                        description: "Division was added locally but could not be saved to database.",
-                        variant: "destructive",
-                    });
-                } else {
-                    toast({
-                        title: "Custom Division Added",
-                        description: `"${customDivisionName.trim()}" has been saved to the database.`,
-                    });
-                }
-                
-                // Always update local state
+                // A custom division belongs to THIS show only. It used to be inserted into the
+                // shared `divisions` table, which made it appear (as an empty heading) in every
+                // discipline of every later show. It is kept on the discipline's customDivisions.
+                toast({
+                    title: "Custom Division Added",
+                    description: `"${customDivisionName.trim()}" has been added to this show.`,
+                });
+
+                // Update local state
                 setFormData(prev => ({
                     ...prev,
                     disciplines: prev.disciplines.map(disc => {
@@ -355,8 +329,10 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
                 const discForAssoc = allDisciplines.find(d => d.selectedAssociations?.[assocId]);
                 const assocData = associationsData.find(a => a.id === assocId);
             if (assocData && divisionsData[assocId]) {
-                    let divisions = divisionsData[assocId];
-        
+                    // Groups with no levels have nothing to pick. They are old custom divisions that
+                    // were saved to the shared table, so they are left out of every show.
+                    let divisions = divisionsData[assocId].filter(d => d.levels && d.levels.length > 0);
+
                     // Support multiple sub-association types
                     const selectedSubTypes = formData.subAssociationSelections?.[assocId]?.types || [];
                     
@@ -397,7 +373,9 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
                     
                     divisionMap[assocId] = divisions
                         .filter(d => {
-                            if (shouldHideOpenCategories) {
+                            // AQHA Showmanship, Horsemanship and Hunt Seat Equitation have no Open
+                            // section (only Amateur, Youth, Non-Pro), whatever the class is named.
+                            if (shouldHideOpenCategories || (assocId === 'AQHA' && shouldShowNonPro)) {
                                 return d.group.toLowerCase() !== 'open';
                             }
                             // Hide Non-Pro division group entirely unless discipline allows it (for non Open/Non-Pro/Youth only assocs)
@@ -1369,7 +1347,7 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
                                 <DialogContent>
                                     <DialogHeader>
                                         <DialogTitle>Add Custom Division</DialogTitle>
-                                        <DialogDescription>Enter a name for a new division for {associationsData.find(a => a.id === customDivisionAssocId)?.name || customDivisionAssocId}. This will be saved to the database.</DialogDescription>
+                                        <DialogDescription>Enter a name for a new division for {associationsData.find(a => a.id === customDivisionAssocId)?.name || customDivisionAssocId}. It will be added to this show only.</DialogDescription>
                                     </DialogHeader>
                                     <Input 
                                         value={customDivisionName} 

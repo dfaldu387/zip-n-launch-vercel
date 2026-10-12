@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import { renumberShowBill } from './showBillUtils';
+import { renumberShowBill, getLocationHoursLines } from './showBillUtils';
 
 const DEFAULT_LAYOUT = {
   showNumbers: true,
@@ -45,7 +45,7 @@ const FONT_SIZES = {
 // Line spacing (y-increment per body line)
 const LINE_HEIGHTS = { compact: 11, normal: 14, relaxed: 18 };
 
-export async function generateShowBillPdf(showBill, allClassItems, associationsData, layoutSettings) {
+export async function generateShowBillPdf(showBill, allClassItems, associationsData, layoutSettings, locations = []) {
   if (!showBill) throw new Error('No show bill data available');
 
   const ls = { ...DEFAULT_LAYOUT, ...layoutSettings };
@@ -377,6 +377,20 @@ export async function generateShowBillPdf(showBill, allClassItems, associationsD
         doc.text(day.label || day.date, pageWidth / 2, y, { align: 'center' });
         y += fonts.day + 8;
       }
+    }
+
+    // --- Office / support hours ticked in Schedule Layout (e.g. Show Office, Vet Area) ---
+    const hoursLines = getLocationHoursLines(locations, ls.hoursLocationIds, day.date);
+    if (hoursLines.length > 0) {
+      checkPageBreak(hoursLines.length * (fonts.body + 4) + 8);
+      doc.setFontSize(fonts.body);
+      doc.setFont(undefined, 'italic');
+      for (const line of hoursLines) {
+        doc.text(line, pageWidth / 2, y, { align: 'center' });
+        y += fonts.body + 4;
+      }
+      doc.setFont(undefined, 'normal');
+      y += 4;
     }
 
     for (const arena of day.arenas || []) {

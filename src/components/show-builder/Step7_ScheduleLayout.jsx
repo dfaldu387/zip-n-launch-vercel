@@ -9,10 +9,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Textarea } from '@/components/ui/textarea';
-import { Download, RotateCcw, Hash, Type, PanelTop, PanelBottom, AlertTriangle, Image, Columns, FileText, BookOpen, Upload, X, Plus } from 'lucide-react';
+import { Download, RotateCcw, Hash, Type, PanelTop, PanelBottom, Clock, AlertTriangle, Image, Columns, FileText, BookOpen, Upload, X, Plus } from 'lucide-react';
 import BackgroundManager from '@/components/BackgroundManager';
 import { useToast } from '@/components/ui/use-toast';
-import { getAllClassItems, getUnplacedClasses, initializeShowBill, renumberShowBill } from '@/lib/showBillUtils';
+import { Checkbox } from '@/components/ui/checkbox';
+import { getAllClassItems, getUnplacedClasses, initializeShowBill, renumberShowBill, getLocationHoursLines } from '@/lib/showBillUtils';
 import { generateShowBillPdf } from '@/lib/showBillPdfGenerator';
 
 const DEFAULT_LAYOUT = {
@@ -33,6 +34,7 @@ const DEFAULT_LAYOUT = {
   showJudges: true,
   showFooter: true,
   customFooterText: '',
+  hoursLocationIds: [],
   background: { id: 'none', type: 'none', value: '' },
   coverPage: {
     enabled: false,
@@ -248,8 +250,12 @@ const CoverPageControls = ({ settings, update }) => {
 };
 
 // --- Layout Controls Panel ---
-const LayoutControls = ({ settings, onChange, onExportPdf, onReset, exportDisabled = false }) => {
+const LayoutControls = ({ settings, onChange, onExportPdf, onReset, exportDisabled = false, locations = [] }) => {
   const update = (key, value) => onChange({ ...settings, [key]: value });
+  const hoursIds = settings.hoursLocationIds || [];
+  const toggleHoursLocation = (id, checked) => {
+    update('hoursLocationIds', checked ? [...new Set([...hoursIds, id])] : hoursIds.filter(x => x !== id));
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -259,7 +265,7 @@ const LayoutControls = ({ settings, onChange, onExportPdf, onReset, exportDisabl
       </p>
 
       <ScrollArea className="flex-grow">
-        <Accordion type="multiple" defaultValue={['appearance', 'numbering', 'display', 'headers', 'footer']} className="space-y-2">
+        <Accordion type="multiple" defaultValue={['appearance', 'numbering', 'display', 'headers', 'hours', 'footer']} className="space-y-2">
           {/* Appearance */}
           <AccordionItem value="appearance" className="border rounded-lg px-3">
             <AccordionTrigger className="py-2 text-sm font-semibold hover:no-underline">
@@ -424,6 +430,34 @@ const LayoutControls = ({ settings, onChange, onExportPdf, onReset, exportDisabl
             </AccordionContent>
           </AccordionItem>
 
+          {/* Office & support hours (locations from Arenas & Dates) */}
+          <AccordionItem value="hours" className="border rounded-lg px-3">
+            <AccordionTrigger className="py-2 text-sm font-semibold hover:no-underline">
+              <span className="flex items-center gap-2"><Clock className="h-4 w-4" /> Office &amp; Support Hours</span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-2 pb-3">
+              {locations.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No show locations yet. Add them in Arenas &amp; Dates (Show Office, Vet Area, Stalling Office...).
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">Tick a location to print its hours under each day.</p>
+                  {locations.map(loc => (
+                    <div key={loc.id} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`hours-${loc.id}`}
+                        checked={hoursIds.includes(loc.id)}
+                        onCheckedChange={(c) => toggleHoursLocation(loc.id, c === true)}
+                      />
+                      <Label htmlFor={`hours-${loc.id}`} className="text-sm font-normal cursor-pointer">{loc.name}</Label>
+                    </div>
+                  ))}
+                </>
+              )}
+            </AccordionContent>
+          </AccordionItem>
+
           {/* Footer */}
           <AccordionItem value="footer" className="border rounded-lg px-3">
             <AccordionTrigger className="py-2 text-sm font-semibold hover:no-underline">
@@ -504,7 +538,7 @@ const SPACING_MAP = { compact: 'space-y-0.5', normal: 'space-y-1.5', relaxed: 's
 const ITEM_PADDING_MAP = { compact: 'py-0.5', normal: 'py-1', relaxed: 'py-2' };
 
 // --- Live Preview ---
-const ShowBillPreview = ({ showBill, settings, allClassItems, associationsData }) => {
+const ShowBillPreview = ({ showBill, settings, allClassItems, associationsData, locations = [] }) => {
   if (!showBill) return <p className="text-muted-foreground text-center py-10">No schedule data yet.</p>;
 
   const header = showBill.header || {};
@@ -668,6 +702,10 @@ const ShowBillPreview = ({ showBill, settings, allClassItems, associationsData }
                 )}
               </>
             )}
+
+            {getLocationHoursLines(locations, settings.hoursLocationIds, day.date).map(line => (
+              <p key={line} className={`${fontSize} italic text-gray-600 text-center`}>{line}</p>
+            ))}
 
             {day.arenas?.map((arena, arenaIndex) => {
               if (!arenaHasContent(day, arena)) return null;
@@ -838,12 +876,12 @@ export const Step7_ScheduleLayout = ({ formData, setFormData, associationsData }
 
   const handleExportPdf = useCallback(async () => {
     try {
-      await generateShowBillPdf(formData.showBill, allClassItems, associationsData, layoutSettings);
+      await generateShowBillPdf(formData.showBill, allClassItems, associationsData, layoutSettings, formData.locations || []);
       toast({ title: 'PDF Generated', description: 'Your show bill PDF has been downloaded.' });
     } catch (err) {
       toast({ title: 'PDF Error', description: err.message, variant: 'destructive' });
     }
-  }, [formData.showBill, allClassItems, associationsData, layoutSettings, toast]);
+  }, [formData.showBill, formData.locations, allClassItems, associationsData, layoutSettings, toast]);
 
   if (!formData.disciplines || formData.disciplines.length === 0) {
     return (
@@ -901,6 +939,7 @@ export const Step7_ScheduleLayout = ({ formData, setFormData, associationsData }
               onExportPdf={handleExportPdf}
               onReset={handleReset}
               exportDisabled={formData.showStatus !== 'locked' && formData.showStatus !== 'published'}
+              locations={formData.locations || []}
             />
           </div>
 
@@ -913,6 +952,7 @@ export const Step7_ScheduleLayout = ({ formData, setFormData, associationsData }
                   settings={layoutSettings}
                   allClassItems={allClassItems}
                   associationsData={associationsData}
+                  locations={formData.locations || []}
                 />
               </ScrollArea>
             </div>

@@ -112,7 +112,7 @@ const sections = [
     // The only card with a Get Started button — it opens the quick show-details pop-up.
     hasGetStarted: true,
     items: [
-      { icon: CalendarDays, label: 'Horse Show Schedule Builder', link: '/horse-show-manager/create' },
+      { icon: CalendarDays, label: 'Show Schedule and Arenas', link: '/horse-show-manager/create' },
       { icon: Info, label: 'Show Structure & Expenses', link: '/horse-show-manager/show-structure-expenses' },
       { icon: DollarSign, label: 'Fee Structure & Sponsors', link: '/horse-show-manager/fee-structure' },
     ],

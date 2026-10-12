@@ -10,7 +10,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { GripVertical, Undo2, Redo2, CalendarDays, X, CopyPlus, AlertTriangle, ChevronDown, ChevronRight, Lock, Unlock, Clock, Plus, Coffee, FileText, Megaphone, Grip, MapPin, Building2, Award, Stethoscope, CircleDot, HeartHandshake, ArrowDownToLine } from 'lucide-react';
+import { GripVertical, Undo2, Redo2, CalendarDays, X, CopyPlus, AlertTriangle, ChevronDown, ChevronRight, Lock, Unlock, Clock, Plus, Coffee, FileText, Megaphone, Grip, MapPin, Building2, Award, Stethoscope, CircleDot, HeartHandshake, ArrowDownToLine, Warehouse } from 'lucide-react';
+import { isLocationOpenOn } from '@/components/show-builder/Step3_ArenasAndDates';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '@/lib/utils';
@@ -478,6 +479,7 @@ function formatDateShort(dateStr) {
 const LOCATION_ICONS = {
     'show-office': Building2,
     'awards-room': Award,
+    'stalling-office': Warehouse,
     'vet-area': Stethoscope,
     'warmup-ring': CircleDot,
     'volunteer-desk': HeartHandshake,
@@ -1203,13 +1205,13 @@ export const Step3_ConfigureDivisions = ({ formData, setFormData, associationsDa
                                         )}
 
                                         {/* Show Locations for this day */}
-                                        {(formData.locations || []).length > 0 && (
+                                        {(formData.locations || []).filter(l => isLocationOpenOn(l, activeDay.date)).length > 0 && (
                                             <div className="mt-6 space-y-2">
                                                 <div className="flex items-center gap-2 mb-2">
                                                     <MapPin className="h-4 w-4 text-muted-foreground" />
                                                     <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Show Locations</span>
                                                 </div>
-                                                {(formData.locations || []).map(loc => {
+                                                {(formData.locations || []).filter(l => isLocationOpenOn(l, activeDay.date)).map(loc => {
                                                     const Icon = LOCATION_ICONS[loc.id] || MapPin;
                                                     const dayHours = loc.hours?.[activeDay.date] || {};
                                                     return (

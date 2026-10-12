@@ -430,7 +430,7 @@ export const Step6_Preview = ({ formData, setFormData, associationsData, createO
       return;
     }
     try {
-      await generateShowBillPdf(formData.showBill, allClassItems, associationsData, formData.layoutSettings);
+      await generateShowBillPdf(formData.showBill, allClassItems, associationsData, formData.layoutSettings, formData.locations || []);
       toast({ title: 'PDF Generated', description: 'Your show bill PDF has been downloaded.' });
     } catch (err) {
       toast({ title: 'PDF Error', description: err.message, variant: 'destructive' });

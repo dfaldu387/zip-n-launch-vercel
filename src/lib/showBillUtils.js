@@ -30,6 +30,34 @@ export function toLocalDateStr(date) {
   return `${y}-${m}-${d}`;
 }
 
+// "08:00" -> "8:00 AM"
+function formatTime12(time24) {
+  if (!time24) return '';
+  const [h, m] = time24.split(':').map(Number);
+  if (Number.isNaN(h)) return '';
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  return `${h % 12 || 12}:${String(m || 0).padStart(2, '0')} ${suffix}`;
+}
+
+/**
+ * Printable hours lines for one schedule day, e.g. ["Show Office: 8:00 AM – 6:00 PM"].
+ * Only locations ticked in Schedule Layout (selectedIds) are included. A location that was
+ * taken off this day in Arenas & Dates (removedDates) is skipped.
+ */
+export function getLocationHoursLines(locations, selectedIds, dateStr) {
+  const ids = selectedIds || [];
+  if (!ids.length || !dateStr) return [];
+  return (locations || [])
+    .filter(loc => ids.includes(loc.id))
+    .filter(loc => (loc.extraDates || []).includes(dateStr) || !(loc.removedDates || []).includes(dateStr))
+    .map(loc => {
+      const h = loc.hours?.[dateStr];
+      if (!h?.open || !h?.close) return null;
+      return `${loc.name}: ${formatTime12(h.open)} – ${formatTime12(h.close)}`;
+    })
+    .filter(Boolean);
+}
+
 // Extract judge names from formData.associationJudges
 function extractJudgeNames(formData) {
   const names = new Set();

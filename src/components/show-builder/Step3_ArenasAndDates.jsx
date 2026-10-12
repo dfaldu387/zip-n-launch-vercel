@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { PlusCircle, Trash2, Home, AlertCircle, MapPin, Building2, Award, Stethoscope, CircleDot, HeartHandshake, Plus, X, Clock } from 'lucide-react';
+import { PlusCircle, Trash2, Home, AlertCircle, MapPin, Building2, Award, Stethoscope, CircleDot, HeartHandshake, Warehouse, Plus, X, Clock } from 'lucide-react';
 import { addDays, format } from 'date-fns';
 import { parseLocalDate } from '@/lib/utils';
 import { useState } from 'react';
@@ -14,6 +14,7 @@ import { useState } from 'react';
 const PRESET_LOCATIONS = [
     { id: 'show-office', name: 'Show Office', icon: Building2 },
     { id: 'awards-room', name: 'Awards Room', icon: Award },
+    { id: 'stalling-office', name: 'Stalling Office', icon: Warehouse },
     { id: 'vet-area', name: 'Vet Area', icon: Stethoscope },
     { id: 'warmup-ring', name: 'Warmup Ring', icon: CircleDot },
     { id: 'volunteer-desk', name: 'Volunteer Desk', icon: HeartHandshake },
@@ -36,6 +37,43 @@ function formatShortDate(dateStr) {
     const d = parseLocalDate(dateStr);
     return format(d, 'EEE, MMM d');
 }
+
+// A location follows the show dates by default. `removedDates` takes a show day off that
+// location (e.g. no Vet on Sunday) and `extraDates` adds a day outside the show (e.g. the
+// Show Office opens the day before). Keeping both lists, not a fixed date list, means a
+// location still follows the show if the start or end date changes later.
+export function isLocationOpenOn(loc, dateStr) {
+    if ((loc.extraDates || []).includes(dateStr)) return true;
+    return !(loc.removedDates || []).includes(dateStr);
+}
+
+function getLocationDates(loc, competitionDates) {
+    const removed = new Set(loc.removedDates || []);
+    const all = new Set([...competitionDates.filter(d => !removed.has(d)), ...(loc.extraDates || [])]);
+    return [...all].sort();
+}
+
+const AddDateRow = ({ onAdd }) => {
+    const [value, setValue] = useState('');
+    const add = () => {
+        if (!value) return;
+        onAdd(value);
+        setValue('');
+    };
+    return (
+        <div className="flex items-center gap-2 pt-1">
+            <Input
+                type="date"
+                className="h-7 w-40 text-xs"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+            />
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={add} disabled={!value}>
+                <Plus className="h-3 w-3 mr-1" /> Add date
+            </Button>
+        </div>
+    );
+};
 
 // --- Locations Section ---
 const LocationsSection = ({ formData, setFormData }) => {
@@ -96,6 +134,35 @@ const LocationsSection = ({ formData, setFormData }) => {
                 const hours = { ...(l.hours || {}) };
                 hours[dateStr] = { ...(hours[dateStr] || { open: '08:00', close: '18:00' }), [field]: value };
                 return { ...l, hours };
+            }),
+        }));
+    };
+
+    const removeLocationDate = (locId, dateStr) => {
+        setFormData(prev => ({
+            ...prev,
+            locations: (prev.locations || []).map(l => {
+                if (l.id !== locId) return l;
+                const extraDates = (l.extraDates || []).filter(d => d !== dateStr);
+                const removedDates = competitionDates.includes(dateStr)
+                    ? [...new Set([...(l.removedDates || []), dateStr])]
+                    : (l.removedDates || []);
+                return { ...l, extraDates, removedDates };
+            }),
+        }));
+    };
+
+    const addLocationDate = (locId, dateStr) => {
+        setFormData(prev => ({
+            ...prev,
+            locations: (prev.locations || []).map(l => {
+                if (l.id !== locId) return l;
+                const hours = { ...(l.hours || {}) };
+                if (!hours[dateStr]) hours[dateStr] = { open: '08:00', close: '18:00' };
+                if (competitionDates.includes(dateStr)) {
+                    return { ...l, hours, removedDates: (l.removedDates || []).filter(d => d !== dateStr) };
+                }
+                return { ...l, hours, extraDates: [...new Set([...(l.extraDates || []), dateStr])] };
             }),
         }));
     };
@@ -162,11 +229,15 @@ const LocationsSection = ({ formData, setFormData }) => {
                                     )}
                                 </div>
                                 <div className="grid gap-2 pl-6">
-                                    {competitionDates.map(dateStr => {
+                                    {getLocationDates(loc, competitionDates).map(dateStr => {
                                         const dayHours = locHours[dateStr] || { open: '08:00', close: '18:00' };
+                                        const isExtraDay = !competitionDates.includes(dateStr);
                                         return (
                                             <div key={dateStr} className="flex items-center gap-3 text-sm">
-                                                <span className="text-muted-foreground w-28 shrink-0">{formatShortDate(dateStr)}</span>
+                                                <span className="text-muted-foreground w-28 shrink-0">
+                                                    {formatShortDate(dateStr)}
+                                                    {isExtraDay && <span className="block text-[10px] leading-none text-primary">extra day</span>}
+                                                </span>
                                                 <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                                 <div className="flex items-center gap-1.5">
                                                     <Label className="text-xs text-muted-foreground">Open</Label>
@@ -186,9 +257,19 @@ const LocationsSection = ({ formData, setFormData }) => {
                                                         onChange={(e) => updateLocationHours(loc.id, dateStr, 'close', e.target.value)}
                                                     />
                                                 </div>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-7 w-7 shrink-0"
+                                                    title={`Remove ${formatShortDate(dateStr)}`}
+                                                    onClick={() => removeLocationDate(loc.id, dateStr)}
+                                                >
+                                                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                                                </Button>
                                             </div>
                                         );
                                     })}
+                                    <AddDateRow onAdd={(d) => addLocationDate(loc.id, d)} />
                                 </div>
                             </div>
                         );

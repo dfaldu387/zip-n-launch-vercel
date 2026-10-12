@@ -37,10 +37,12 @@ const CreateShowPage = () => {
         try {
             const project = await createOrUpdateShow(null, 'editWizard', 'draft');
             if (!project) return; // validation failed (name required, duplicate, etc.)
-            toast({
-                title: 'Progress Saved',
-                description: 'Your show has been saved successfully.',
-            });
+            if (!project.alreadyExisted) {
+                toast({
+                    title: 'Progress Saved',
+                    description: 'Your show has been saved successfully.',
+                });
+            }
             if (!showId || showId !== project.id) {
                 navigate(`/horse-show-manager/edit/${project.id}`, { replace: true });
             }
@@ -76,17 +78,24 @@ const CreateShowPage = () => {
     const hasNamedArena = (formData.arenas || []).some(a => (a.name || '').trim() !== '');
     const isNextDisabled = currentStep === 5 && !hasNamedArena;
 
+    // A step only gets its check mark when "Next"/"Save" is pressed on it, so jumping
+    // ahead with the step bar left Arenas & Dates gray even when it was filled in.
+    // Treat step 5 as done whenever its own rule (a named arena) is met.
+    const effectiveCompletedSteps = hasNamedArena && !completedSteps.has(5)
+        ? new Set([...completedSteps, 5])
+        : completedSteps;
+
     return (
         <UsageLimitGate toolName="Horse Show Manager" isEditing={isEditMode}>
             <Helmet>
-                <title>{isEditMode ? 'Edit Show' : 'Horse Show Schedule Builder'} - Horse Show Manager</title>
+                <title>{isEditMode ? 'Edit Show' : 'Show Schedule and Arenas'} - Horse Show Manager</title>
                 <meta name="description" content="Build your horse show schedule and details step-by-step." />
             </Helmet>
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="container mx-auto px-4 py-8">
                     <PageHeader
-                        title={isEditMode ? 'Edit Show' : 'Horse Show Schedule Builder'}
+                        title={isEditMode ? 'Edit Show' : 'Show Schedule and Arenas'}
                         subtitle={`Step ${currentStep} of ${steps.length} — ${steps[currentStep - 1]?.name}`}
                         backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'}
                     />
@@ -94,7 +103,7 @@ const CreateShowPage = () => {
                     <div className="max-w-7xl mx-auto">
                         <ShowBuilderSteps
                             currentStep={currentStep}
-                            completedSteps={completedSteps}
+                            completedSteps={effectiveCompletedSteps}
                             setCurrentStep={setCurrentStep}
                             steps={steps}
                             isEditMode={isEditMode}
