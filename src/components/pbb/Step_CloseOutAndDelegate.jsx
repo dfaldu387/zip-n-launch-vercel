@@ -28,6 +28,7 @@ import { generatePatternBookPdf } from '@/lib/bookGenerator';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { getPublishReadiness } from '@/lib/patternBookReadiness';
 import { sendCustomPatternRequests, summarizeRequests } from '@/lib/customPatternEmails';
+import BookPublicPageSection from '@/components/pbb/BookPublicPageSection';
 
 // Two vocabularies reach this screen for the same four states: the builder
 // writes 'Locked' / 'Final', and the Customer Portal status dropdown writes
@@ -992,7 +993,7 @@ const SuccessConfirmationDialog = ({ open, onClose, onGoHome, onGoToMyProjects, 
   </Dialog>
 );
 
-export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8, isReadOnly = false, createOrUpdateProject, onGoToStep }) => {
+export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8, isReadOnly = false, isViewOnly = false, createOrUpdateProject, onGoToStep }) => {
     const { user, profile } = useAuth();
     const { toast } = useToast();
     const navigate = useNavigate();
@@ -1510,6 +1511,13 @@ export const Step_CloseOutAndDelegate = ({ formData, setFormData, stepNumber = 8
                         </PopoverContent>
                     </Popover>
                 </div>
+
+                {/* 3.5 Public page — same editor and same data as Housing & Grounds Manager */}
+                <BookPublicPageSection
+                    formData={formData}
+                    setFormData={setFormData}
+                    isReadOnly={isViewOnly}
+                />
 
                 {/* 4. Staff Delegation — always shown. It used to disappear entirely when
                     the list was empty, which read as a missing feature rather than as

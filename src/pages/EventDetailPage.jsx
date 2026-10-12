@@ -176,6 +176,7 @@ const EventDetailPage = () => {
           const housingRec = records.find(isHousingPub) || null;
           const patternRec = records.find(isPatternPub) || null;
           const patternPd = patternRec?.project_data || {};
+          const primaryLinkedId = projectDataObj.linkedShowProjectId || projectDataObj.linkedProjectId;
 
           // Keep Show Details from the primary (housing) record, but flag BOTH modules as
           // published so both action buttons render.
@@ -183,9 +184,16 @@ const EventDetailPage = () => {
             ...projectDataObj,
             publicationDate: patternPd.publicationDate || projectDataObj.publicationDate,
             // Public-page settings are saved from Housing & Grounds Manager, so prefer that record.
-            publicPage: housingRec?.project_data?.publicPage || projectDataObj.publicPage,
+            // A pattern book saves its public page on the show it is linked to, or on
+            // itself when it has no show — so fall back to any matching record.
+            publicPage: housingRec?.project_data?.publicPage
+              || records.find((r) => r.id === primaryLinkedId)?.project_data?.publicPage
+              || projectDataObj.publicPage
+              || records.find((r) => r.project_data?.publicPage)?.project_data?.publicPage,
             // The cover image is also set from Housing & Grounds Manager.
-            coverImageUrl: housingRec?.project_data?.coverImageUrl || projectDataObj.coverImageUrl,
+            coverImageUrl: housingRec?.project_data?.coverImageUrl
+              || projectDataObj.coverImageUrl
+              || records.find((r) => r.project_data?.coverImageUrl)?.project_data?.coverImageUrl,
             moduleStatuses: {
               ...(projectDataObj.moduleStatuses || {}),
               housing: housingRec ? 'published' : projectDataObj.moduleStatuses?.housing,
