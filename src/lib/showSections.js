@@ -19,7 +19,7 @@ export const SHOW_SECTION_ROUTES = {
 };
 
 export const SHOW_SECTION_TITLES = {
-  editWizard: 'Edit Show Wizard',
+  editWizard: 'Schedule & Arena Setup',
   showStructure: 'Show Structure & Expenses',
   feeStructure: 'Fee Structure & Sponsors',
   contracts: 'Contract Management',

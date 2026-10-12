@@ -88,14 +88,14 @@ const CreateShowPage = () => {
     return (
         <UsageLimitGate toolName="Horse Show Manager" isEditing={isEditMode}>
             <Helmet>
-                <title>{isEditMode ? 'Edit Show' : 'Show Schedule and Arenas'} - Horse Show Manager</title>
+                <title>Schedule & Arena Setup - Horse Show Manager</title>
                 <meta name="description" content="Build your horse show schedule and details step-by-step." />
             </Helmet>
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="container mx-auto px-4 py-8">
                     <PageHeader
-                        title={isEditMode ? 'Edit Show' : 'Show Schedule and Arenas'}
+                        title="Schedule & Arena Setup"
                         subtitle={`Step ${currentStep} of ${steps.length} — ${steps[currentStep - 1]?.name}`}
                         backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'}
                     />

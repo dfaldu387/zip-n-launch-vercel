@@ -250,13 +250,13 @@ const QuickLinkCard = ({ icon: Icon, title, description, link }) => (
 // Mirrors the module keys on ShowWorkspacePage's tool cards, so a Section
 // Admin's `sections` list lines up with the tools they're meant to be scoped to.
 const SHOW_SECTIONS = [
-  { key: 'editWizard', title: 'Edit Show Wizard' },
-  { key: 'showStructure', title: 'Show Structure & Expenses' },
-  { key: 'feeStructure', title: 'Fee Structure & Sponsors' },
-  { key: 'contracts', title: 'Contract Management' },
+  { key: 'editWizard', title: 'Schedule & Arena Setup' },
   { key: 'patternBook', title: 'Pattern Book' },
+  { key: 'feeStructure', title: 'Fee Structure & Sponsors' },
+  { key: 'showStructure', title: 'Show Structure & Expenses' },
   { key: 'budgeting', title: 'Employee Budgeting Tool' },
   { key: 'employeeScheduling', title: 'Employee / Arena Scheduling' },
+  { key: 'contracts', title: 'Contract Management' },
   { key: 'equipment', title: 'Equipment Management' },
   { key: 'results', title: 'Results Entry' },
   { key: 'awards', title: 'Awards Management' },

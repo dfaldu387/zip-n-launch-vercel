@@ -386,10 +386,7 @@ const ShowWorkspacePage = () => {
     {
       section: 'Show Setup',
       items: [
-        { key: 'editWizard', icon: Edit, title: 'Edit Show Wizard', description: 'Edit associations, disciplines, classes, details, arenas, schedule, and show bill.', to: `/horse-show-manager/edit/${showId}`, color: 'blue' },
-        { key: 'showStructure', icon: DollarSign, title: 'Show Structure & Expenses', description: 'Manage show expenses, fee structures, and sponsors.', to: `/horse-show-manager/show-structure-expenses/${showId}`, color: 'blue' },
-        { key: 'feeStructure', icon: DollarSign, title: 'Fee Structure & Sponsors', description: 'Configure entry fees, stall fees, and sponsor levels.', to: `/horse-show-manager/fee-structure/${showId}`, color: 'blue' },
-        { key: 'contracts', icon: FileText, title: 'Contract Management', description: 'Create and manage employee contracts for this show.', to: `/horse-show-manager/employee-management/contracts?showId=${showId}`, color: 'blue' },
+        { key: 'editWizard', icon: Edit, title: 'Schedule & Arena Setup', description: 'Edit associations, disciplines, classes, details, arenas, schedule, and show bill.', to: `/horse-show-manager/edit/${showId}`, color: 'blue' },
         {
           key: 'patternBook',
           icon: BookOpen,
@@ -408,6 +405,8 @@ const ShowWorkspacePage = () => {
               }
             : { onClick: () => setIsLinkDialogOpen(true) }),
         },
+        { key: 'feeStructure', icon: DollarSign, title: 'Fee Structure & Sponsors', description: 'Configure entry fees, stall fees, and sponsor levels.', to: `/horse-show-manager/fee-structure/${showId}`, color: 'blue' },
+        { key: 'showStructure', icon: DollarSign, title: 'Show Structure & Expenses', description: 'Manage show expenses, fee structures, and sponsors.', to: `/horse-show-manager/show-structure-expenses/${showId}`, color: 'blue' },
       ],
     },
     {
@@ -415,6 +414,7 @@ const ShowWorkspacePage = () => {
       items: [
         { key: 'budgeting', icon: DollarSign, title: 'Employee Budgeting Tool', description: 'Plan and track employee budgets and compensation.', to: `/horse-show-manager/employee-budgeting/${showId}`, color: 'emerald' },
         { key: 'employeeScheduling', icon: LayoutGrid, title: 'Employee / Arena Scheduling', description: 'Assign employees to arenas and time slots.', to: `/horse-show-manager/employee-scheduling/${showId}`, color: 'emerald' },
+        { key: 'contracts', icon: FileText, title: 'Contract Management', description: 'Create and manage employee contracts for this show.', to: `/horse-show-manager/employee-management/contracts?showId=${showId}`, color: 'emerald' },
       ],
     },
     {
@@ -424,6 +424,11 @@ const ShowWorkspacePage = () => {
         { key: 'results', icon: ClipboardList, title: 'Results Entry', description: 'Enter class results, placings, and scores from the schedule.', to: `/horse-show-manager/results-management/${showId}`, color: 'amber' },
         { key: 'awards', icon: Award, title: 'Awards Management', description: 'Configure awards, ribbons, and trophies.', to: `/horse-show-manager/awards-management/${showId}`, color: 'violet' },
         { key: 'financials', icon: BarChart3, title: 'Financials & Analytics', description: 'View financial projections, revenue, and analytics.', to: `/horse-show-manager/financials/${showId}`, color: 'rose' },
+      ],
+    },
+    {
+      section: 'Facility Management',
+      items: [
         { key: 'housing', icon: Warehouse, title: 'Housing & Grounds Manager', description: 'Manage stalls, pens, RV hookups, camping, and support spaces.', to: `/horse-show-manager/housing-grounds-manager/${showId}`, color: 'sky' },
       ],
     },
