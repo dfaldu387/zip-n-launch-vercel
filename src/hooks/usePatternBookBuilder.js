@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
+import { computeFillPatch, BOOK_FILL_KEYS } from '@/lib/showBookSync';
 import { NOT_ARCHIVED_FILTER } from '@/lib/archivedProjects';
 import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -259,6 +260,34 @@ export const usePatternBookBuilder = (projectId) => {
     // it the loader never re-ran and "Link to Existing Show" stayed empty until the
     // page was reloaded by hand.
   }, [sanitizedProjectId, toast, user]);
+
+  // "Create a new pattern book" on a show's workspace opens the builder with
+  // ?showId=. A brand-new book starts attached to that show and pre-filled from it,
+  // so the show and its book are connected from the first save (Robert: they "start
+  // naturally filling" each other). Only for a new, unsaved book, and only empty
+  // fields are filled.
+  const [searchParams] = useSearchParams();
+  const fromShowId = searchParams.get('showId');
+  const prefilledFromShowRef = useRef(null);
+  useEffect(() => {
+    if (!user || !fromShowId || sanitizedProjectId || isLoading) return;
+    if (prefilledFromShowRef.current === fromShowId) return;
+    prefilledFromShowRef.current = fromShowId;
+    (async () => {
+      const { data } = await supabase
+        .from('projects')
+        .select('project_data')
+        .eq('id', fromShowId)
+        .maybeSingle();
+      if (!data?.project_data) return;
+      setFormData((prev) => ({
+        ...prev,
+        ...computeFillPatch(data.project_data, prev, BOOK_FILL_KEYS),
+        linkedShowProjectId: fromShowId,
+        linkedProjectId: fromShowId,
+      }));
+    })();
+  }, [user, fromShowId, sanitizedProjectId, isLoading]);
 
   const handleShowTypeChange = useCallback((newShowType) => {
     setFormData(prev => {

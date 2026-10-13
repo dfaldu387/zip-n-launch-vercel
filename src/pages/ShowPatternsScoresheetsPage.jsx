@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import Navigation from '@/components/Navigation';
 import PatternBookDialogContent from '@/components/customer-portal/PatternBookDialogContent';
 import { supabase } from '@/lib/supabaseClient';
+import { syncShowAndBook } from '@/lib/showBookSync';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 
 // The link is stored on the BOOK (see ShowWorkspacePage): linkedShowProjectId is
@@ -36,7 +37,7 @@ const ShowPatternsScoresheetsPage = () => {
   const load = useCallback(async () => {
     if (!user || !showId) { setIsLoading(false); return; }
     const [showRes, booksRes, assocRes] = await Promise.all([
-      supabase.from('projects').select('id, project_name').eq('id', showId).single(),
+      supabase.from('projects').select('id, project_name, project_data, user_id').eq('id', showId).single(),
       supabase
         .from('projects')
         .select('*')
@@ -45,8 +46,17 @@ const ShowPatternsScoresheetsPage = () => {
         .order('created_at', { ascending: false }),
       supabase.from('associations').select('id, abbreviation, name, logo').order('name'),
     ]);
-    setShow(showRes.data || null);
-    setBook((booksRes.data || []).find((b) => bookShowLink(b) === showId) || null);
+    let showRow = showRes.data || null;
+    let bookRow = (booksRes.data || []).find((b) => bookShowLink(b) === showId) || null;
+    // Same two-way sync as the show workspace, so opening this page directly
+    // (a bookmark, a shared link) still shows the book up to date with the show.
+    if (showRow && bookRow) {
+      const synced = await syncShowAndBook(supabase, showRow, bookRow, user.id);
+      showRow = synced.show;
+      bookRow = synced.book;
+    }
+    setShow(showRow);
+    setBook(bookRow);
     setAssociationsData(
       (assocRes.data || []).map((a) => ({
         ...a,

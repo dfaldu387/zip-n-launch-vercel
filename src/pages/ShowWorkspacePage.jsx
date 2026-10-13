@@ -28,7 +28,7 @@ import { generateShowPacketPdf } from '@/lib/showPacketPdfGenerator';
 import { getAllClassItems } from '@/lib/showBillUtils';
 import { useModuleStatus } from '@/hooks/useModuleStatus';
 import { MODULE_STATUS, STATUS_META, migrateLegacyStatus, canGeneratePdf } from '@/lib/moduleStatusService';
-import { computeFillPatch, BOOK_FILL_KEYS, SHOW_FILL_KEYS } from '@/lib/showBookSync';
+import { syncShowAndBook } from '@/lib/showBookSync';
 import { NOT_ARCHIVED_FILTER } from '@/lib/archivedProjects';
 import { ModuleStatusBadge } from '@/components/show-builder/ModuleStatusBadge';
 import {
@@ -210,41 +210,6 @@ const bookStatusToModuleStatus = (raw) => {
   return MODULE_STATUS.NOT_STARTED;
 };
 
-/**
- * Fill-empty sync between a show and its linked book (see lib/showBookSync).
- * Writes only when something was actually empty, skips a locked show / a
- * locked or published book, and only the show's owner writes the show row.
- * A failed write is not fatal — the workspace simply keeps what it had.
- * Returns the (possibly updated) { show, book } rows.
- */
-const syncShowAndBook = async (show, book, userId) => {
-  let nextShow = show;
-  let nextBook = book;
-  const showPd = show.project_data || {};
-  const bookPd = book.project_data || {};
-
-  const bookLocked = [MODULE_STATUS.LOCKED, MODULE_STATUS.PUBLISHED].includes(bookStatusToModuleStatus(book.status));
-  if (!bookLocked) {
-    const patch = computeFillPatch(showPd, bookPd, BOOK_FILL_KEYS);
-    if (Object.keys(patch).length > 0) {
-      const merged = { ...bookPd, ...patch };
-      const { error } = await supabase.from('projects').update({ project_data: merged }).eq('id', book.id);
-      if (!error) nextBook = { ...book, project_data: merged };
-    }
-  }
-
-  if (show.user_id === userId && showPd.isShowLocked !== true) {
-    const patch = computeFillPatch(bookPd, showPd, SHOW_FILL_KEYS);
-    if (Object.keys(patch).length > 0) {
-      const merged = { ...showPd, ...patch };
-      const { error } = await supabase.from('projects').update({ project_data: merged }).eq('id', show.id);
-      if (!error) nextShow = { ...show, project_data: merged };
-    }
-  }
-
-  return { show: nextShow, book: nextBook };
-};
-
 /** Name of the *other* show a book is already attached to, or null. */
 const otherShowFor = (book, showId, shows) => {
   const linked = bookShowLink(book);
@@ -308,7 +273,7 @@ const ShowWorkspacePage = () => {
       // other, so nothing is typed twice. Filled fields are never overwritten.
       const pairedBook = showRow ? findLinkedPatternBook(showId, bookRows) : null;
       if (showRow && pairedBook) {
-        const synced = await syncShowAndBook(showRow, pairedBook, user.id);
+        const synced = await syncShowAndBook(supabase, showRow, pairedBook, user.id);
         showRow = synced.show;
         bookRows = bookRows.map((b) => (b.id === synced.book.id ? synced.book : b));
       }
@@ -373,6 +338,7 @@ const ShowWorkspacePage = () => {
       // First fill: whichever side is empty picks up the other's details.
       if (show) {
         await syncShowAndBook(
+          supabase,
           show,
           { ...book, project_data: { ...(book.project_data || {}), linkedShowProjectId: showId } },
           user?.id,
@@ -856,7 +822,7 @@ const ShowWorkspacePage = () => {
             <Button
               variant="outline"
               className="w-full"
-              onClick={() => { setIsLinkDialogOpen(false); navigate('/pattern-book-builder'); }}
+              onClick={() => { setIsLinkDialogOpen(false); navigate(`/pattern-book-builder?showId=${showId}`); }}
             >
               <Plus className="mr-2 h-4 w-4" />
               Create a new pattern book

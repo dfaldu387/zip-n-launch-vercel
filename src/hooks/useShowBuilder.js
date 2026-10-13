@@ -4,6 +4,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { MODULE_STATUS, migrateLegacyStatus, migrateAllModuleStatuses, stampModuleStatusOnSave } from '@/lib/moduleStatusService';
+import { mergeLatestShowData } from '@/lib/mergeLatestShowData';
 
 // Auto-heal: keep divisionDates in sync with each division's Go 1 date.
 // Older shows (and shows edited with the per-division date picker before the
@@ -353,6 +354,21 @@ export const useShowBuilder = (showId) => {
     };
 
     if (currentShowId) {
+      // Re-read the newest saved copy right before writing, so a booking, result or
+      // status another module saved while this page was open is kept instead of being
+      // replaced by the copy loaded earlier. If the read fails, save as before.
+      const { data: latestRow } = await supabase
+        .from('projects')
+        .select('project_data')
+        .eq('id', currentShowId)
+        .maybeSingle();
+      if (latestRow?.project_data) {
+        showPayload.project_data = mergeLatestShowData(latestRow.project_data, showDataToSave, {
+          snapshotModuleStatuses: formData.moduleStatuses || {},
+          isUnlock,
+        });
+      }
+
       const { data, error } = await supabase
         .from('projects')
         .update(showPayload)
