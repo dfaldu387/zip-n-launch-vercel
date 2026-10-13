@@ -43,7 +43,7 @@ const EmployeeArenaSchedulingManagerPage = () => {
             name: "Travel Management",
             icon: Plane,
             description: "Hotels, flights, and rental cars — your complete travel hub.",
-            link: "/horse-show-manager/travel-management",
+            link: `/horse-show-manager/travel-management${suffix}`,
         },
         {
             name: "Communications Log",

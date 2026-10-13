@@ -405,7 +405,15 @@ const StaffRoleSection = ({ roleId, staff, onAdd, onUpdate, onRemove, associatio
     );
 };
 
-export const OfficialsStaffStep = ({ formData, setFormData }) => {
+export const OfficialsStaffStep = ({
+    formData,
+    setFormData,
+    // The same tool is shown outside the wizard (Employee Budgeting, Employee
+    // Management), where "Step 3" would be a wrong label.
+    heading = 'Step 3: Officials & Staff',
+    description = 'Assign key personnel and manage their details. Roles are suggested based on your selected associations.',
+    hideHeader = false,
+}) => {
     const { associations = {}, showDetails = {}, customAssociations = [], primaryAffiliates = [] } = formData;
     const { officials = {} } = showDetails;
     const selectedAssociations = Object.keys(associations).filter(id => associations[id]);
@@ -652,11 +660,14 @@ export const OfficialsStaffStep = ({ formData, setFormData }) => {
 
     return (
         <motion.div initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }}>
-            <CardHeader>
-                <CardTitle>Step 3: Officials & Staff</CardTitle>
-                <CardDescription>Assign key personnel and manage their details. Roles are suggested based on your selected associations.</CardDescription>
-                {budgetFrozen && <BudgetFrozenBanner />}
-            </CardHeader>
+            {!hideHeader && (
+                <CardHeader>
+                    <CardTitle>{heading}</CardTitle>
+                    <CardDescription>{description}</CardDescription>
+                    {budgetFrozen && <BudgetFrozenBanner />}
+                </CardHeader>
+            )}
+            {hideHeader && budgetFrozen && <div className="px-6 pt-4"><BudgetFrozenBanner /></div>}
             <CardContent className="space-y-6">
                 <Accordion type="multiple" defaultValue={Object.keys(associationRoles)} className="w-full space-y-4">
                     {Object.keys(associationRoles).length === 0 && (

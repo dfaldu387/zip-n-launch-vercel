@@ -376,6 +376,34 @@ export const calculateMemberFinancials = (member) => {
   };
 };
 
+// Same totals the Officials & Staff tool shows on each person (Show Structure Step 3):
+// day pay honours a hand-typed "Days Worked", and hourly + overtime pay are included.
+// calculateMemberFinancials above is the contract view and ignores those three.
+export const calculateStaffCost = (member) => {
+  const autoDays = calculateDays(member.employment_start_date, member.employment_end_date);
+  const days = member.days_worked != null && member.days_worked !== ''
+    ? (parseFloat(member.days_worked) || 0)
+    : autoDays;
+  const dayPay = days * (parseFloat(member.day_fee) || 0);
+  const hourlyPay = (parseFloat(member.hours_worked) || 0) * (parseFloat(member.hourly_rate) || 0);
+  const overtimePay = (parseFloat(member.overtime_hours) || 0) * (parseFloat(member.overtime_rate_per_hour) || 0);
+
+  const expenseBreakdown = {};
+  let totalExpenses = 0;
+  for (const [expId, expense] of Object.entries(member.reimbursable_expenses || {})) {
+    if (!expense?.reimbursed) continue;
+    const meta = expenseTypeMeta[expId];
+    const amount = (meta?.isPerDay || meta?.isMileage)
+      ? (parseFloat(expense.total) || 0)
+      : (parseFloat(expense.max_value) || 0);
+    expenseBreakdown[expId] = amount;
+    totalExpenses += amount;
+  }
+
+  const totalPay = dayPay + hourlyPay + overtimePay;
+  return { totalPay, totalExpenses, expenseBreakdown, totalCompensation: totalPay + totalExpenses };
+};
+
 export const getTravelMethod = (member) => {
   const expenses = member.reimbursable_expenses || {};
   if (expenses.airfare?.reimbursed) return { label: 'Air Travel', icon: Plane };

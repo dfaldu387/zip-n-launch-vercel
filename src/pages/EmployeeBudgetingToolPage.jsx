@@ -18,7 +18,8 @@ import { isWizardReadOnly } from '@/lib/moduleStatusService';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
-import { flattenPersonnel, calculateMemberFinancials } from '@/lib/contractUtils';
+import { flattenPersonnel, calculateStaffCost } from '@/lib/contractUtils';
+import { ShowOfficialsStaffPanel } from '@/components/shared/ShowOfficialsStaffPanel';
 import { exportBudgetToExcel } from '@/lib/contractBudgetExport';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
 
@@ -135,9 +136,20 @@ const BudgetDashboard = ({ show, contractProject }) => {
     const pd = show.project_data || {};
     const cpd = contractProject?.project_data || {};
 
-    // Employee costs from contract management (the primary data source)
+    // The show's own Officials & Staff list (Show Structure Step 3) is the source.
+    // `liveOfficials` follows the editor on this page, unsaved edits included.
+    const [liveOfficials, setLiveOfficials] = useState(null);
+    const showOfficials = liveOfficials ?? pd.showDetails?.officials ?? {};
+    const showPersonnel = useMemo(
+        () => flattenPersonnel({ showDetails: { officials: showOfficials } }),
+        [showOfficials]
+    );
+    // Only when the show has no staff yet do we fall back to a linked contract's list
+    // (how this page worked before), so existing contract-only budgets keep showing.
+    const usingContractFallback = showPersonnel.length === 0 && !!contractProject;
+
     const employeeCosts = useMemo(() => {
-        const personnel = flattenPersonnel(cpd);
+        const personnel = usingContractFallback ? flattenPersonnel(cpd) : showPersonnel;
         let totalDayPay = 0;
         let totalExpenses = 0;
         let totalCompensation = 0;
@@ -145,8 +157,8 @@ const BudgetDashboard = ({ show, contractProject }) => {
         const byExpenseType = {};
 
         for (const member of personnel) {
-            const fin = calculateMemberFinancials(member);
-            totalDayPay += fin.totalDayFee;
+            const fin = calculateStaffCost(member);
+            totalDayPay += fin.totalPay;
             totalExpenses += fin.totalExpenses;
             totalCompensation += fin.totalCompensation;
 
@@ -154,7 +166,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
             if (!byRole[role]) byRole[role] = { count: 0, total: 0, dayPay: 0, expenses: 0 };
             byRole[role].count += 1;
             byRole[role].total += fin.totalCompensation;
-            byRole[role].dayPay += fin.totalDayFee;
+            byRole[role].dayPay += fin.totalPay;
             byRole[role].expenses += fin.totalExpenses;
 
             // Aggregate expense types
@@ -164,7 +176,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
         }
 
         return { personnelCount: personnel.length, totalDayPay, totalExpenses, totalCompensation, byRole, byExpenseType, personnel };
-    }, [cpd]);
+    }, [cpd, showPersonnel, usingContractFallback]);
 
     const employeeTotal = employeeCosts.totalCompensation;
 
@@ -187,16 +199,19 @@ const BudgetDashboard = ({ show, contractProject }) => {
                 <div className="flex items-center gap-2">
                     <h2 className="text-xl font-bold">{show.project_name}</h2>
                     {pd.showNumber && <Badge variant="secondary"><Hash className="h-3 w-3 mr-0.5" />{pd.showNumber}</Badge>}
-                    {!contractProject && (
-                        <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300">No contract data linked</Badge>
+                    {employeeCosts.personnelCount === 0 && (
+                        <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300">No staff added yet</Badge>
                     )}
                 </div>
-                {contractProject && (
+                {employeeCosts.personnelCount > 0 && (
                     <Button
                         variant="outline"
                         size="sm"
                         onClick={async () => {
-                            const success = await exportBudgetToExcel(contractProject.project_data || {});
+                            const source = usingContractFallback
+                                ? (contractProject.project_data || {})
+                                : { showName: show.project_name, showDetails: { officials: showOfficials } };
+                            const success = await exportBudgetToExcel(source);
                             if (!success) alert('No personnel data to export.');
                         }}
                     >
@@ -205,6 +220,13 @@ const BudgetDashboard = ({ show, contractProject }) => {
                     </Button>
                 )}
             </div>
+
+            {/* Officials & Staff — the same list as Show Structure & Expenses Step 3 */}
+            <ShowOfficialsStaffPanel
+                showId={show.id}
+                defaultOpen={showPersonnel.length === 0}
+                onOfficialsChange={setLiveOfficials}
+            />
 
             {/* KPI Cards — staff expenses only */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -245,7 +267,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                     <BudgetLine label="TOTAL STAFF COSTS" amount={employeeTotal} bold color="text-purple-600" />
                                 </>
                             ) : (
-                                <p className="text-sm text-muted-foreground text-center py-4">No staff data. Link a contract project to see employee costs.</p>
+                                <p className="text-sm text-muted-foreground text-center py-4">No staff yet. Add people and day rates in Officials &amp; Staff above to see employee costs.</p>
                             )}
                         </CardContent>
                     </Card>
@@ -285,12 +307,12 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                         </thead>
                                         <tbody>
                                             {employeeCosts.personnel.map((member) => {
-                                                const fin = calculateMemberFinancials(member);
+                                                const fin = calculateStaffCost(member);
                                                 return (
                                                     <tr key={member.id} className="border-b last:border-0">
                                                         <td className="px-3 py-2 font-medium">{member.name || 'Unnamed'}</td>
                                                         <td className="px-3 py-2 text-muted-foreground">{member.roleName || ''}</td>
-                                                        <td className="px-3 py-2 text-right">{currency(fin.totalDayFee)}</td>
+                                                        <td className="px-3 py-2 text-right">{currency(fin.totalPay)}</td>
                                                         <td className="px-3 py-2 text-right">{currency(fin.totalExpenses)}</td>
                                                         <td className="px-3 py-2 text-right font-semibold">{currency(fin.totalCompensation)}</td>
                                                     </tr>
@@ -350,7 +372,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
                         </CardHeader>
                         <CardContent className="space-y-2">
                             {[
-                                { label: 'Employee contracts linked', ok: employeeCosts.personnelCount > 0 },
+                                { label: 'Staff added (Officials & Staff)', ok: employeeCosts.personnelCount > 0 },
                             ].map(item => (
                                 <div key={item.label} className="flex items-center gap-2 text-sm">
                                     <div className={cn('h-2.5 w-2.5 rounded-full', item.ok ? 'bg-emerald-500' : 'bg-gray-300')} />

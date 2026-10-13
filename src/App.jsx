@@ -294,6 +294,7 @@ function App() {
                   <Route path="/horse-show-manager/employee-management/contracts" element={<MembershipRoute><ContractManagementPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/employee-management/contracts/:projectId" element={<MembershipRoute><ContractManagementPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/travel-management" element={<MembershipRoute><TravelManagementPage /></MembershipRoute>} />
+                  <Route path="/horse-show-manager/travel-management/:showId" element={<MembershipRoute><TravelManagementPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/awards-presenters" element={<MembershipRoute><AwardsPresenterManagerPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/awards-management" element={<MembershipRoute><AwardsManagementPage /></MembershipRoute>} />
                   <Route path="/horse-show-manager/awards-management/:showId" element={<MembershipRoute><AwardsManagementPage /></MembershipRoute>} />
