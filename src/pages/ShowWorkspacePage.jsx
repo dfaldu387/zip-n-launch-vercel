@@ -28,6 +28,8 @@ import { generateShowPacketPdf } from '@/lib/showPacketPdfGenerator';
 import { getAllClassItems } from '@/lib/showBillUtils';
 import { useModuleStatus } from '@/hooks/useModuleStatus';
 import { MODULE_STATUS, STATUS_META, migrateLegacyStatus, canGeneratePdf } from '@/lib/moduleStatusService';
+import { computeFillPatch, BOOK_FILL_KEYS, SHOW_FILL_KEYS } from '@/lib/showBookSync';
+import { NOT_ARCHIVED_FILTER } from '@/lib/archivedProjects';
 import { ModuleStatusBadge } from '@/components/show-builder/ModuleStatusBadge';
 import {
   Tooltip,
@@ -208,6 +210,41 @@ const bookStatusToModuleStatus = (raw) => {
   return MODULE_STATUS.NOT_STARTED;
 };
 
+/**
+ * Fill-empty sync between a show and its linked book (see lib/showBookSync).
+ * Writes only when something was actually empty, skips a locked show / a
+ * locked or published book, and only the show's owner writes the show row.
+ * A failed write is not fatal — the workspace simply keeps what it had.
+ * Returns the (possibly updated) { show, book } rows.
+ */
+const syncShowAndBook = async (show, book, userId) => {
+  let nextShow = show;
+  let nextBook = book;
+  const showPd = show.project_data || {};
+  const bookPd = book.project_data || {};
+
+  const bookLocked = [MODULE_STATUS.LOCKED, MODULE_STATUS.PUBLISHED].includes(bookStatusToModuleStatus(book.status));
+  if (!bookLocked) {
+    const patch = computeFillPatch(showPd, bookPd, BOOK_FILL_KEYS);
+    if (Object.keys(patch).length > 0) {
+      const merged = { ...bookPd, ...patch };
+      const { error } = await supabase.from('projects').update({ project_data: merged }).eq('id', book.id);
+      if (!error) nextBook = { ...book, project_data: merged };
+    }
+  }
+
+  if (show.user_id === userId && showPd.isShowLocked !== true) {
+    const patch = computeFillPatch(bookPd, showPd, SHOW_FILL_KEYS);
+    if (Object.keys(patch).length > 0) {
+      const merged = { ...showPd, ...patch };
+      const { error } = await supabase.from('projects').update({ project_data: merged }).eq('id', show.id);
+      if (!error) nextShow = { ...show, project_data: merged };
+    }
+  }
+
+  return { show: nextShow, book: nextBook };
+};
+
 /** Name of the *other* show a book is already attached to, or null. */
 const otherShowFor = (book, showId, shows) => {
   const linked = bookShowLink(book);
@@ -255,6 +292,7 @@ const ShowWorkspacePage = () => {
           .select('id, project_name, project_data, status')
           .eq('user_id', user.id)
           .eq('project_type', 'pattern_book')
+          .or(NOT_ARCHIVED_FILTER)
           .order('created_at', { ascending: false }),
         supabase
           .from('projects')
@@ -263,11 +301,23 @@ const ShowWorkspacePage = () => {
           .eq('project_type', 'show'),
       ]);
 
-      if (!showRes.error && showRes.data) {
-        setShow(showRes.data);
+      let showRow = !showRes.error ? showRes.data : null;
+      let bookRows = booksRes.data || [];
+
+      // Show <-> linked pattern book: fill each side's EMPTY fields from the
+      // other, so nothing is typed twice. Filled fields are never overwritten.
+      const pairedBook = showRow ? findLinkedPatternBook(showId, bookRows) : null;
+      if (showRow && pairedBook) {
+        const synced = await syncShowAndBook(showRow, pairedBook, user.id);
+        showRow = synced.show;
+        bookRows = bookRows.map((b) => (b.id === synced.book.id ? synced.book : b));
+      }
+
+      if (showRow) {
+        setShow(showRow);
       }
       setLinkedContracts(contractsRes.data || []);
-      setPatternBooks(booksRes.data || []);
+      setPatternBooks(bookRows);
       setMyShows(showsRes.data || []);
 
       // Fetch associations for packet generator
@@ -320,6 +370,15 @@ const ShowWorkspacePage = () => {
         .eq('id', book.id);
       if (error) throw error;
 
+      // First fill: whichever side is empty picks up the other's details.
+      if (show) {
+        await syncShowAndBook(
+          show,
+          { ...book, project_data: { ...(book.project_data || {}), linkedShowProjectId: showId } },
+          user?.id,
+        );
+      }
+
       toast({
         title: 'Pattern book linked',
         description: `"${book.project_name || 'Untitled'}" now opens straight from this show.`,
@@ -332,7 +391,7 @@ const ShowWorkspacePage = () => {
     } finally {
       setLinkingBookId(null);
     }
-  }, [patternBooks, showId, navigate, toast]);
+  }, [patternBooks, showId, navigate, toast, show, user?.id]);
 
   const handleGeneratePacket = useCallback(async () => {
     if (!show?.project_data) return;
@@ -420,9 +479,20 @@ const ShowWorkspacePage = () => {
     {
       section: 'Show Management',
       items: [
-        { key: 'equipment', icon: Radio, title: 'Equipment Management', description: 'Plan and track equipment needs across arenas.', to: `/horse-show-manager/equipment-planning/${showId}`, color: 'amber' },
+        {
+          key: 'patternsScoresheets',
+          icon: BookOpen,
+          title: 'Patterns & Scoresheets',
+          description: 'Pull pattern books and score sheets for the whole show.',
+          color: 'indigo',
+          // Opens the in-show page. With no book linked yet, ask which one first.
+          ...(linkedBook
+            ? { to: `/horse-show-manager/patterns-scoresheets/${showId}` }
+            : { onClick: () => setIsLinkDialogOpen(true) }),
+        },
         { key: 'results', icon: ClipboardList, title: 'Results Entry', description: 'Enter class results, placings, and scores from the schedule.', to: `/horse-show-manager/results-management/${showId}`, color: 'amber' },
         { key: 'awards', icon: Award, title: 'Awards Management', description: 'Configure awards, ribbons, and trophies.', to: `/horse-show-manager/awards-management/${showId}`, color: 'violet' },
+        { key: 'equipment', icon: Radio, title: 'Equipment Management', description: 'Plan and track equipment needs across arenas.', to: `/horse-show-manager/equipment-planning/${showId}`, color: 'amber' },
         { key: 'financials', icon: BarChart3, title: 'Financials & Analytics', description: 'View financial projections, revenue, and analytics.', to: `/horse-show-manager/financials/${showId}`, color: 'rose' },
       ],
     },

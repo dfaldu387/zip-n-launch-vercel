@@ -29,6 +29,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
 import { groupShowRecords } from '@/lib/showGrouping';
 import { supabase } from '@/lib/supabaseClient';
+import { NOT_ARCHIVED_FILTER } from '@/lib/archivedProjects';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -7367,6 +7368,7 @@ const HousingGroundsManagerPage = () => {
             .from('projects')
             .select('id, project_name, project_type, project_data, status, created_at')
             .not('project_type', 'in', '("pattern_folder","pattern_hub","pattern_upload","contract")')
+            .or(NOT_ARCHIVED_FILTER)
             .eq('user_id', user.id)
             .order('created_at', { ascending: false });
         let combined = data || [];

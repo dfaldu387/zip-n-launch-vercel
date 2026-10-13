@@ -6,6 +6,10 @@ import Navigation from '@/components/Navigation';
 import Footer from '@/components/Footer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Archive, Calendar, RotateCcw, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useToast } from '@/components/ui/use-toast';
@@ -16,6 +20,9 @@ const ArchivePatternsPage = () => {
     const { toast } = useToast();
     const [archivedProjects, setArchivedProjects] = useState([]);
     const [loading, setLoading] = useState(true);
+    // Permanent delete cannot be undone, so the button only asks; the delete
+    // runs from the confirm dialog.
+    const [deleteTarget, setDeleteTarget] = useState(null);
 
     useEffect(() => {
         if (user) {
@@ -52,6 +59,7 @@ const ArchivePatternsPage = () => {
     };
 
     const handlePermanentDelete = async (projectId) => {
+        setDeleteTarget(null);
         const { error } = await supabase
             .from('projects')
             .delete()
@@ -76,10 +84,10 @@ const ArchivePatternsPage = () => {
                 <div className="mb-8">
                     <h1 className="text-3xl font-bold flex items-center gap-3">
                         <Archive className="h-8 w-8 text-muted-foreground" />
-                        Archive Pattern
+                        Archive
                     </h1>
                     <p className="text-muted-foreground mt-2">
-                        View and manage your archived projects. Restore or permanently delete them.
+                        View and manage your archived pattern books and horse shows. Restore or permanently delete them.
                     </p>
                 </div>
 
@@ -89,7 +97,7 @@ const ArchivePatternsPage = () => {
                     <Card>
                         <CardContent className="py-12 text-center">
                             <Archive className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                            <p className="text-muted-foreground">No archived pattern books</p>
+                            <p className="text-muted-foreground">No archived pattern books or horse shows</p>
                         </CardContent>
                     </Card>
                 ) : (
@@ -99,8 +107,11 @@ const ArchivePatternsPage = () => {
                                     <CardContent className="p-4">
                                         <div className="flex items-center justify-between">
                                             <div className="flex-1">
-                                                <h3 className="font-semibold text-lg">
+                                                <h3 className="font-semibold text-lg flex items-center gap-2">
                                                     {project.project_name || 'Untitled Project'}
+                                                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
+                                                        {project.project_type === 'show' ? 'Horse Show' : 'Pattern Book'}
+                                                    </span>
                                                 </h3>
                                                 <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
                                                     <span className="flex items-center gap-1">
@@ -121,7 +132,7 @@ const ArchivePatternsPage = () => {
                                                 <Button
                                                     variant="destructive"
                                                     size="sm"
-                                                    onClick={() => handlePermanentDelete(project.id)}
+                                                    onClick={() => setDeleteTarget(project)}
                                                 >
                                                     <Trash2 className="h-4 w-4 mr-2" />
                                                     Delete
@@ -134,6 +145,28 @@ const ArchivePatternsPage = () => {
                     </div>
                 )}
             </main>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            Delete this {deleteTarget?.project_type === 'show' ? 'horse show' : 'pattern book'} forever?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            "{deleteTarget?.project_name || 'Untitled Project'}" will be permanently deleted. This cannot be undone. To keep it, use Restore instead.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={() => handlePermanentDelete(deleteTarget.id)}
+                            className="bg-red-600 hover:bg-red-700 text-white"
+                        >
+                            Delete forever
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
             <Footer />
         </div>
     );

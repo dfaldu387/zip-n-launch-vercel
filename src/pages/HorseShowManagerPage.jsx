@@ -9,8 +9,8 @@ import {
   Info, CalendarDays, FileText,
   DollarSign, LayoutGrid, Building2, Radio, Award,
   Plus, Loader2, FolderOpen, Hash, Calendar, ChevronRight,
-  Search, MapPin, Trash2, Shield, Crown, ArrowLeft,
-  Users, UserPlus, X, Mail, BookOpen, Globe,
+  Search, MapPin, Shield, Crown, ArrowLeft,
+  Users, UserPlus, X, Mail, BookOpen, Globe, Archive,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import HousingShowDetailsStep from '@/components/housing/HousingShowDetailsStep';
@@ -27,6 +27,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
 import { useUsageGate } from '@/hooks/useUsageGate';
+import { withoutArchived } from '@/lib/archivedProjects';
 
 /* ── Custom folder SVG icons ── */
 
@@ -257,9 +258,10 @@ const SHOW_SECTIONS = [
   { key: 'budgeting', title: 'Employee Budgeting Tool' },
   { key: 'employeeScheduling', title: 'Employee / Arena Scheduling' },
   { key: 'contracts', title: 'Contract Management' },
-  { key: 'equipment', title: 'Equipment Management' },
+  { key: 'patternsScoresheets', title: 'Patterns & Scoresheets' },
   { key: 'results', title: 'Results Entry' },
   { key: 'awards', title: 'Awards Management' },
+  { key: 'equipment', title: 'Equipment Management' },
   { key: 'financials', title: 'Financials & Analytics' },
   { key: 'housing', title: 'Housing & Grounds Manager' },
 ];
@@ -276,7 +278,7 @@ const HorseShowManagerPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingId, setDeletingId] = useState(null);
   const [showLimitModal, setShowLimitModal] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [archiveTarget, setArchiveTarget] = useState(null);
   const [showGetStarted, setShowGetStarted] = useState(false);
   const [isCreatingShow, setIsCreatingShow] = useState(false);
   const creatingShowRef = useRef(false);
@@ -354,24 +356,30 @@ const HorseShowManagerPage = () => {
     }
   };
 
-  // The trash icon only asks; the delete runs from the confirm dialog below.
-  const handleDelete = (e, show) => {
+  // A show is archived, never deleted from this list; permanent delete lives on
+  // the Archive page (behind a confirm). Archive hides the show (mode = 'archived'); Restore on the Archive page
+  // brings it back. Nothing is deleted and the linked pattern book is untouched.
+  const handleArchive = (e, show) => {
     e.stopPropagation();
-    setDeleteTarget(show);
+    setArchiveTarget(show);
   };
 
-  const confirmDelete = async () => {
-    const show = deleteTarget;
+  const confirmArchive = async () => {
+    const show = archiveTarget;
     if (!show) return;
-    setDeleteTarget(null);
+    setArchiveTarget(null);
     const name = show.project_name || 'Untitled Show';
     setDeletingId(show.id);
-    const { error } = await supabase.from('projects').delete().eq('id', show.id).eq('user_id', user.id);
+    const { error } = await supabase
+      .from('projects')
+      .update({ mode: 'archived' })
+      .eq('id', show.id)
+      .eq('user_id', user.id);
     if (error) {
-      toast({ title: 'Delete failed', description: error.message, variant: 'destructive' });
+      toast({ title: 'Archive failed', description: error.message, variant: 'destructive' });
     } else {
       setShows((prev) => prev.filter((s) => s.id !== show.id));
-      toast({ title: 'Show deleted', description: `"${name}" has been removed.` });
+      toast({ title: 'Show archived', description: `"${name}" moved to the Archive page. You can restore it there.` });
     }
     setDeletingId(null);
   };
@@ -530,7 +538,8 @@ const HorseShowManagerPage = () => {
       if (error) {
         console.error('get_my_horse_shows error:', error);
       }
-      setShows(data || []);
+      // Archived shows live on the Archive page, not in this list.
+      setShows(await withoutArchived(supabase, data));
       setIsLoading(false);
     };
     fetchShows();
@@ -710,14 +719,12 @@ const HorseShowManagerPage = () => {
                               {isOwner(show) && (
                                 <button
                                   type="button"
-                                  className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
-                                  title="Delete show"
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors shrink-0"
+                                  title="Archive show"
                                   disabled={deletingId === show.id}
-                                  onClick={(e) => handleDelete(e, show)}
+                                  onClick={(e) => handleArchive(e, show)}
                                 >
-                                  {deletingId === show.id
-                                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                                    : <Trash2 className="h-4 w-4" />}
+                                  <Archive className="h-4 w-4" />
                                 </button>
                               )}
                               <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
@@ -764,19 +771,19 @@ const HorseShowManagerPage = () => {
           </div>
         </main>
 
-        {/* Delete show — confirm */}
-        <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        {/* Archive show — confirm */}
+        <AlertDialog open={!!archiveTarget} onOpenChange={(open) => !open && setArchiveTarget(null)}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete this show?</AlertDialogTitle>
+              <AlertDialogTitle>Archive this show?</AlertDialogTitle>
               <AlertDialogDescription>
-                "{deleteTarget?.project_name || 'Untitled Show'}" will be permanently deleted. This cannot be undone.
+                "{archiveTarget?.project_name || 'Untitled Show'}" will move to the Archive page. Nothing is deleted, and you can restore it there at any time.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700 text-white">
-                Delete show
+              <AlertDialogAction onClick={confirmArchive}>
+                Archive show
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

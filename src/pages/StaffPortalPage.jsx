@@ -17,6 +17,7 @@ import { routeForShowAccess, SHOW_SECTION_TITLES } from '@/lib/showSections';
 import ProjectDetailModal from '@/components/ProjectDetailModal';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { withoutArchived } from '@/lib/archivedProjects';
 import { format } from 'date-fns';
 import { cn, parseLocalDate } from '@/lib/utils';
 
@@ -168,7 +169,9 @@ const StaffPortalPage = () => {
             const { data, error } = await supabase.rpc('get_my_horse_shows');
             if (!error && data) {
                 const myEmail = (user.email || '').toLowerCase();
-                const granted = data
+                // An archived show is hidden from its owner's list, so it is hidden here too.
+                const activeShows = await withoutArchived(supabase, data);
+                const granted = activeShows
                     .filter(show => show.user_id !== user.id)
                     .map(show => {
                         const admins = Array.isArray(show.admins) ? show.admins : [];

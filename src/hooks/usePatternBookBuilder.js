@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
+import { NOT_ARCHIVED_FILTER } from '@/lib/archivedProjects';
 import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -160,7 +161,7 @@ export const usePatternBookBuilder = (projectId) => {
       setIsLoading(true);
       try {
         const projectsQuery = user
-          ? supabase.from('projects').select('id, project_name, project_type, project_data, status').eq('user_id', user.id).in('project_type', ['show', 'pattern_book']).order('created_at', { ascending: false })
+          ? supabase.from('projects').select('id, project_name, project_type, project_data, status').eq('user_id', user.id).in('project_type', ['show', 'pattern_book']).or(NOT_ARCHIVED_FILTER).order('created_at', { ascending: false })
           : Promise.resolve({ data: [], error: null });
 
         const [disciplinesRes, associationsRes, divisionsRes, projectsRes] = await Promise.all([
