@@ -38,8 +38,10 @@ const expenseTypes = [
 ];
 
 
-const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, associationId, memberFrozen }) => {
-    
+const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, associationId, memberFrozen: sentFrozen }) => {
+    // Locked = contract already sent, or locked on the show (unlock it there).
+    const memberFrozen = sentFrozen || !!member.locked;
+
     const calculateDays = (startDate, endDate, isHotel = false) => {
         if (!startDate || !endDate) return 0;
         const start = new Date(startDate);
@@ -151,7 +153,7 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, assoc
                         </div>
                         <div className="flex items-center gap-2">
                             {memberFrozen && (
-                                <span title="Contract sent — fields locked" className="text-amber-500">
+                                <span title={sentFrozen ? 'Contract sent — fields locked' : 'Locked on the show — unlock it in Show Structure or Employee Management'} className="text-amber-500">
                                     <Lock className="h-3.5 w-3.5" />
                                 </span>
                             )}

@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Plus, Trash2, User, DollarSign, Calendar, Phone, Mail, Clock, Plane, BaggageClaim, Car, Hotel, Fuel, Users, Copy, PlusCircle, MapPin, Lock } from 'lucide-react';
+import { Plus, Trash2, User, DollarSign, Calendar, Phone, Mail, Clock, Plane, BaggageClaim, Car, Hotel, Fuel, Users, Copy, PlusCircle, MapPin, Lock, Unlock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { staffRoles, associationStaffing, roleGroups } from '@/lib/staffingData';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -38,8 +38,10 @@ const expenseTypes = [
 ];
 
 
-const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, memberFrozen }) => {
-    
+const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, memberFrozen: sentFrozen }) => {
+    // Locked = contract already sent (automatic) or locked by hand with the lock button.
+    const memberFrozen = sentFrozen || !!member.locked;
+
     const calculateDays = (startDate, endDate, isHotel = false) => {
         if (!startDate || !endDate) return 0;
         const start = new Date(startDate);
@@ -152,10 +154,20 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                             )}
                         </div>
                         <div className="flex items-center gap-2">
-                            {memberFrozen && (
+                            {sentFrozen ? (
                                 <span title="Contract sent — fields locked" className="text-amber-500">
                                     <Lock className="h-3.5 w-3.5" />
                                 </span>
+                            ) : (
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={(e) => { e.stopPropagation(); onUpdate(member.id, 'locked', !member.locked); }}
+                                    className={cn('h-8 w-8', member.locked ? 'text-amber-500' : 'text-muted-foreground hover:text-primary')}
+                                    title={member.locked ? 'Locked — click to unlock' : 'Lock this person so details cannot be changed by accident'}
+                                >
+                                    {member.locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+                                </Button>
                             )}
                             <Button variant="ghost" size="icon" disabled={memberFrozen} onClick={(e) => { e.stopPropagation(); onRemove(member.id, associationId, role.id); }} className="text-destructive h-8 w-8">
                                 <Trash2 className="h-4 w-4" />

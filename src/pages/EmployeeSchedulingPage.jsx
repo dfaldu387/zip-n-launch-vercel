@@ -94,11 +94,12 @@ const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, a
     const [search, setSearch] = useState('');
     const [applyAll, setApplyAll] = useState(false);
 
+    // People still free on this day come first; anyone already booked sits at the bottom.
     const filteredRoster = useMemo(() => {
-        if (!search.trim()) return employeeRoster;
-        const q = search.toLowerCase();
-        return employeeRoster.filter(e => e.name.toLowerCase().includes(q));
-    }, [employeeRoster, search]);
+        const q = search.trim().toLowerCase();
+        const matches = q ? employeeRoster.filter(e => e.name.toLowerCase().includes(q)) : employeeRoster;
+        return [...matches].sort((a, b) => (busyOnDate[a.id] ? 1 : 0) - (busyOnDate[b.id] ? 1 : 0));
+    }, [employeeRoster, search, busyOnDate]);
 
     if (assignment) {
         return (
@@ -138,7 +139,7 @@ const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, a
                         Same person on all {allDates.length} dates
                     </label>
                 )}
-                <div className="max-h-24 overflow-y-auto space-y-0.5">
+                <div className="max-h-40 overflow-y-auto space-y-0.5">
                     {filteredRoster.map(emp => {
                         const busyAt = busyOnDate[emp.id];
                         return (
@@ -499,17 +500,30 @@ function buildStaffList(officials, manualRoster) {
 
 // ── Master staff list ──
 
-const StaffMasterList = ({ staffList, onAddManual, onRenameManual, onRemoveManual, onSave, isSaving, hasUnsaved }) => {
+const StaffMasterList = ({ staffList, assignments = [], onAddManual, onRenameManual, onRemoveManual, onSave, isSaving, hasUnsaved }) => {
     const [search, setSearch] = useState('');
     const [newName, setNewName] = useState('');
 
+    // How many days each person is booked, so unbooked people can be seen at a glance.
+    const bookedDays = useMemo(() => {
+        const days = {};
+        for (const a of assignments) {
+            if (!days[a.employeeId]) days[a.employeeId] = new Set();
+            days[a.employeeId].add(a.date);
+        }
+        const counts = {};
+        for (const [id, set] of Object.entries(days)) counts[id] = set.size;
+        return counts;
+    }, [assignments]);
+
     const visible = useMemo(() => {
         const q = search.trim().toLowerCase();
-        if (!q) return staffList;
-        return staffList.filter(p =>
+        const matches = !q ? staffList : staffList.filter(p =>
             [p.name, p.roleName, p.cards, p.email, p.phone].some(v => (v || '').toLowerCase().includes(q))
         );
-    }, [staffList, search]);
+        // Unbooked people stay at the top; booked people move down.
+        return [...matches].sort((a, b) => (bookedDays[a.id] ? 1 : 0) - (bookedDays[b.id] ? 1 : 0));
+    }, [staffList, search, bookedDays]);
 
     const handleAdd = () => {
         const name = newName.trim();
@@ -580,6 +594,7 @@ const StaffMasterList = ({ staffList, onAddManual, onRenameManual, onRemoveManua
                                     <th className="text-left px-3 py-2 font-medium text-xs uppercase">Email</th>
                                     <th className="text-left px-3 py-2 font-medium text-xs uppercase">Phone</th>
                                     <th className="text-left px-3 py-2 font-medium text-xs uppercase">Contract</th>
+                                    <th className="text-left px-3 py-2 font-medium text-xs uppercase">Booked</th>
                                     <th className="px-3 py-2 w-8" />
                                 </tr>
                             </thead>
@@ -604,6 +619,11 @@ const StaffMasterList = ({ staffList, onAddManual, onRenameManual, onRemoveManua
                                         <td className="px-3 py-2 text-muted-foreground">{p.email || '—'}</td>
                                         <td className="px-3 py-2 text-muted-foreground">{p.phone || '—'}</td>
                                         <td className="px-3 py-2 text-muted-foreground">—</td>
+                                        <td className="px-3 py-2">
+                                            {bookedDays[p.id]
+                                                ? <Badge variant="secondary" className="text-[10px]">{bookedDays[p.id]} day{bookedDays[p.id] !== 1 ? 's' : ''}</Badge>
+                                                : <span className="text-xs text-emerald-600">Free</span>}
+                                        </td>
                                         <td className="px-3 py-2">
                                             {p.source === 'manual' && (
                                                 <button
@@ -1073,6 +1093,7 @@ const EmployeeSchedulingPage = () => {
                                 <div className="space-y-6">
                                     <StaffMasterList
                                         staffList={staffList}
+                                        assignments={assignments}
                                         onAddManual={addManual}
                                         onRenameManual={renameManual}
                                         onRemoveManual={removeManual}
