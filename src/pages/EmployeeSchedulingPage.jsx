@@ -13,7 +13,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
     ArrowLeft, Loader2, Users, Calendar, ChevronRight, ChevronDown, ChevronUp, FolderOpen,
     Hash, MapPin, Building2, Check, UserPlus, AlertCircle, Search,
-    X, Save,
+    X, Save, Lock, Unlock,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -89,7 +89,7 @@ const ShowPicker = ({ shows, onSelect }) => {
 
 // ── Assignment Cell ──
 
-const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, allDates = [], onAssign, onRemove, employeeRoster, busyOnDate = {} }) => {
+const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, allDates = [], onAssign, onRemove, employeeRoster, busyOnDate = {}, locked = false }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [search, setSearch] = useState('');
     const [applyAll, setApplyAll] = useState(false);
@@ -106,13 +106,24 @@ const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, a
             <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-primary/10 border border-primary/20 text-xs group">
                 <Users className="h-3 w-3 text-primary flex-shrink-0" />
                 <span className="font-medium truncate flex-1">{assignment.employeeName}</span>
-                <button
-                    type="button"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => onRemove(assignment.id)}
-                >
-                    <X className="h-3 w-3 text-destructive" />
-                </button>
+                {!locked && (
+                    <button
+                        type="button"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => onRemove(assignment.id)}
+                    >
+                        <X className="h-3 w-3 text-destructive" />
+                    </button>
+                )}
+            </div>
+        );
+    }
+
+    if (locked) {
+        return (
+            <div className="w-full flex items-center gap-1 px-2 py-1.5 rounded-md border border-dashed border-muted-foreground/20 text-xs text-muted-foreground/60 cursor-not-allowed">
+                <Lock className="h-3 w-3" />
+                <span>Locked</span>
             </div>
         );
     }
@@ -194,10 +205,27 @@ const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, a
     );
 };
 
+// ── Lock button shown in an arena's header ──
+
+const LockToggle = ({ locked, onToggle }) => (
+    <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
+        title={locked ? 'Locked — click to unlock' : 'Lock this schedule so it cannot be changed by accident'}
+        className={cn(
+            'h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-accent',
+            locked ? 'text-amber-500' : 'text-muted-foreground hover:text-primary'
+        )}
+    >
+        {locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+    </button>
+);
+
 // ── Scheduling Grid for one Arena ──
 
-const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onRemove, employeeRoster, busyByDate }) => {
-    const [open, setOpen] = useState(true);
+const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onRemove, employeeRoster, busyByDate, locked = false, onToggleLock }) => {
+    // Starts folded: the header already shows "N positions x D days · X of Y filled".
+    const [open, setOpen] = useState(false);
     const positions = arena.staffPositions || [];
     // An arena that has its own dates is only scheduled on those; otherwise the show's dates.
     const dates = (arena.dates || []).length > 0 ? [...arena.dates].sort() : showDates;
@@ -228,7 +256,10 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                             {positions.filter(p => dates.some(d => qtyForDate(p, d) > 0)).length} positions x {dates.length} day{dates.length !== 1 ? 's' : ''} · {filled} of {totalSlots} filled
                         </CardDescription>
                     </div>
-                    {open ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                    <div className="flex items-center gap-2">
+                        <LockToggle locked={locked} onToggle={onToggleLock} />
+                        {open ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                    </div>
                 </div>
             </CardHeader>
             {open && <CardContent>
@@ -281,6 +312,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                                         assignment={assignment}
                                                         position={pos}
                                                         arenaId={arena.id}
+                                                        locked={locked}
                                                         dateStr={dateStr}
                                                         slotIdx={slotIdx}
                                                         allDates={dates}
@@ -305,8 +337,8 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
 
 // ── Shared Staff Schedule ──
 
-const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, employeeRoster, busyByDate }) => {
-    const [open, setOpen] = useState(true);
+const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, employeeRoster, busyByDate, locked = false, onToggleLock }) => {
+    const [open, setOpen] = useState(false);
     if (!sharedStaff || sharedStaff.length === 0) return null;
 
     const totalSlots = slotsForDates(sharedStaff, dates);
@@ -325,7 +357,10 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                             Staff not tied to a specific arena · {filled} of {totalSlots} filled
                         </CardDescription>
                     </div>
-                    {open ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                    <div className="flex items-center gap-2">
+                        <LockToggle locked={locked} onToggle={onToggleLock} />
+                        {open ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                    </div>
                 </div>
             </CardHeader>
             {open && <CardContent>
@@ -376,6 +411,7 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                                                         assignment={assignment}
                                                         position={pos}
                                                         arenaId="__shared__"
+                                                        locked={locked}
                                                         dateStr={dateStr}
                                                         slotIdx={slotIdx}
                                                         allDates={dates}
@@ -729,7 +765,7 @@ const ScheduleReport = ({ assignments, arenas }) => {
 
 // ── Main Scheduling Dashboard ──
 
-const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, setAssignments, onSave, isSaving }) => {
+const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, setAssignments, onSave, isSaving, lockedArenas = {}, onToggleLock }) => {
     const pd = show.project_data || {};
     const arenas = pd.arenas || [];
     const sharedStaff = pd.sharedStaff || [];
@@ -883,6 +919,8 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                         <ArenaScheduleGrid
                             key={arena.id}
                             arena={arena}
+                            locked={!!lockedArenas[arena.id]}
+                            onToggleLock={() => onToggleLock?.(arena.id)}
                             dates={dates}
                             assignments={assignments}
                             onAssign={addAssignment}
@@ -893,6 +931,8 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                     ))}
 
                     <SharedStaffGrid
+                        locked={!!lockedArenas.__shared__}
+                        onToggleLock={() => onToggleLock?.('__shared__')}
                         sharedStaff={sharedStaff}
                         dates={dates}
                         assignments={assignments}
@@ -969,6 +1009,7 @@ const EmployeeSchedulingPage = () => {
     // when the show has no arenas yet.
     const [assignments, setAssignments] = useState([]);
     const [roster, setRoster] = useState([]); // names typed by hand
+    const [lockedArenas, setLockedArenas] = useState({}); // arenaId (or '__shared__') → true
     const [liveOfficials, setLiveOfficials] = useState(null);
     const savedScheduleJsonRef = useRef('');
 
@@ -976,10 +1017,12 @@ const EmployeeSchedulingPage = () => {
         const sched = selectedShow?.project_data?.staffSchedule;
         const a = sched?.assignments || [];
         const r = sched?.roster || [];
+        const l = sched?.lockedArenas || {};
         setAssignments(a);
         setRoster(r);
+        setLockedArenas(l);
         setLiveOfficials(null);
-        savedScheduleJsonRef.current = JSON.stringify({ a, r });
+        savedScheduleJsonRef.current = JSON.stringify({ a, r, l });
         // Only when a different show is picked: a save must not reset what is on screen.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedShow?.id]);
@@ -988,7 +1031,45 @@ const EmployeeSchedulingPage = () => {
         () => buildStaffList(liveOfficials ?? selectedShow?.project_data?.showDetails?.officials, roster),
         [liveOfficials, selectedShow, roster]
     );
-    const hasUnsavedSchedule = JSON.stringify({ a: assignments, r: roster }) !== savedScheduleJsonRef.current;
+    const hasUnsavedSchedule = JSON.stringify({ a: assignments, r: roster, l: lockedArenas }) !== savedScheduleJsonRef.current;
+    // A lock is saved the moment it is clicked (it must survive a refresh). Only the lock
+    // is written: assignments you have not saved yet are left as they are.
+    const toggleArenaLock = async (arenaId) => {
+        if (!selectedShow || isReadOnly) return;
+        const previous = lockedArenas;
+        const next = { ...previous };
+        if (next[arenaId]) delete next[arenaId]; else next[arenaId] = true;
+        setLockedArenas(next);
+        try {
+            const { data: latestRow, error: readError } = await supabase
+                .from('projects')
+                .select('project_data')
+                .eq('id', selectedShow.id)
+                .maybeSingle();
+            if (readError) throw readError;
+            const latest = latestRow?.project_data || selectedShow.project_data || {};
+            const updatedData = {
+                ...latest,
+                staffSchedule: { ...(latest.staffSchedule || {}), lockedArenas: next },
+            };
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            // The lock is now saved, so it no longer counts as an unsaved change.
+            try {
+                const ref = JSON.parse(savedScheduleJsonRef.current || '{}');
+                savedScheduleJsonRef.current = JSON.stringify({ ...ref, l: next });
+            } catch { /* keep the old reference */ }
+            setSelectedShow(prev => (prev ? { ...prev, project_data: updatedData } : prev));
+            setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
+            toast({ title: next[arenaId] ? 'Locked' : 'Unlocked', description: next[arenaId] ? 'This schedule can no longer be changed until you unlock it.' : 'This schedule can be edited again.' });
+        } catch (error) {
+            setLockedArenas(previous);
+            toast({ title: 'Could not save the lock', description: error.message, variant: 'destructive' });
+        }
+    };
 
     const addManual = (emp) => setRoster(prev => [...prev, emp]);
     const renameManual = (id, name) => setRoster(prev => prev.map(e => e.id === id ? { ...e, name } : e));
@@ -1011,14 +1092,15 @@ const EmployeeSchedulingPage = () => {
                 .maybeSingle();
             const updatedData = stampModuleStatusOnSave({
                 ...(latestRow?.project_data || selectedShow.project_data),
-                staffSchedule: { assignments, roster },
+                staffSchedule: { assignments, roster, lockedArenas },
             }, 'employeeScheduling');
             const { error } = await supabase
                 .from('projects')
                 .update({ project_data: updatedData })
                 .eq('id', selectedShow.id);
             if (error) throw error;
-            savedScheduleJsonRef.current = JSON.stringify({ a: assignments, r: roster });
+            savedScheduleJsonRef.current = JSON.stringify({ a: assignments, r: roster, l: lockedArenas });
+            // keep the saved copy in step so reselecting the show shows the same lock
             setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
             setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
             toast({ title: 'Schedule Saved', description: 'Staff assignments have been saved successfully.' });
@@ -1103,6 +1185,8 @@ const EmployeeSchedulingPage = () => {
                                     />
                                     <SchedulingDashboard
                                         show={selectedShow}
+                                        lockedArenas={lockedArenas}
+                                        onToggleLock={toggleArenaLock}
                                         staffList={staffList}
                                         assignments={assignments}
                                         setAssignments={setAssignments}

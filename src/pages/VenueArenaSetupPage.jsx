@@ -15,7 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
     ArrowLeft, Loader2, Building2, Plus, Trash2, Hash, Calendar,
     ChevronRight, FolderOpen, Users, MapPin, ChevronDown, ChevronUp,
-    Wand2, Check, X, GripVertical,
+    Wand2, Check, X, GripVertical, Lock, Unlock,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -201,7 +201,20 @@ const StaffPositionRow = ({ position, onUpdate, onRemove, date = null, dates = [
 
 // ── Arena Card ──
 
-const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] }) => {
+const SetupLockToggle = ({ locked, onToggle }) => (
+    <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={cn('h-7 w-7', locked ? 'text-amber-500' : 'text-muted-foreground hover:text-primary')}
+        onClick={onToggle}
+        title={locked ? 'Locked — click to unlock' : 'Lock so this cannot be changed by accident'}
+    >
+        {locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+    </Button>
+);
+
+const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [], locked = false, onToggleLock }) => {
     // Cards start closed so a long list of arenas stays easy to scan.
     const [expanded, setExpanded] = useState(false);
     const [selectedDay, setSelectedDay] = useState(null);
@@ -237,6 +250,7 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] })
                     <div className="flex items-center gap-3 flex-1">
                         <Input
                             value={arena.name}
+                            disabled={locked}
                             onChange={(e) => onUpdate('name', e.target.value)}
                             className="h-8 text-base font-semibold border-none shadow-none px-0 focus-visible:ring-0 max-w-xs"
                             placeholder="Arena name..."
@@ -246,10 +260,11 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] })
                         </Badge>
                     </div>
                     <div className="flex items-center gap-1">
+                        <SetupLockToggle locked={locked} onToggle={onToggleLock} />
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
                             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
+                        <Button variant="ghost" size="icon" disabled={locked} className="h-7 w-7 text-destructive hover:bg-destructive/10" onClick={onRemove}>
                             <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                     </div>
@@ -268,6 +283,11 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] })
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Staff Positions</p>
                     </div>
                     <DaySelector dates={arenaDays} value={day} onChange={setSelectedDay} />
+                    {locked && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1"><Lock className="h-3 w-3" /> Locked. Unlock this arena to change its staff.</p>
+                    )}
+                    {/* A disabled fieldset turns off every input, checkbox and button inside it. */}
+                    <fieldset disabled={locked} className={cn('space-y-2 min-w-0 border-0 p-0 m-0', locked && 'opacity-70')}>
                     <div className="space-y-1.5">
                         {staffPositions.map(pos => (
                             <StaffPositionRow
@@ -301,6 +321,7 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] })
                             </SelectContent>
                         </Select>
                     )}
+                    </fieldset>
                 </CardContent>
             )}
         </Card>
@@ -309,7 +330,7 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] })
 
 // ── Venue & Arena Setup Dashboard ──
 
-const VenueArenaSetup = ({ show, onSave, isSaving }) => {
+const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
 
@@ -325,6 +346,32 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
     const [sharedStaff, setSharedStaff] = useState(() => {
         return pd.sharedStaff || SHARED_STAFF.map(s => ({ ...s, id: uuidv4() }));
     });
+
+    const [sharedLocked, setSharedLocked] = useState(!!pd.sharedStaffLocked);
+
+    // A lock is saved the moment it is clicked, so it survives a refresh.
+    const toggleArenaLock = async (arenaId) => {
+        const previousArenas = arenas;
+        const nextArenas = arenas.map(a => a.id === arenaId ? { ...a, locked: !a.locked } : a);
+        setArenas(nextArenas);
+        const ok = await onPersistLocks?.({
+            arenaLocks: Object.fromEntries(nextArenas.map(a => [a.id, !!a.locked])),
+            sharedLocked,
+            changed: nextArenas.find(a => a.id === arenaId)?.locked ? 'Locked' : 'Unlocked',
+        });
+        if (ok === false) setArenas(previousArenas);
+    };
+
+    const toggleSharedLock = async () => {
+        const next = !sharedLocked;
+        setSharedLocked(next);
+        const ok = await onPersistLocks?.({
+            arenaLocks: Object.fromEntries(arenas.map(a => [a.id, !!a.locked])),
+            sharedLocked: next,
+            changed: next ? 'Locked' : 'Unlocked',
+        });
+        if (ok === false) setSharedLocked(!next);
+    };
 
     const addArena = () => {
         const newArena = {
@@ -345,11 +392,12 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
     };
 
     const autoGenerateStaff = () => {
-        setArenas(prev => prev.map(a => ({
+        // Locked arenas and locked shared staff are left exactly as they are.
+        setArenas(prev => prev.map(a => (a.locked ? a : {
             ...a,
             staffPositions: DEFAULT_ARENA_STAFF.map(s => ({ ...s, id: uuidv4() })),
         })));
-        setSharedStaff(SHARED_STAFF.map(s => ({ ...s, id: uuidv4() })));
+        if (!sharedLocked) setSharedStaff(SHARED_STAFF.map(s => ({ ...s, id: uuidv4() })));
         toast({ title: 'Staff auto-generated', description: `Default positions applied to ${arenas.length} arena(s).` });
     };
 
@@ -396,7 +444,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
     }, [arenas, sharedStaff, showDates]);
 
     const handleSave = () => {
-        onSave({ venueName, venueAddress, arenas, sharedStaff });
+        onSave({ venueName, venueAddress, arenas, sharedStaff, sharedStaffLocked: sharedLocked });
     };
 
     return (
@@ -473,6 +521,8 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
                             key={arena.id}
                             arena={arena}
                             showDates={showDates}
+                            locked={!!arena.locked}
+                            onToggleLock={() => toggleArenaLock(arena.id)}
                             onUpdate={(field, value) => updateArena(arena.id, field, value)}
                             onRemove={() => removeArena(arena.id)}
                             onUpdateStaff={(positions) => updateArena(arena.id, 'staffPositions', positions)}
@@ -484,11 +534,20 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
             {/* Shared Staff */}
             <Card>
                 <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4 text-emerald-600" /> Shared / Show-Level Staff</CardTitle>
-                    <CardDescription className="text-xs">Staff not assigned to a specific arena (management, office, photography, etc.)</CardDescription>
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4 text-emerald-600" /> Shared / Show-Level Staff</CardTitle>
+                            <CardDescription className="text-xs">Staff not assigned to a specific arena (management, office, photography, etc.)</CardDescription>
+                        </div>
+                        <SetupLockToggle locked={sharedLocked} onToggle={toggleSharedLock} />
+                    </div>
                 </CardHeader>
                 <CardContent className="space-y-1.5">
                     <DaySelector dates={showDates} value={sharedDaySafe} onChange={setSharedDay} />
+                    {sharedLocked && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1"><Lock className="h-3 w-3" /> Locked. Unlock to change shared staff.</p>
+                    )}
+                    <fieldset disabled={sharedLocked} className={cn('space-y-1.5 min-w-0 border-0 p-0 m-0', sharedLocked && 'opacity-70')}>
                     {sharedStaff.map(pos => (
                         <StaffPositionRow
                             key={pos.id}
@@ -515,6 +574,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
                             }
                         </SelectContent>
                     </Select>
+                    </fieldset>
                 </CardContent>
             </Card>
 
@@ -607,7 +667,39 @@ const VenueArenaSetupPage = () => {
 
     const isReadOnly = isWizardReadOnly(selectedShow?.project_data, 'employeeScheduling');
 
-    const handleSave = async ({ venueName, venueAddress, arenas, sharedStaff }) => {
+    // Saves only the lock flags, the moment a lock is clicked. Other unsaved edits on
+    // the page are not written. Returns false when it failed so the page can undo.
+    const persistLocks = async ({ arenaLocks, sharedLocked, changed }) => {
+        if (!selectedShow || isReadOnly) return false;
+        try {
+            const { data: latestRow, error: readError } = await supabase
+                .from('projects')
+                .select('project_data')
+                .eq('id', selectedShow.id)
+                .maybeSingle();
+            if (readError) throw readError;
+            const latest = latestRow?.project_data || selectedShow.project_data || {};
+            const updatedData = {
+                ...latest,
+                arenas: (latest.arenas || []).map(a => (
+                    a.id in arenaLocks ? { ...a, locked: !!arenaLocks[a.id] } : a
+                )),
+                sharedStaffLocked: !!sharedLocked,
+            };
+            const { error } = await supabase
+                .from('projects')
+                .update({ project_data: updatedData })
+                .eq('id', selectedShow.id);
+            if (error) throw error;
+            toast({ title: changed || 'Saved', description: changed === 'Locked' ? 'This cannot be changed until you unlock it.' : 'This can be edited again.' });
+            return true;
+        } catch (error) {
+            toast({ title: 'Could not save the lock', description: error.message, variant: 'destructive' });
+            return false;
+        }
+    };
+
+    const handleSave = async ({ venueName, venueAddress, arenas, sharedStaff, sharedStaffLocked }) => {
         if (!selectedShow || isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
@@ -617,6 +709,7 @@ const VenueArenaSetupPage = () => {
                 venueAddress,
                 arenas,
                 sharedStaff,
+                sharedStaffLocked,
             };
             const { error } = await supabase
                 .from('projects')
@@ -681,7 +774,7 @@ const VenueArenaSetupPage = () => {
                     {selectedShow && (
                         <div className="mt-6">
                             <ModuleLockGuard isLocked={isReadOnly} moduleName="Employee / Arena Scheduling">
-                                <VenueArenaSetup show={selectedShow} onSave={handleSave} isSaving={isSaving} />
+                                <VenueArenaSetup show={selectedShow} onSave={handleSave} isSaving={isSaving} onPersistLocks={persistLocks} />
                             </ModuleLockGuard>
                         </div>
                     )}

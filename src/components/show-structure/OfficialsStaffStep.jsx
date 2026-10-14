@@ -681,7 +681,8 @@ export const OfficialsStaffStep = ({
             )}
             {hideHeader && budgetFrozen && <div className="px-6 pt-4"><BudgetFrozenBanner /></div>}
             <CardContent className="space-y-6">
-                <Accordion type="multiple" defaultValue={Object.keys(associationRoles)} className="w-full space-y-4">
+                {/* Association groups start folded; the header still shows the group total. */}
+                <Accordion type="multiple" defaultValue={[]} className="w-full space-y-4">
                     {Object.keys(associationRoles).length === 0 && (
                         <div className="text-center text-muted-foreground p-8 border-2 border-dashed rounded-lg">
                             <Users className="mx-auto h-12 w-12 text-gray-400" />
