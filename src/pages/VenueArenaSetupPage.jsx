@@ -24,6 +24,63 @@ import { v4 as uuidv4 } from 'uuid';
 import { staffRoles, roleGroups } from '@/lib/staffingData';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { setupQtyForDate, withQtyForDate, hasDayOverrides, peakQty } from '@/lib/staffQty';
+
+// ── Day selector: "All days" edits the base Qty, a single day edits only that day ──
+
+const formatDay = (d) => {
+    try {
+        return new Date(`${d}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    } catch {
+        return d;
+    }
+};
+
+const DaySelector = ({ dates, value, onChange }) => {
+    if (!dates || dates.length === 0) return null;
+    return (
+        <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground mr-1">Needs for:</span>
+            <Button
+                type="button"
+                size="sm"
+                variant={value === null ? 'default' : 'outline'}
+                className="h-7 px-2.5 text-xs"
+                onClick={() => onChange(null)}
+            >
+                All days
+            </Button>
+            {dates.map((d) => (
+                <Button
+                    key={d}
+                    type="button"
+                    size="sm"
+                    variant={value === d ? 'default' : 'outline'}
+                    className="h-7 px-2.5 text-xs"
+                    onClick={() => onChange(d)}
+                >
+                    {formatDay(d)}
+                </Button>
+            ))}
+        </div>
+    );
+};
+
+// Every day from start to end (inclusive).
+const dayRange = (start, end) => {
+    if (!start) return [];
+    const out = [];
+    const cur = new Date(`${start}T00:00:00`);
+    const last = new Date(`${end || start}T00:00:00`);
+    if (Number.isNaN(cur.getTime()) || Number.isNaN(last.getTime())) return [];
+    let guard = 0;
+    while (cur <= last && guard++ < 60) {
+        // Local date parts: toISOString() shifts the day back in time zones ahead of UTC.
+        out.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`);
+        cur.setDate(cur.getDate() + 1);
+    }
+    return out;
+};
 
 // ── Default staff positions per arena ──
 
@@ -99,20 +156,31 @@ const ShowPicker = ({ shows, onSelect }) => {
 
 // ── Staff Position Row ──
 
-const StaffPositionRow = ({ position, onUpdate, onRemove }) => {
+// `date` = one day picked in the day selector; null = "All days" (the base Qty).
+const StaffPositionRow = ({ position, onUpdate, onRemove, date = null, dates = [] }) => {
     const role = staffRoles[position.roleId];
     const Icon = role?.icon || Users;
+    const qtyValue = date ? setupQtyForDate(position, date) : position.qty;
+    const isOverridden = date && position.qtyByDate?.[date] !== undefined;
+    const varies = !date && hasDayOverrides(position, dates);
+    const handleQty = (e) => {
+        const n = parseInt(e.target.value) || 0;
+        if (date) onUpdate('qtyByDate', withQtyForDate(position, date, n).qtyByDate);
+        else onUpdate('qty', n);
+    };
     return (
         <div className="flex items-center gap-3 py-2 px-3 rounded-md bg-background border">
             <Icon className="h-4 w-4 text-primary flex-shrink-0" />
             <span className="text-sm font-medium flex-1">{role?.name || position.roleId}</span>
+            {varies && <Badge variant="secondary" className="text-[10px]">Varies by day</Badge>}
+            {isOverridden && <Badge variant="outline" className="text-[10px] border-primary text-primary">This day only</Badge>}
             <div className="flex items-center gap-2">
                 <Label className="text-xs text-muted-foreground">Qty:</Label>
                 <Input
                     type="number"
                     min={0}
-                    value={position.qty}
-                    onChange={(e) => onUpdate('qty', parseInt(e.target.value) || 0)}
+                    value={qtyValue}
+                    onChange={handleQty}
                     className="h-7 w-14 text-xs text-center"
                 />
             </div>
@@ -133,11 +201,16 @@ const StaffPositionRow = ({ position, onUpdate, onRemove }) => {
 
 // ── Arena Card ──
 
-const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff }) => {
-    const [expanded, setExpanded] = useState(true);
+const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [] }) => {
+    // Cards start closed so a long list of arenas stays easy to scan.
+    const [expanded, setExpanded] = useState(false);
+    const [selectedDay, setSelectedDay] = useState(null);
     const staffPositions = arena.staffPositions || [];
-    const totalStaff = staffPositions.reduce((sum, p) => sum + (p.qty || 0), 0);
-    const requiredStaff = staffPositions.filter(p => p.required).reduce((sum, p) => sum + (p.qty || 0), 0);
+    // Same days the scheduling grid uses: the arena's own dates, else the show's.
+    const arenaDays = (arena.dates || []).length > 0 ? [...arena.dates].sort() : showDates;
+    const day = selectedDay && arenaDays.includes(selectedDay) ? selectedDay : null;
+    const totalStaff = staffPositions.reduce((sum, p) => sum + peakQty(p, arenaDays), 0);
+    const requiredStaff = staffPositions.filter(p => p.required).reduce((sum, p) => sum + peakQty(p, arenaDays), 0);
 
     const addStaffPosition = (roleId) => {
         if (staffPositions.find(p => p.roleId === roleId)) return;
@@ -194,11 +267,14 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff }) => {
                     <div className="flex items-center justify-between">
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Staff Positions</p>
                     </div>
+                    <DaySelector dates={arenaDays} value={day} onChange={setSelectedDay} />
                     <div className="space-y-1.5">
                         {staffPositions.map(pos => (
                             <StaffPositionRow
                                 key={pos.id}
                                 position={pos}
+                                date={day}
+                                dates={arenaDays}
                                 onUpdate={(field, value) => updatePosition(pos.id, field, value)}
                                 onRemove={() => removePosition(pos.id)}
                             />
@@ -277,30 +353,47 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
         toast({ title: 'Staff auto-generated', description: `Default positions applied to ${arenas.length} arena(s).` });
     };
 
-    // Total staff summary
+    // The days the scheduling grid uses: any arena dates, else the show's start–end range,
+    // else the show bill's days.
+    const showDates = useMemo(() => {
+        const fromArenas = new Set();
+        for (const a of arenas) for (const d of (a.dates || [])) fromArenas.add(d);
+        if (fromArenas.size > 0) return [...fromArenas].sort();
+        const range = dayRange(pd.startDate, pd.endDate);
+        if (range.length > 0) return range;
+        return (pd.showBill?.days || []).map(d => d.date).filter(Boolean).sort();
+    }, [arenas, pd.startDate, pd.endDate, pd.showBill]);
+    const arenaDaysOf = (a) => ((a.dates || []).length > 0 ? [...a.dates].sort() : showDates);
+    const [sharedDay, setSharedDay] = useState(null);
+    const sharedDaySafe = sharedDay && showDates.includes(sharedDay) ? sharedDay : null;
+
+    // Total staff summary — the most people needed on any single day
     const totalArenaStaff = arenas.reduce((sum, a) =>
-        sum + (a.staffPositions || []).reduce((s, p) => s + (p.qty || 0), 0), 0
+        sum + (a.staffPositions || []).reduce((s, p) => s + peakQty(p, arenaDaysOf(a)), 0), 0
     );
-    const totalSharedStaff = sharedStaff.reduce((sum, p) => sum + (p.qty || 0), 0);
+    const totalSharedStaff = sharedStaff.reduce((sum, p) => sum + peakQty(p, showDates), 0);
     const totalStaff = totalArenaStaff + totalSharedStaff;
 
     // Staff summary table
     const staffSummary = useMemo(() => {
         const map = {};
+        const daysOf = (a) => ((a.dates || []).length > 0 ? [...a.dates].sort() : showDates);
         for (const arena of arenas) {
             for (const pos of (arena.staffPositions || [])) {
+                const n = peakQty(pos, daysOf(arena));
                 if (!map[pos.roleId]) map[pos.roleId] = { role: staffRoles[pos.roleId]?.name || pos.roleId, arenas: {}, shared: 0, total: 0 };
-                map[pos.roleId].arenas[arena.name] = (map[pos.roleId].arenas[arena.name] || 0) + (pos.qty || 0);
-                map[pos.roleId].total += (pos.qty || 0);
+                map[pos.roleId].arenas[arena.name] = (map[pos.roleId].arenas[arena.name] || 0) + n;
+                map[pos.roleId].total += n;
             }
         }
         for (const pos of sharedStaff) {
+            const n = peakQty(pos, showDates);
             if (!map[pos.roleId]) map[pos.roleId] = { role: staffRoles[pos.roleId]?.name || pos.roleId, arenas: {}, shared: 0, total: 0 };
-            map[pos.roleId].shared += (pos.qty || 0);
-            map[pos.roleId].total += (pos.qty || 0);
+            map[pos.roleId].shared += n;
+            map[pos.roleId].total += n;
         }
         return Object.values(map).sort((a, b) => b.total - a.total);
-    }, [arenas, sharedStaff]);
+    }, [arenas, sharedStaff, showDates]);
 
     const handleSave = () => {
         onSave({ venueName, venueAddress, arenas, sharedStaff });
@@ -379,6 +472,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
                         <ArenaCard
                             key={arena.id}
                             arena={arena}
+                            showDates={showDates}
                             onUpdate={(field, value) => updateArena(arena.id, field, value)}
                             onRemove={() => removeArena(arena.id)}
                             onUpdateStaff={(positions) => updateArena(arena.id, 'staffPositions', positions)}
@@ -394,10 +488,13 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
                     <CardDescription className="text-xs">Staff not assigned to a specific arena (management, office, photography, etc.)</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-1.5">
+                    <DaySelector dates={showDates} value={sharedDaySafe} onChange={setSharedDay} />
                     {sharedStaff.map(pos => (
                         <StaffPositionRow
                             key={pos.id}
                             position={pos}
+                            date={sharedDaySafe}
+                            dates={showDates}
                             onUpdate={(field, value) => setSharedStaff(prev => prev.map(p => p.id === pos.id ? { ...p, [field]: value } : p))}
                             onRemove={() => setSharedStaff(prev => prev.filter(p => p.id !== pos.id))}
                         />
@@ -459,7 +556,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving }) => {
                                     <tr className="bg-muted/30 font-semibold">
                                         <td className="px-3 py-2">Total</td>
                                         {arenas.map(a => {
-                                            const arenaTotal = (a.staffPositions || []).reduce((s, p) => s + (p.qty || 0), 0);
+                                            const arenaTotal = (a.staffPositions || []).reduce((s, p) => s + peakQty(p, arenaDaysOf(a)), 0);
                                             return <td key={a.id} className="px-3 py-2 text-center">{arenaTotal}</td>;
                                         })}
                                         <td className="px-3 py-2 text-center">{totalSharedStaff}</td>

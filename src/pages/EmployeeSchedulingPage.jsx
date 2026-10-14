@@ -22,6 +22,7 @@ import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusSer
 import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { staffRoles } from '@/lib/staffingData';
+import { qtyForDate, totalSlots as slotsForDates, filledSlots as filledForDates } from '@/lib/staffQty';
 import { flattenPersonnel } from '@/lib/contractUtils';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -210,8 +211,8 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
         );
     }
 
-    const totalSlots = positions.reduce((s, p) => s + (p.qty || 1), 0) * dates.length;
-    const filled = assignments.filter(a => a.arenaId === arena.id).length;
+    const totalSlots = slotsForDates(positions, dates);
+    const filled = filledForDates(positions, arena.id, dates, assignments);
 
     return (
         <Card>
@@ -223,7 +224,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                             {arena.name}
                         </CardTitle>
                         <CardDescription className="text-xs">
-                            {positions.length} positions x {dates.length} day{dates.length !== 1 ? 's' : ''} · {filled} of {totalSlots} filled
+                            {positions.filter(p => dates.some(d => qtyForDate(p, d) > 0)).length} positions x {dates.length} day{dates.length !== 1 ? 's' : ''} · {filled} of {totalSlots} filled
                         </CardDescription>
                     </div>
                     {open ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
@@ -249,7 +250,8 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                             {positions.map(pos => {
                                 const role = staffRoles[pos.roleId];
                                 const Icon = role?.icon || Users;
-                                const qty = pos.qty || 1;
+                                // Rows = the busiest day's need; quieter days show "—" in the extra rows.
+                                const qty = Math.max(0, ...dates.map(d => qtyForDate(pos, d)));
                                 return Array.from({ length: qty }, (_, slotIdx) => (
                                     <tr key={`${pos.id}-${slotIdx}`} className="border-b last:border-0">
                                         <td className="px-3 py-2">
@@ -263,6 +265,11 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                             </div>
                                         </td>
                                         {dates.map(dateStr => {
+                                            if (slotIdx >= qtyForDate(pos, dateStr)) {
+                                                return (
+                                                    <td key={dateStr} className="px-2 py-1.5 text-center text-muted-foreground/50 bg-muted/20" title="Not needed this day">—</td>
+                                                );
+                                            }
                                             const slotAssignments = assignments.filter(
                                                 a => a.arenaId === arena.id && a.date === dateStr && a.positionId === pos.id
                                             );
@@ -301,8 +308,8 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
     const [open, setOpen] = useState(true);
     if (!sharedStaff || sharedStaff.length === 0) return null;
 
-    const totalSlots = sharedStaff.reduce((s, p) => s + (p.qty || 1), 0) * dates.length;
-    const filled = assignments.filter(a => a.arenaId === '__shared__').length;
+    const totalSlots = slotsForDates(sharedStaff, dates);
+    const filled = filledForDates(sharedStaff, '__shared__', dates, assignments);
 
     return (
         <Card>
@@ -340,7 +347,7 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                             {sharedStaff.map(pos => {
                                 const role = staffRoles[pos.roleId];
                                 const Icon = role?.icon || Users;
-                                const qty = pos.qty || 1;
+                                const qty = Math.max(0, ...dates.map(d => qtyForDate(pos, d)));
                                 return Array.from({ length: qty }, (_, slotIdx) => (
                                     <tr key={`${pos.id}-${slotIdx}`} className="border-b last:border-0">
                                         <td className="px-3 py-2">
@@ -353,6 +360,11 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                                             </div>
                                         </td>
                                         {dates.map(dateStr => {
+                                            if (slotIdx >= qtyForDate(pos, dateStr)) {
+                                                return (
+                                                    <td key={dateStr} className="px-2 py-1.5 text-center text-muted-foreground/50 bg-muted/20" title="Not needed this day">—</td>
+                                                );
+                                            }
                                             const slotAssignments = assignments.filter(
                                                 a => a.arenaId === '__shared__' && a.date === dateStr && a.positionId === pos.id
                                             );
@@ -414,7 +426,8 @@ function getShowDates(pd) {
         const end = pd.endDate ? new Date(pd.endDate + 'T00:00:00') : start;
         const current = new Date(start);
         while (current <= end) {
-            dates.push(current.toISOString().split('T')[0]);
+            // Local date parts: toISOString() shifts the day back in time zones ahead of UTC.
+            dates.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`);
             current.setDate(current.getDate() + 1);
         }
         return dates;
@@ -762,21 +775,26 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
     };
 
     // Stats
+    const arenaDatesOf = (arena) => ((arena.dates || []).length > 0 ? arena.dates : dates);
     const totalSlots = useMemo(() => {
         let count = 0;
         for (const arena of arenas) {
-            const arenaDayCount = (arena.dates || []).length || dates.length;
-            for (const pos of (arena.staffPositions || [])) {
-                count += (pos.qty || 1) * arenaDayCount;
-            }
+            count += slotsForDates(arena.staffPositions || [], arenaDatesOf(arena));
         }
-        for (const pos of sharedStaff) {
-            count += (pos.qty || 1) * dates.length;
-        }
+        count += slotsForDates(sharedStaff, dates);
         return count;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [arenas, sharedStaff, dates]);
 
-    const filledSlots = assignments.length;
+    const filledSlots = useMemo(() => {
+        let count = 0;
+        for (const arena of arenas) {
+            count += filledForDates(arena.staffPositions || [], arena.id, arenaDatesOf(arena), assignments);
+        }
+        count += filledForDates(sharedStaff, '__shared__', dates, assignments);
+        return count;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [arenas, sharedStaff, dates, assignments]);
     const fillRate = totalSlots > 0 ? Math.round((filledSlots / totalSlots) * 100) : 0;
 
     if (arenas.length === 0) {

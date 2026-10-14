@@ -205,6 +205,20 @@ const TravelManagementPage = () => {
   // Travel is ready to edit once there is a show (show mode) or a contract project.
   const hasSource = showId ? !!showProject : !!selectedProjectId;
 
+  // Each travel tab lists only the people whose box for that need is checked in
+  // Officials & Staff. Anyone who already has details saved for that need stays listed
+  // so nothing already entered disappears.
+  const forNeed = (expenseId, travelKey) =>
+    personnel.filter((m) => {
+      if (m.reimbursable_expenses?.[expenseId]?.reimbursed) return true;
+      const saved = travelData[m.id]?.[travelKey];
+      return !!saved && Object.values(saved).some((v) => v !== '' && v != null && v !== 0);
+    });
+  const noNeedMessage = (label) =>
+    personnel.length === 0
+      ? undefined
+      : `Nobody has ${label} checked in Officials & Staff. Check the box for a person there and they will appear here.`;
+
   return (
     <>
       <Helmet>
@@ -343,7 +357,8 @@ const TravelManagementPage = () => {
 
                 <TabsContent value="flights">
                   <FlightsTab
-                    personnel={personnel}
+                    personnel={forNeed('airfare', 'flight')}
+                    emptyMessage={noNeedMessage('Airfare')}
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
@@ -352,7 +367,8 @@ const TravelManagementPage = () => {
 
                 <TabsContent value="hotels">
                   <HotelsTab
-                    personnel={personnel}
+                    personnel={forNeed('hotel', 'hotel')}
+                    emptyMessage={noNeedMessage('Hotel')}
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
@@ -361,7 +377,8 @@ const TravelManagementPage = () => {
 
                 <TabsContent value="rental-cars">
                   <RentalCarsTab
-                    personnel={personnel}
+                    personnel={forNeed('rentalCar', 'rentalCar')}
+                    emptyMessage={noNeedMessage('Rental Car')}
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
@@ -370,7 +387,8 @@ const TravelManagementPage = () => {
 
                 <TabsContent value="mileage">
                   <MileageTab
-                    personnel={personnel}
+                    personnel={forNeed('mileage', 'mileage')}
+                    emptyMessage={noNeedMessage('Mileage')}
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}

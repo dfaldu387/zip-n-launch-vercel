@@ -28,16 +28,16 @@ const EmployeeArenaSchedulingManagerPage = () => {
     const suffix = showId ? `/${showId}` : '';
     const features = [
         {
-            name: "Employee Management",
-            icon: Users,
-            description: "Manage all staff, roles, and certifications.",
-            link: `/horse-show-manager/employee-scheduling/assign${suffix}`,
-        },
-        {
             name: "Venue & Arena Setup",
             icon: Building,
             description: "Configure show venues and specific arenas.",
             link: `/horse-show-manager/venue-arena-setup${suffix}`,
+        },
+        {
+            name: "Employee Management",
+            icon: Users,
+            description: "Manage all staff, roles, and certifications.",
+            link: `/horse-show-manager/employee-scheduling/assign${suffix}`,
         },
         {
             name: "Travel Management",

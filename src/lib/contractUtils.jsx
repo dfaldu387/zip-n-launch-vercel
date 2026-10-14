@@ -128,6 +128,48 @@ export function mapOfficialsFromProject(pd) {
   return result;
 }
 
+/**
+ * Bring the contract's staff in line with the show's Officials & Staff list — the same
+ * list Show Structure and the Budgeting tool edit. For each person on the show, the
+ * day fee, dates, overtime and every reimbursable expense are copied over the
+ * contract's copy (the show is the source of truth). People new on the show are added.
+ * People who exist only on the contract are left alone, and so are fields only the
+ * contract owns. A person is matched by their show id, then by role + name.
+ * Returns the contract's officials object unchanged when the show has no staff.
+ */
+export function syncOfficialsFromShow(contractOfficials, showProjectData) {
+  const showOfficials = showProjectData?.showDetails?.officials || {};
+  const out = {};
+  for (const [assocId, roles] of Object.entries(contractOfficials || {})) {
+    out[assocId] = {};
+    for (const [roleId, members] of Object.entries(roles || {})) out[assocId][roleId] = [...(members || [])];
+  }
+
+  const nameKey = (n) => (n || '').trim().toLowerCase();
+
+  for (const [assocId, roles] of Object.entries(showOfficials)) {
+    for (const [roleId, showMembers] of Object.entries(roles || {})) {
+      for (const sm of (Array.isArray(showMembers) ? showMembers : [])) {
+        if (!nameKey(sm?.name)) continue;
+        if (!out[assocId]) out[assocId] = {};
+        if (!out[assocId][roleId]) out[assocId][roleId] = [];
+        const list = out[assocId][roleId];
+
+        let idx = list.findIndex((m) => m.source_id && m.source_id === sm.id);
+        if (idx < 0) idx = list.findIndex((m) => m.id === sm.id);
+        if (idx < 0) idx = list.findIndex((m) => !m.source_id && nameKey(m.name) === nameKey(sm.name));
+
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...sm, id: list[idx].id, source_id: sm.id };
+        } else {
+          list.push({ ...sm, source_id: sm.id });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 export function applyLinkedProjectData(prev, project) {
   const pd = project.project_data || {};
   const mappedOfficials = mapOfficialsFromProject(pd);
@@ -139,6 +181,9 @@ export function applyLinkedProjectData(prev, project) {
       roleId => (existingOfficials[assocId][roleId] || []).length > 0
     )
   );
+  const baseOfficials = hasExistingOfficials ? existingOfficials : mappedOfficials;
+  // A frozen budget keeps its numbers; otherwise the show's staff and expenses win.
+  const officials = isBudgetFrozen(prev) ? baseOfficials : syncOfficialsFromShow(baseOfficials, pd);
   return {
     ...prev,
     linkedProjectId: project.id,
@@ -155,7 +200,7 @@ export function applyLinkedProjectData(prev, project) {
     },
     showDetails: {
       ...prev.showDetails,
-      officials: hasExistingOfficials ? existingOfficials : mappedOfficials,
+      officials,
     },
   };
 }

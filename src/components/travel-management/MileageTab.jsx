@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { MapPin } from 'lucide-react';
 
-const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen }) => {
+const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage }) => {
 
   const updateMileage = (memberId, field, value) => {
     setTravelData((prev) => {
@@ -33,7 +33,7 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen }) => {
       {personnel.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            No personnel found. Add staff in Contract Management first.
+            {emptyMessage || 'No personnel found. Add staff in Contract Management first.'}
           </CardContent>
         </Card>
       ) : (

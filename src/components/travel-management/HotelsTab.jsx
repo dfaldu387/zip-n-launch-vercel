@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Hotel } from 'lucide-react';
 
-const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen }) => {
+const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage }) => {
 
   const updateHotel = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -26,7 +26,7 @@ const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen }) => {
       {personnel.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            No personnel found. Add staff in Contract Management first.
+            {emptyMessage || 'No personnel found. Add staff in Contract Management first.'}
           </CardContent>
         </Card>
       ) : (

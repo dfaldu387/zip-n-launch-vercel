@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import { BuilderSteps } from '@/components/pbb/BuilderSteps';
-import { applyLinkedProjectData, isBudgetFrozen } from '@/lib/contractUtils';
+import { applyLinkedProjectData, isBudgetFrozen, syncOfficialsFromShow } from '@/lib/contractUtils';
 import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -255,6 +255,16 @@ const ContractManagementPage = () => {
                 if (!hasOfficials) {
                   restoredData = applyLinkedProjectData(restoredData, linkedProject);
                   restoredData.id = sanitizedProjectId;
+                } else if (!isBudgetFrozen(restoredData)) {
+                  // Staff, fees and expenses follow the show's Officials & Staff list
+                  // (the one Show Structure and the Budgeting tool edit).
+                  restoredData = {
+                    ...restoredData,
+                    showDetails: {
+                      ...restoredData.showDetails,
+                      officials: syncOfficialsFromShow(officials, linkedProject.project_data),
+                    },
+                  };
                 }
               }
             }

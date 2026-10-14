@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plane } from 'lucide-react';
 import { currency } from '@/lib/contractUtils';
 
-const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen }) => {
+const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage }) => {
 
   const updateFlight = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -26,7 +26,7 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen }) => {
       {personnel.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            No personnel found. Add staff in Contract Management first.
+            {emptyMessage || 'No personnel found. Add staff in Contract Management first.'}
           </CardContent>
         </Card>
       ) : (
