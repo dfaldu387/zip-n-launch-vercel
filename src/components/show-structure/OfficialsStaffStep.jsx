@@ -265,9 +265,13 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                                 </div>
                             </div>
                             {/* Overtime */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
                                 <div className="space-y-1">
-                                    <Label htmlFor={`overtime-hours-${member.id}`}>Overtime Hours</Label>
+                                    <Label htmlFor={`overtime-threshold-${member.id}`}>Overtime starts after (hrs/day)</Label>
+                                    <Input id={`overtime-threshold-${member.id}`} type="number" step="0.5" disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} value={member.overtime_hours_threshold || ''} onChange={(e) => onUpdate(member.id, 'overtime_hours_threshold', e.target.value)} placeholder="e.g., 10" />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label htmlFor={`overtime-hours-${member.id}`}>Estimated Overtime Hours (budget)</Label>
                                     <Input id={`overtime-hours-${member.id}`} type="number" step="0.5" disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} value={member.overtime_hours || ''} onChange={(e) => onUpdate(member.id, 'overtime_hours', e.target.value)} placeholder="e.g., 4" />
                                 </div>
                                 <div className="space-y-1">
@@ -275,7 +279,7 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                                     <Input id={`overtime-rate-${member.id}`} type="number" disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} value={member.overtime_rate_per_hour || ''} onChange={(e) => onUpdate(member.id, 'overtime_rate_per_hour', e.target.value)} placeholder="e.g., 75" />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label>Overtime Total</Label>
+                                    <Label>Estimated Overtime Total</Label>
                                     <Input type="number" value={totalOvertimeFee.toFixed(2)} readOnly disabled className="bg-muted"/>
                                 </div>
                             </div>

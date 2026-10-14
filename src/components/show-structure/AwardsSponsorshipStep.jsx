@@ -596,6 +596,36 @@ export const AwardsSponsorshipStep = ({ formData, setFormData }) => {
         });
     }, [classes]);
 
+    // --- Standard Awards Package: defined once, applied to classes ---
+    const standardItems = formData.standardAwardsPackage?.items || [];
+    const standardPerClass = standardItems.reduce((s, i) => s + ((parseFloat(i.cost) || 0) * (parseInt(i.qty) || 1)), 0);
+
+    const setStandardItems = (updater) => {
+        setFormData(prev => {
+            const current = prev.standardAwardsPackage?.items || [];
+            return { ...prev, standardAwardsPackage: { items: updater(current) } };
+        });
+    };
+    const addStandardItem = () => setStandardItems(items => [...items, { id: uuidv4(), placement: '', type: '', description: '', cost: '', qty: 1 }]);
+    const updateStandardItem = (itemId, field, value) => setStandardItems(items => items.map(i => i.id === itemId ? { ...i, [field]: value } : i));
+    const removeStandardItem = (itemId) => setStandardItems(items => items.filter(i => i.id !== itemId));
+
+    // scope: '__all__' or a division name. replace=false keeps classes that already have awards.
+    const applyStandardPackage = useCallback((scope, replace) => {
+        setFormData(prev => {
+            const pkg = prev.standardAwardsPackage?.items || [];
+            if (pkg.length === 0) return prev;
+            const updated = { ...(prev.classAwards || {}) };
+            const targets = classes.filter(c => scope === '__all__' || c.name === scope);
+            for (const c of targets) {
+                const hasAwards = (updated[c.id]?.items || []).length > 0;
+                if (hasAwards && !replace) continue;
+                updated[c.id] = { items: pkg.map(item => ({ ...item, id: uuidv4() })) };
+            }
+            return { ...prev, classAwards: updated };
+        });
+    }, [classes, setFormData]);
+
     const classAwardsTotal = useMemo(() => {
         return Object.values(classAwards).reduce((sum, ca) => {
             const items = ca.items || [];
@@ -717,6 +747,54 @@ export const AwardsSponsorshipStep = ({ formData, setFormData }) => {
                     </div>
                     <p className="text-sm text-muted-foreground mb-4">Define awards per class — multiple items per placement. Classes are pulled from your schedule.</p>
 
+                    {/* Standard Awards Package */}
+                    <div className="mb-4 border rounded-lg bg-amber-500/5 border-amber-500/30 p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h5 className="text-sm font-semibold">Standard Awards Package</h5>
+                                <p className="text-xs text-muted-foreground">Set the awards once, then apply them to every class or to one division.</p>
+                            </div>
+                            {standardPerClass > 0 && <span className="text-xs font-semibold">${standardPerClass.toFixed(2)} per class</span>}
+                        </div>
+                        {standardItems.map(item => (
+                            <div key={item.id} className="flex items-center gap-1.5">
+                                <Select value={item.placement || ''} onValueChange={(val) => updateStandardItem(item.id, 'placement', val)}>
+                                    <SelectTrigger className="h-7 text-xs w-24 flex-shrink-0"><SelectValue placeholder="Place..." /></SelectTrigger>
+                                    <SelectContent>
+                                        {PLACEMENT_PRESETS.map(p => (<SelectItem key={p} value={p}>{p}</SelectItem>))}
+                                    </SelectContent>
+                                </Select>
+                                <Select value={item.type || ''} onValueChange={(val) => updateStandardItem(item.id, 'type', val)}>
+                                    <SelectTrigger className="h-7 text-xs w-28 flex-shrink-0"><SelectValue placeholder="Type..." /></SelectTrigger>
+                                    <SelectContent>
+                                        {AWARD_TYPES.map(t => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
+                                    </SelectContent>
+                                </Select>
+                                <Input value={item.description || ''} onChange={(e) => updateStandardItem(item.id, 'description', e.target.value)} placeholder="Description..." className="h-7 text-xs flex-1 min-w-[80px]" />
+                                <Input type="number" value={item.cost || ''} onChange={(e) => updateStandardItem(item.id, 'cost', e.target.value)} placeholder="$0" className="h-7 text-xs w-20 text-right flex-shrink-0" />
+                                <Input type="number" min="1" value={item.qty || ''} onChange={(e) => updateStandardItem(item.id, 'qty', e.target.value)} placeholder="Qty" className="h-7 text-xs w-14 text-right flex-shrink-0" />
+                                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10 flex-shrink-0" onClick={() => removeStandardItem(item.id)}>
+                                    <Trash2 className="h-3 w-3" />
+                                </Button>
+                            </div>
+                        ))}
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={addStandardItem}>
+                                <PlusCircle className="h-3 w-3 mr-1" /> Add Award
+                            </Button>
+                            {standardItems.length > 0 && classes.length > 0 && (
+                                <>
+                                    <Button size="sm" className="h-7 text-xs" onClick={() => applyStandardPackage('__all__', false)}>
+                                        Apply to all empty classes
+                                    </Button>
+                                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => applyStandardPackage('__all__', true)}>
+                                        Replace awards in all classes
+                                    </Button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+
                     {classes.length > 0 ? (
                         <div className="space-y-3">
                             {Object.entries(classesByDivision).map(([divName, divClasses]) => (
@@ -724,6 +802,12 @@ export const AwardsSponsorshipStep = ({ formData, setFormData }) => {
                                     <div className="flex items-center gap-2 px-1">
                                         <h5 className="text-sm font-semibold">{divName}</h5>
                                         <span className="text-xs text-muted-foreground">({divClasses.length} class{divClasses.length !== 1 ? 'es' : ''})</span>
+                                        {standardItems.length > 0 && (
+                                            <Button variant="ghost" size="sm" className="h-6 text-xs text-muted-foreground ml-auto"
+                                                onClick={() => applyStandardPackage(divName, true)}>
+                                                Apply standard awards
+                                            </Button>
+                                        )}
                                     </div>
                                     {divClasses.map(cls => {
                                         const ca = classAwards[cls.id] || {};

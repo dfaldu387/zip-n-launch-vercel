@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowLeft, Plane, Hotel, Car, MapPin, LayoutDashboard, Save, Loader2, Download } from 'lucide-react';
+import { ArrowLeft, Plane, Hotel, Car, MapPin, LayoutDashboard, Save, Loader2, Download, CheckCircle2, CircleDashed, AlertCircle } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -34,9 +34,12 @@ const TravelManagementPage = () => {
   const [travelData, setTravelData] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
   const [showName, setShowName] = useState('');
   const [budgetFrozen, setBudgetFrozen] = useState(false);
   const [showProject, setShowProject] = useState(null); // the show, when opened from one
+  const failedSnapshotRef = useRef(null); // a failed auto-save is not retried until the data changes again
+  const savedSnapshotRef = useRef(null); // JSON of travelData as last loaded or saved; edits differ from it
 
   // Load the show (when opened from one) or the contract projects from Supabase
   useEffect(() => {
@@ -101,12 +104,14 @@ const TravelManagementPage = () => {
     setBudgetFrozen(isBudgetFrozen(formData));
 
     // Load saved travel data, then auto-fill defaults for any new personnel
-    setTravelData(mergeTravelDefaults(
+    const merged = mergeTravelDefaults(
       flatPersonnel,
       formData.travelData || {},
       formData.contractSettings?.effectiveDate || '',
       formData.contractSettings?.expirationDate || '',
-    ));
+    );
+    savedSnapshotRef.current = JSON.stringify(merged);
+    setTravelData(merged);
   }, [selectedProjectId, contractProjects, showId]);
 
   // Opened from a show: the people are the show's own Officials & Staff list (the same
@@ -129,12 +134,17 @@ const TravelManagementPage = () => {
     setContractSettings(settings);
     setShowName(showProject.project_name || pd.showName || '');
     setBudgetFrozen(false);
-    setTravelData(mergeTravelDefaults(people, pd.travelData || {}, settings.effectiveDate, settings.expirationDate));
+    const merged = mergeTravelDefaults(people, pd.travelData || {}, settings.effectiveDate, settings.expirationDate);
+    // Only the first load sets the baseline; a re-render after our own save must not reset it.
+    if (savedSnapshotRef.current === null) savedSnapshotRef.current = JSON.stringify(merged);
+    setTravelData(merged);
   }, [showId, showProject]);
 
   // Save travel data back into the contract project
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (opts) => {
+    const silent = opts?.silent === true; // auto-save: no success toast, no locked-show toast
     if (!user) return;
+    const snapshot = JSON.stringify(travelData);
 
     // Opened from a show: travel data lives on the show itself.
     if (showId) {
@@ -151,6 +161,7 @@ const TravelManagementPage = () => {
         if (readError) throw readError;
         const latest = latestRow?.project_data || showProject.project_data || {};
         if (latest.isShowLocked === true) {
+          if (silent) return;
           toast({ title: 'Show Locked', description: 'Unlock the show to save travel data.', variant: 'destructive' });
           return;
         }
@@ -160,9 +171,12 @@ const TravelManagementPage = () => {
           .update({ project_data: updatedProjectData })
           .eq('id', showId);
         if (error) throw error;
+        savedSnapshotRef.current = snapshot;
+        setLastSavedAt(new Date());
         setShowProject((prev) => (prev ? { ...prev, project_data: updatedProjectData } : prev));
-        toast({ title: 'Travel Data Saved', description: 'All travel information has been saved.' });
+        if (!silent) toast({ title: 'Travel Data Saved', description: 'All travel information has been saved.' });
       } catch (error) {
+        failedSnapshotRef.current = snapshot;
         toast({ title: 'Error saving', description: error.message, variant: 'destructive' });
       } finally {
         setIsSaving(false);
@@ -194,13 +208,37 @@ const TravelManagementPage = () => {
         prev.map((p) => (p.id === selectedProjectId ? { ...p, project_data: updatedProjectData } : p))
       );
 
-      toast({ title: 'Travel Data Saved', description: 'All travel information has been saved.' });
+      savedSnapshotRef.current = snapshot;
+      setLastSavedAt(new Date());
+      if (!silent) toast({ title: 'Travel Data Saved', description: 'All travel information has been saved.' });
     } catch (error) {
+      failedSnapshotRef.current = snapshot;
       toast({ title: 'Error saving', description: error.message, variant: 'destructive' });
     } finally {
       setIsSaving(false);
     }
   }, [user, showId, showProject, selectedProjectId, travelData, contractProjects, toast]);
+
+  // Auto-save: one second after the last edit, save quietly. Only real edits differ from
+  // the snapshot taken at load/save time, so just opening the page never writes anything.
+  useEffect(() => {
+    if (isLoading || isSaving || budgetFrozen) return;
+    if (savedSnapshotRef.current === null) return;
+    const current = JSON.stringify(travelData);
+    if (current === savedSnapshotRef.current || current === failedSnapshotRef.current) return;
+    const t = setTimeout(() => { handleSave({ silent: true }); }, 1000);
+    return () => clearTimeout(t);
+  }, [travelData, isLoading, isSaving, budgetFrozen, handleSave]);
+
+  // What the header shows: saving, failed, waiting to save, or all saved.
+  const currentSnapshot = JSON.stringify(travelData);
+  const saveState = isSaving
+    ? 'saving'
+    : failedSnapshotRef.current !== null && currentSnapshot === failedSnapshotRef.current
+      ? 'failed'
+      : savedSnapshotRef.current !== null && currentSnapshot !== savedSnapshotRef.current
+        ? 'pending'
+        : 'saved';
 
   // Travel is ready to edit once there is a show (show mode) or a contract project.
   const hasSource = showId ? !!showProject : !!selectedProjectId;
@@ -235,14 +273,32 @@ const TravelManagementPage = () => {
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+                {hasSource && (
+                  <span
+                    className={
+                      'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ' +
+                      (saveState === 'saved' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                        : saveState === 'failed' ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400')
+                    }
+                    aria-live="polite"
+                  >
+                    {saveState === 'saving' && <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…</>}
+                    {saveState === 'pending' && <><CircleDashed className="h-3.5 w-3.5" /> Unsaved changes</>}
+                    {saveState === 'failed' && <><AlertCircle className="h-3.5 w-3.5" /> Not saved. Click Save now</>}
+                    {saveState === 'saved' && (
+                      <><CheckCircle2 className="h-3.5 w-3.5" /> {lastSavedAt ? `Saved at ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'All changes saved'}</>
+                    )}
+                  </span>
+                )}
                 <Button variant="outline" disabled={!hasSource || personnel.length === 0} onClick={() => exportTravelToExcel({ personnel, travelData, showName })}>
                   <Download className="mr-2 h-4 w-4" />
                   Export Excel
                 </Button>
-                <Button onClick={handleSave} disabled={isSaving || !hasSource}>
-                  {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                  Save Travel Data
+                <Button variant="outline" onClick={() => handleSave()} disabled={isSaving || !hasSource}>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save now
                 </Button>
               </div>
             </div>

@@ -740,19 +740,19 @@ const VenueArenaSetupPage = () => {
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                    <div className="flex items-center gap-3 mb-8">
-                        <Button variant="outline" size="icon" onClick={() => navigate(`/horse-show-manager/employee-scheduling${showId ? `/${showId}` : ''}`)}>
-                            <ArrowLeft className="h-4 w-4" />
-                        </Button>
-                        <div>
-                            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-                                <Building2 className="h-6 w-6 text-primary" />
-                                Venue & Arena Setup
-                            </h1>
-                            <p className="text-sm text-muted-foreground">
-                                Configure venues, arenas, and auto-generate staff positions.
-                            </p>
+                    <div className="mb-6">
+                        <div className="mb-4">
+                            <Button variant="ghost" onClick={() => navigate(`/horse-show-manager/employee-scheduling${showId ? `/${showId}` : ''}`)}>
+                                <ArrowLeft className="mr-2 h-4 w-4" />
+                                Back
+                            </Button>
                         </div>
+                        <h1 className="text-3xl font-extrabold tracking-tight mb-1 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-sky-400">
+                            Venue & Arena Setup
+                        </h1>
+                        <p className="text-muted-foreground">
+                            Configure venues, arenas, and auto-generate staff positions.
+                        </p>
                     </div>
 
                     {!showId && (

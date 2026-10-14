@@ -1125,19 +1125,19 @@ const EmployeeSchedulingPage = () => {
             <div className="min-h-screen bg-background">
                 <Navigation />
                 <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                    <div className="flex items-center gap-3 mb-8">
-                        <Button variant="outline" size="icon" onClick={() => navigate(`/horse-show-manager/employee-scheduling${showId ? `/${showId}` : ''}`)}>
-                            <ArrowLeft className="h-4 w-4" />
-                        </Button>
-                        <div>
-                            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-                                <Calendar className="h-6 w-6 text-primary" />
-                                Employee Scheduling
-                            </h1>
-                            <p className="text-sm text-muted-foreground">
-                                Assign staff to arenas, dates, and positions.
-                            </p>
+                    <div className="mb-6">
+                        <div className="mb-4">
+                            <Button variant="ghost" onClick={() => navigate(`/horse-show-manager/employee-scheduling${showId ? `/${showId}` : ''}`)}>
+                                <ArrowLeft className="mr-2 h-4 w-4" />
+                                Back
+                            </Button>
                         </div>
+                        <h1 className="text-3xl font-extrabold tracking-tight mb-1 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-sky-400">
+                            Employee Scheduling
+                        </h1>
+                        <p className="text-muted-foreground">
+                            Assign staff to arenas, dates, and positions.
+                        </p>
                     </div>
 
                     {!showId && (
