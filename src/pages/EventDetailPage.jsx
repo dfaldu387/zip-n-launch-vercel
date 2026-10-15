@@ -18,6 +18,7 @@ import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { isShowPublished } from '@/lib/showPublishing';
 import { isHiddenOnPublicPage, publicText, mapsUrl, formatShowDate, publicLogo, publicWelcome } from '@/lib/publicPage';
 import PublicContactCards from '@/components/public/PublicContactCards';
+import PublicScheduleCard from '@/components/public/PublicScheduleCard';
 
 // Some patterns are organizer-uploaded PDFs (custom requests) rather than database
 // image-patterns. Render their first page inline with react-pdf — worker set once here.
@@ -28,6 +29,8 @@ const EventDetailPage = () => {
   const [event, setEvent] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [projectData, setProjectData] = useState(null);
+  // Schedule & Arena Setup, only present once the owner has published it.
+  const [publicSchedule, setPublicSchedule] = useState(null);
   const [patternsData, setPatternsData] = useState([]);
   const [scoresheetsData, setScoresheetsData] = useState([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
@@ -437,6 +440,24 @@ const EventDetailPage = () => {
 
     fetchEventData();
   }, [id, toast]);
+
+  // Published schedule. The function returns null unless Schedule & Arena Setup is
+  // Published, so Draft/Locked shows simply get no card. The show can be reached by
+  // its own id or by its housing / pattern-book sibling, so try each one.
+  useEffect(() => {
+    if (!event?.isFromProjects) { setPublicSchedule(null); return undefined; }
+    let cancelled = false;
+    const ids = [...new Set([event.project?.id, event.id, event.pattern_book_id].filter(Boolean))];
+    (async () => {
+      for (const pid of ids) {
+        const { data, error } = await supabase.rpc('get_public_schedule', { p_id: pid });
+        if (cancelled) return;
+        if (!error && data) { setPublicSchedule(data); return; }
+      }
+      setPublicSchedule(null);
+    })();
+    return () => { cancelled = true; };
+  }, [event]);
 
   // Build a print-ready branded document for each pattern (show name + class date +
   // divisions header, EquiPatterns footer) so the on-page preview matches the
@@ -1283,6 +1304,11 @@ const EventDetailPage = () => {
                 </motion.div>
               );
             })()}
+
+            {/* Published Schedule & Arena Setup (built-in schedule or the owner's own showbill) */}
+            {publicSchedule && (
+              <PublicScheduleCard schedule={publicSchedule} publicPage={projectData?.publicPage} />
+            )}
 
             {/* Class Schedule - Show for regular events */}
             {event.classes && event.classes.length > 0 && (

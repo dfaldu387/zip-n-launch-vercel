@@ -4,6 +4,7 @@ import {
   getAvailableTransitions,
   validateTransition,
   isWizardReadOnly,
+  migrateAllModuleStatuses,
 } from './moduleStatusService';
 
 describe('status transitions', () => {
@@ -59,5 +60,22 @@ describe('isWizardReadOnly', () => {
   it('treats missing data as editable, not locked', () => {
     expect(isWizardReadOnly(undefined, 'feeStructure')).toBe(false);
     expect(isWizardReadOnly({}, 'feeStructure')).toBe(false);
+  });
+});
+
+describe('publishable modules', () => {
+  it('blocks Published for modules that never go to the event page', () => {
+    expect(validateTransition('locked', 'published', 'contracts').allowed).toBe(false);
+    expect(getAvailableTransitions('locked', false, 'contracts')).not.toContain('published');
+  });
+  it('still allows Published for housing, results, pattern book, schedule', () => {
+    ['housing', 'results', 'patternBook', 'editWizard'].forEach(k => {
+      expect(validateTransition('locked', 'published', k).allowed).toBe(true);
+      expect(getAvailableTransitions('locked', false, k)).toContain('published');
+    });
+  });
+  it('shows an old "published" value as Locked for non-publishable modules', () => {
+    const out = migrateAllModuleStatuses({ contracts: 'published', housing: 'published', awards: 'Final' });
+    expect(out).toEqual({ contracts: 'locked', housing: 'published', awards: 'locked' });
   });
 });

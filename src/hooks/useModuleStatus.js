@@ -64,7 +64,7 @@ export function useModuleStatus({ projectData, showId, onProjectDataChange }) {
     const currentStatus = migrateLegacyStatus(moduleStatuses[moduleKey] || MODULE_STATUS.NOT_STARTED);
 
     // Validate transition
-    const result = validateTransitionWithShowLock(currentStatus, newStatus, isShowLocked);
+    const result = validateTransitionWithShowLock(currentStatus, newStatus, isShowLocked, moduleKey);
     if (!result.allowed) {
       toast({ title: 'Status Change Blocked', description: result.error, variant: 'destructive' });
       return false;
@@ -152,7 +152,7 @@ export function useModuleStatus({ projectData, showId, onProjectDataChange }) {
 
   const getAvailableActions = useCallback((moduleKey) => {
     const status = migrateLegacyStatus(moduleStatuses[moduleKey] || MODULE_STATUS.NOT_STARTED);
-    return getAvailableTransitions(status, isShowLocked);
+    return getAvailableTransitions(status, isShowLocked, moduleKey);
   }, [moduleStatuses, isShowLocked]);
 
   return {

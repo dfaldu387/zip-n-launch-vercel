@@ -94,6 +94,32 @@ export const MODULE_KEYS = Object.freeze({
   HOUSING:             'housing',
 });
 
+// ── Publishable modules ──
+// Only these modules can ever reach the public event page. Every other module
+// stops at Locked: its status menu has no "Published" option, and any old
+// "published" value is shown as Locked (see coerceStatusForModule).
+export const PUBLISHABLE_MODULES = Object.freeze([
+  MODULE_KEYS.EDIT_WIZARD,       // Schedule & Arena Setup
+  MODULE_KEYS.SCHEDULE_BUILDER,
+  MODULE_KEYS.PATTERN_BOOK,
+  'patternsScoresheets',
+  MODULE_KEYS.HOUSING,
+  MODULE_KEYS.RESULTS,
+]);
+
+/** Whether a module may be published. No key given = unknown caller, allow. */
+export function canModulePublish(moduleKey) {
+  return !moduleKey || PUBLISHABLE_MODULES.includes(moduleKey);
+}
+
+/** A non-publishable module can never read "published"; show it as Locked. */
+export function coerceStatusForModule(moduleKey, status) {
+  if (status === MODULE_STATUS.PUBLISHED && !canModulePublish(moduleKey)) {
+    return MODULE_STATUS.LOCKED;
+  }
+  return status;
+}
+
 // ── Validation Results ──
 
 /**
@@ -112,7 +138,7 @@ export const MODULE_KEYS = Object.freeze({
  * @param {string} newStatus
  * @returns {TransitionResult}
  */
-export function validateTransition(currentStatus, newStatus) {
+export function validateTransition(currentStatus, newStatus, moduleKey) {
   const from = currentStatus || MODULE_STATUS.NOT_STARTED;
   const to = newStatus;
   const base = { from, to };
@@ -120,6 +146,11 @@ export function validateTransition(currentStatus, newStatus) {
   // Same status — no-op
   if (from === to) {
     return { ...base, allowed: true, error: null };
+  }
+
+  // Only publishable modules may be published
+  if (to === MODULE_STATUS.PUBLISHED && !canModulePublish(moduleKey)) {
+    return { ...base, allowed: false, error: 'This module is never published to the event page. Lock it when it is final.' };
   }
 
   // Cannot return to NOT_STARTED
@@ -156,7 +187,7 @@ export function validateTransition(currentStatus, newStatus) {
  * @param {boolean} isShowLocked
  * @returns {TransitionResult}
  */
-export function validateTransitionWithShowLock(currentStatus, newStatus, isShowLocked) {
+export function validateTransitionWithShowLock(currentStatus, newStatus, isShowLocked, moduleKey) {
   if (isShowLocked) {
     return {
       from: currentStatus || MODULE_STATUS.NOT_STARTED,
@@ -165,7 +196,7 @@ export function validateTransitionWithShowLock(currentStatus, newStatus, isShowL
       error: 'This show is locked. Unlock the show to make changes.',
     };
   }
-  return validateTransition(currentStatus, newStatus);
+  return validateTransition(currentStatus, newStatus, moduleKey);
 }
 
 /**
@@ -176,10 +207,13 @@ export function validateTransitionWithShowLock(currentStatus, newStatus, isShowL
  * @param {boolean} isShowLocked
  * @returns {string[]}
  */
-export function getAvailableTransitions(currentStatus, isShowLocked = false) {
+export function getAvailableTransitions(currentStatus, isShowLocked = false, moduleKey) {
   if (isShowLocked) return [];
   const from = currentStatus || MODULE_STATUS.NOT_STARTED;
-  return TRANSITION_MAP[from] || [];
+  const targets = TRANSITION_MAP[from] || [];
+  return canModulePublish(moduleKey)
+    ? targets
+    : targets.filter(s => s !== MODULE_STATUS.PUBLISHED);
 }
 
 /**
@@ -327,7 +361,7 @@ export function migrateAllModuleStatuses(moduleStatuses) {
   if (!moduleStatuses) return {};
   const migrated = {};
   Object.entries(moduleStatuses).forEach(([key, status]) => {
-    migrated[key] = migrateLegacyStatus(status);
+    migrated[key] = coerceStatusForModule(key, migrateLegacyStatus(status));
   });
   return migrated;
 }

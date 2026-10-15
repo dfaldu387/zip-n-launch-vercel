@@ -7,6 +7,7 @@ import {
   STATUS_META,
   getAvailableTransitions,
   validateTransitionWithShowLock,
+  canModulePublish,
 } from '@/lib/moduleStatusService';
 import {
   DropdownMenu,
@@ -63,7 +64,11 @@ export const ModuleStatusBadge = ({
 }) => {
   const meta = STATUS_META[status] || STATUS_META[MODULE_STATUS.NOT_STARTED];
   const IconComp = ICON_MAP[meta.icon] || Circle;
-  const availableTransitions = readOnly ? [] : getAvailableTransitions(status, isShowLocked);
+  const availableTransitions = readOnly ? [] : getAvailableTransitions(status, isShowLocked, moduleKey);
+  // Modules that never go to the event page have no "Published" row at all.
+  const statusRows = canModulePublish(moduleKey)
+    ? ALL_STATUSES
+    : ALL_STATUSES.filter(s => s !== MODULE_STATUS.PUBLISHED);
 
   const badge = (
     <button
@@ -131,12 +136,12 @@ export const ModuleStatusBadge = ({
         </div>
         <DropdownMenuSeparator />
 
-        {ALL_STATUSES.map((targetStatus) => {
+        {statusRows.map((targetStatus) => {
           const targetMeta = STATUS_META[targetStatus];
           const TargetIcon = ICON_MAP[targetMeta.icon] || Circle;
           const isAvailable = availableTransitions.includes(targetStatus);
           const isCurrent = targetStatus === status;
-          const result = validateTransitionWithShowLock(status, targetStatus, isShowLocked);
+          const result = validateTransitionWithShowLock(status, targetStatus, isShowLocked, moduleKey);
 
           return (
             <DropdownMenuItem
@@ -195,7 +200,7 @@ export const ModuleStatusControls = ({
   isShowLocked = false,
   onStatusChange,
 }) => {
-  const available = getAvailableTransitions(status, isShowLocked);
+  const available = getAvailableTransitions(status, isShowLocked, moduleKey);
 
   if (available.length === 0 && !isShowLocked) return null;
 

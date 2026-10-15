@@ -1,5 +1,6 @@
 import { useMemo, useCallback, useState } from 'react';
 import { motion } from 'framer-motion';
+import { Link, useParams } from 'react-router-dom';
 import { CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
@@ -180,6 +181,53 @@ const ActionPanel = ({ formData, currentStatus, onStatusChange, onExportPdf, isS
           </p>
         )}
       </div>
+    </div>
+  );
+};
+
+// --- What the public event page shows once Schedule & Arena Setup is Published ---
+const PublicScheduleChoice = ({ formData, setFormData, showId, disabled }) => {
+  const source = formData.publicScheduleSource === 'upload' ? 'upload' : 'builtin';
+  const options = [
+    { id: 'builtin', label: 'Built-in schedule', hint: 'Show the schedule built in this wizard.' },
+    { id: 'upload', label: 'My own showbill (PDF)', hint: 'Show the PDF you uploaded.' },
+  ];
+
+  return (
+    <div className="border rounded-lg bg-card p-5 space-y-3">
+      <h3 className="text-base font-semibold">Schedule on the event page</h3>
+      <p className="text-xs text-muted-foreground">
+        Choose what the public sees after you click Published.
+      </p>
+      <div className="space-y-2">
+        {options.map(opt => (
+          <label
+            key={opt.id}
+            className={`flex items-start gap-2 rounded-md border p-2.5 text-sm ${source === opt.id ? 'border-primary bg-primary/5' : ''} ${disabled ? 'opacity-60' : 'cursor-pointer'}`}
+          >
+            <input
+              type="radio"
+              name="publicScheduleSource"
+              className="mt-1"
+              checked={source === opt.id}
+              disabled={disabled}
+              onChange={() => setFormData(prev => ({ ...prev, publicScheduleSource: opt.id }))}
+            />
+            <span>
+              <span className="font-medium">{opt.label}</span>
+              <span className="block text-xs text-muted-foreground">{opt.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {source === 'upload' && showId && (
+        <p className="text-xs text-muted-foreground">
+          Upload the PDF in <span className="font-medium">Show documents</span> on the{' '}
+          <Link to={`/horse-show-manager/housing-grounds-manager/${showId}`} className="text-primary underline">
+            public page editor
+          </Link>.
+        </p>
+      )}
     </div>
   );
 };
@@ -377,6 +425,7 @@ const AdminOwnerSection = ({ formData, setFormData, user, profile, isLocked: isL
 export const Step6_Preview = ({ formData, setFormData, associationsData, createOrUpdateShow, stepNumber = 7, stepTitle = 'Save & Manage Your Show' }) => {
   const { toast } = useToast();
   const { user, profile } = useAuth();
+  const { showId } = useParams();
   const [isSaving, setIsSaving] = useState(false);
 
   const allClassItems = useMemo(() => getAllClassItems(formData), [formData]);
@@ -472,7 +521,13 @@ export const Step6_Preview = ({ formData, setFormData, associationsData, createO
           </div>
 
           {/* Right Panel: Licensing */}
-          <div className="lg:col-span-4">
+          <div className="lg:col-span-4 space-y-6">
+            <PublicScheduleChoice
+              formData={formData}
+              setFormData={setFormData}
+              showId={showId}
+              disabled={currentStatus === 'published'}
+            />
             <LicensingCard />
           </div>
         </div>
