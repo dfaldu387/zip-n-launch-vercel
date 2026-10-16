@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { flattenPersonnel, isBudgetFrozen } from '@/lib/contractUtils';
+import { mergeTravelDefaults, applyExpenseType } from '@/lib/travelDefaults';
 import { BudgetFrozenBanner } from '@/components/contract-management/BudgetFrozenBanner';
 import { exportTravelToExcel } from '@/lib/travelExport';
 
@@ -454,6 +455,7 @@ const TravelManagementPage = () => {
                     budgetFrozen={budgetFrozen}
                     storageKey={showId || selectedProjectId}
                     onExpenseTypeChange={handleExpenseTypeChange}
+                    expenseTypeLocked={!!showProject?.project_data?.isShowLocked}
                   />
                 </TabsContent>
 
@@ -466,6 +468,7 @@ const TravelManagementPage = () => {
                     budgetFrozen={budgetFrozen}
                     storageKey={showId || selectedProjectId}
                     onExpenseTypeChange={handleExpenseTypeChange}
+                    expenseTypeLocked={!!showProject?.project_data?.isShowLocked}
                   />
                 </TabsContent>
 
@@ -478,6 +481,7 @@ const TravelManagementPage = () => {
                     budgetFrozen={budgetFrozen}
                     storageKey={showId || selectedProjectId}
                     onExpenseTypeChange={handleExpenseTypeChange}
+                    expenseTypeLocked={!!showProject?.project_data?.isShowLocked}
                   />
                 </TabsContent>
 
@@ -490,6 +494,7 @@ const TravelManagementPage = () => {
                     budgetFrozen={budgetFrozen}
                     storageKey={showId || selectedProjectId}
                     onExpenseTypeChange={handleExpenseTypeChange}
+                    expenseTypeLocked={!!showProject?.project_data?.isShowLocked}
                   />
                 </TabsContent>
               </Tabs>
@@ -500,125 +505,5 @@ const TravelManagementPage = () => {
     </>
   );
 };
-
-/**
- * Start from the saved travel data and add a default entry for anyone new. Costs a
- * person already has as reimbursable expenses are copied in when the travel entry
- * has none yet. Same rules for a contract project and for a show's staff list.
- */
-function mergeTravelDefaults(flatPersonnel, saved, eventStart, eventEnd) {
-  const merged = { ...saved };
-
-  for (const member of flatPersonnel) {
-    const expenses = member.reimbursable_expenses || {};
-    const airfareExp = expenses.airfare;
-    const hotelExp = expenses.hotel;
-    const rentalCarExp = expenses.rentalCar;
-    const mileageExp = expenses.mileage;
-
-    if (!merged[member.id]) {
-      // New member: create entry with dates from the person, else from the event
-      const start = airfareExp?.start_date || member.employment_start_date || eventStart;
-      const end = airfareExp?.end_date || member.employment_end_date || eventEnd;
-      merged[member.id] = {
-        travelStart: start ? shiftDate(start, -1) : '',
-        travelEnd: end ? shiftDate(end, 1) : '',
-      };
-    }
-
-    // Sync expense data into the travel entry if not already set
-    const entry = merged[member.id];
-    if (!entry.flight?.cost && airfareExp?.reimbursed) {
-      entry.flight = { ...entry.flight, cost: parseFloat(airfareExp.max_value) || 0 };
-    }
-    if (!entry.hotel?.cost && hotelExp?.reimbursed) {
-      entry.hotel = {
-        ...entry.hotel,
-        cost: parseFloat(hotelExp.total) || parseFloat(hotelExp.max_value) || 0,
-        checkIn: entry.hotel?.checkIn || hotelExp.start_date || '',
-        checkOut: entry.hotel?.checkOut || hotelExp.end_date || '',
-      };
-    }
-    if (!entry.rentalCar?.cost && rentalCarExp?.reimbursed) {
-      entry.rentalCar = { ...entry.rentalCar, cost: parseFloat(rentalCarExp.total) || parseFloat(rentalCarExp.max_value) || 0 };
-    }
-    if (!entry.mileage?.cost && mileageExp?.reimbursed) {
-      entry.mileage = { ...entry.mileage, cost: parseFloat(mileageExp.total) || 0 };
-    }
-
-    // Pre-fill empty travel dates from the person's dates (else the show's dates).
-    // A date someone already typed is never replaced; the budget dates are not touched.
-    // Each expense block on the Staff page has its own dates; use them first.
-    const personStart = member.employment_start_date || eventStart;
-    const personEnd = member.employment_end_date || eventEnd;
-    const startOf = (exp) => toDayString(exp?.start_date || personStart);
-    const endOf = (exp) => toDayString(exp?.end_date || personEnd);
-    const at = (d, time = '12:00') => (d ? `${d}T${time}` : '');
-    const fillEmpty = (obj, patch) => {
-      const out = { ...(obj || {}) };
-      // A value that is not a clean YYYY-MM-DD (or YYYY-MM-DDTHH:MM) counts as empty.
-      const valid = (x) => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(x);
-      for (const [k, v] of Object.entries(patch)) if (!valid(out[k]) && v) out[k] = v;
-      return out;
-    };
-    entry.flight = fillEmpty(entry.flight, {
-      departureTime: at(startOf(airfareExp) ? shiftDate(startOf(airfareExp), -1) : ''),
-      arrivalTime: at(startOf(airfareExp)),
-      returnDepartureTime: at(endOf(airfareExp)),
-    });
-    entry.hotel = fillEmpty(entry.hotel, { checkIn: startOf(hotelExp), checkOut: endOf(hotelExp) });
-    entry.rentalCar = fillEmpty(entry.rentalCar, { pickupTime: at(startOf(rentalCarExp)), returnTime: at(endOf(rentalCarExp)) });
-    entry.mileage = fillEmpty(entry.mileage, { startDate: startOf(mileageExp), endDate: endOf(mileageExp) });
-  }
-
-  return merged;
-}
-
-/** Copy of the project data with one person's expense_type changed; null if that person/expense is not found. */
-function applyExpenseType(projectData, memberId, expenseKey, value) {
-  const officials = projectData?.showDetails?.officials;
-  if (!officials) return null;
-  let found = false;
-  const nextOfficials = {};
-  for (const [assocId, roles] of Object.entries(officials)) {
-    nextOfficials[assocId] = {};
-    for (const [roleId, members] of Object.entries(roles || {})) {
-      nextOfficials[assocId][roleId] = (members || []).map((m) => {
-        if (m.id !== memberId || !m.reimbursable_expenses?.[expenseKey]) return m;
-        found = true;
-        return {
-          ...m,
-          reimbursable_expenses: {
-            ...m.reimbursable_expenses,
-            [expenseKey]: { ...m.reimbursable_expenses[expenseKey], expense_type: value },
-          },
-        };
-      });
-    }
-  }
-  return found ? { ...projectData, showDetails: { ...projectData.showDetails, officials: nextOfficials } } : null;
-}
-
-/** Staff dates are saved as full timestamps; date fields need the local day, YYYY-MM-DD. */
-function toDayString(value) {
-  if (!value) return '';
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** Shift an ISO date string by N days */
-function shiftDate(dateStr, days) {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
-  } catch {
-    return '';
-  }
-}
 
 export default TravelManagementPage;

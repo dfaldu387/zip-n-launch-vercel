@@ -9,7 +9,7 @@ import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
 
-const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange }) => {
+const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
 
   const updateFlight = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -51,7 +51,7 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.airfare} disabled={budgetFrozen} onChange={(v) => onExpenseTypeChange?.(member.id, 'airfare', v)} />
+                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.airfare} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'airfare', v)} />
                     <DatesLockButton locked={!!flight.datesLocked} onToggle={() => updateFlight(member.id, 'datesLocked', !flight.datesLocked)} />
                     {hasFlight ? (
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>

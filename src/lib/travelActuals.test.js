@@ -7,6 +7,7 @@ import {
   rentalFigures,
   mileageFigures,
   summarizeLines,
+  travelSpan,
 } from '@/lib/travelActuals';
 
 describe('nights and days', () => {
@@ -89,5 +90,19 @@ describe('summarizeLines', () => {
   it('ignores empty lines and has no actual when none are typed', () => {
     const s = summarizeLines([{ budget: 0, actual: null }, { budget: 100, actual: null }]);
     expect(s).toMatchObject({ budget: 100, actual: null, variance: null, counted: 0, total: 1 });
+  });
+});
+
+describe('travelSpan', () => {
+  it('runs from the earliest to the latest travel date', () => {
+    const span = travelSpan({
+      flight: { departureTime: '2026-10-21T12:00', returnDepartureTime: '2026-10-25T12:00' },
+      hotel: { checkIn: '2026-10-22', checkOut: '2026-10-24' },
+    });
+    expect(span).toEqual({ start: '2026-10-21', end: '2026-10-25' });
+  });
+  it('is null when no card has a date', () => {
+    expect(travelSpan({})).toBeNull();
+    expect(travelSpan({ flight: { cost: '300' } })).toBeNull();
   });
 });

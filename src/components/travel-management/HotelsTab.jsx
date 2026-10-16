@@ -10,7 +10,7 @@ import ReceiptsField from './ReceiptsField';
 import { hotelFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
 
-const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange }) => {
+const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
 
   const updateHotel = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -68,7 +68,7 @@ const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMe
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.hotel} disabled={budgetFrozen} onChange={(v) => onExpenseTypeChange?.(member.id, 'hotel', v)} />
+                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.hotel} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'hotel', v)} />
                     <DatesLockButton locked={!!hotel.datesLocked} onToggle={() => updateHotel(member.id, 'datesLocked', !hotel.datesLocked)} />
                     {hasHotel ? (
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>

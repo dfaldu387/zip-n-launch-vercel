@@ -8,7 +8,7 @@ import ReceiptsField from './ReceiptsField';
 import { mileageFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
 
-const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange }) => {
+const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
 
   const updateMileage = (memberId, field, value) => {
     setTravelData((prev) => {
@@ -75,7 +75,7 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.mileage} disabled={budgetFrozen} onChange={(v) => onExpenseTypeChange?.(member.id, 'mileage', v)} />
+                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.mileage} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'mileage', v)} />
                     <DatesLockButton locked={!!mileage.datesLocked} onToggle={() => updateMileage(member.id, 'datesLocked', !mileage.datesLocked)} />
                     {hasMileage ? (
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Logged</Badge>

@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin } from 'lucide-react';
 import { currency, isDirectExpense } from '@/lib/contractUtils';
-import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines } from '@/lib/travelActuals';
+import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines, travelSpan } from '@/lib/travelActuals';
 
 // Over budget is red, under budget is green; "—" until an actual has been entered.
 const VarianceBadge = ({ value }) => {
@@ -297,8 +297,11 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
                 ) : (
                   personnel.map((member) => {
                     const travel = getPersonTravel(member.id);
-                    const travelStart = travel.travelStart || '';
-                    const travelEnd = travel.travelEnd || '';
+                    // The trip runs from the earliest to the latest date on their travel cards, so it
+                    // follows every edit; the first-open default is only the fallback.
+                    const span = travelSpan(travel);
+                    const travelStart = span?.start || travel.travelStart || '';
+                    const travelEnd = span?.end || travel.travelEnd || '';
                     const hasBooking = travel.flight?.airline || travel.hotel?.hotelName || travel.rentalCar?.company;
                     const hasExpenses = getTotalCost(member) > 0;
                     const total = getTotalCost(member);

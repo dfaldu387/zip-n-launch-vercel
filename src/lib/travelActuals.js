@@ -94,3 +94,24 @@ export const summarizeLines = (lines) => {
     total,
   };
 };
+
+// First and last day of a person's trip, read from every date on their travel cards (flight out
+// and back, hotel, rental car, mileage). null when no card has a date yet.
+export const travelSpan = (entry = {}) => {
+  const days = [
+    entry.flight?.departureTime,
+    entry.flight?.arrivalTime,
+    entry.flight?.returnDepartureTime,
+    entry.flight?.returnArrivalTime,
+    entry.hotel?.checkIn,
+    entry.hotel?.checkOut,
+    entry.rentalCar?.pickupTime,
+    entry.rentalCar?.returnTime,
+    entry.mileage?.startDate,
+    entry.mileage?.endDate,
+  ]
+    .filter(isDay)
+    .map((d) => d.slice(0, 10))
+    .sort();
+  return days.length ? { start: days[0], end: days[days.length - 1] } : null;
+};
