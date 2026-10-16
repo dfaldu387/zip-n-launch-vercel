@@ -649,6 +649,90 @@ const EventDetailPage = () => {
     if (!ok) toast({ title: 'Print blocked', description: 'Allow pop-ups to print the book.', variant: 'destructive' });
   };
 
+  const actionsCard = (
+            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.3 }}>
+              <Card className="bg-secondary border-border">
+                <CardHeader>
+                  <CardTitle>Actions</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {/* Book Stalls, RV & Supplies — only when the organizer has published it. */}
+                  {event.isFromProjects && projectData?.moduleStatuses?.housing === 'published' && (
+                    <Button asChild className="w-full bg-blue-600 hover:bg-blue-700">
+                      <Link to={`/show/${event.id}/book`}>
+                        <Building2 className="h-4 w-4 mr-2" /> Book Stalls, RV &amp; Supplies
+                      </Link>
+                    </Button>
+                  )}
+                  {/* Stalling Chart — only when the organizer has published it (Assign
+                      Stalls tab → Publish Chart). */}
+                  {event.isFromProjects && projectData?.stallingService?.chartPublish?.enabled &&
+                    (projectData.stallingService.chartPublish.showStalls !== false || projectData.stallingService.chartPublish.showRv !== false) && (
+                    <Button asChild variant="outline" className="w-full">
+                      <Link to={`/show/${event.id}/stalling-chart`}>
+                        <MapPin className="h-4 w-4 mr-2" />
+                        {projectData.stallingService.chartPublish.showStalls === false ? 'View RV / Camping Chart'
+                          : projectData.stallingService.chartPublish.showRv === false ? 'View Stalling Chart'
+                          : 'View Stalling & RV Chart'}
+                      </Link>
+                    </Button>
+                  )}
+                  {/* Order Hay & Shavings — live at-show reorder. Shows when housing is
+                      published AND the organizer stocks supplies (hay/shavings/etc). */}
+                  {event.isFromProjects &&
+                    projectData?.moduleStatuses?.housing === 'published' &&
+                    (projectData?.stallingService?.supplies || []).length > 0 && (
+                    <Button asChild className="w-full bg-amber-600 hover:bg-amber-700">
+                      <Link to={`/show/${event.id}/order-supplies`}>
+                        <ShoppingCart className="h-4 w-4 mr-2" /> Order Hay &amp; Shavings
+                      </Link>
+                    </Button>
+                  )}
+                  {/* Pattern book: a future Publication Date holds it back with a "posted on" note;
+                      otherwise a button that jumps to the patterns below. */}
+                  {patternPublished && (
+                    patternsScheduled ? (
+                      <div className="w-full text-center text-sm text-muted-foreground p-3 bg-secondary rounded-md flex items-center justify-center gap-2">
+                        <Calendar className="h-4 w-4" /> Patterns posted on {publicationDateLabel}
+                      </div>
+                    ) : (
+                      <Button
+                        className="w-full bg-green-600 hover:bg-green-700"
+                        onClick={() => document.getElementById('event-patterns')?.scrollIntoView({ behavior: 'smooth' })}
+                      >
+                        <BookOpen className="h-4 w-4 mr-2" /> View Pattern Book
+                      </Button>
+                    )
+                  )}
+                  {getPatternStatus()}
+                  {/* Results: the completed score sheets the show office posted from the
+                      arena. Only offered once the show itself is published — the page
+                      re-checks that too, so a shared link cannot leak early results. */}
+                  {event.isFromProjects && resultsPublished && (
+                    <Button asChild className="w-full bg-purple-600 hover:bg-purple-700">
+                      <Link to={`/event-results/${event.id}`}>
+                        <Trophy className="h-4 w-4 mr-2" /> Results &amp; Score Sheets
+                      </Link>
+                    </Button>
+                  )}
+                  {(event.website || event.show_website || event.showWebsite) && (
+                    <Button asChild variant="outline" className="w-full">
+                      <a href={event.website || event.show_website || event.showWebsite} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-4 w-4 mr-2" /> Visit Official Website
+                      </a>
+                    </Button>
+                  )}
+                  <p className="text-xs text-muted-foreground pt-2 text-center">Share this event:</p>
+                   <div className="flex justify-center gap-2">
+                      <Button variant="outline" size="icon" onClick={() => handleShare('Twitter')}><Twitter className="h-4 w-4" /></Button>
+                      <Button variant="outline" size="icon" onClick={() => handleShare('Facebook')}><Facebook className="h-4 w-4" /></Button>
+                      <Button variant="outline" size="icon" onClick={() => handleShare('Link')}><Share2 className="h-4 w-4" /></Button>
+                   </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+  );
+
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
@@ -698,6 +782,9 @@ const EventDetailPage = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
+            {/* Actions first on phones (book stalls etc.); desktop keeps them in the right column */}
+            <div className="lg:hidden">{actionsCard}</div>
+
             {/* Show Details - Show when event has details (from events table or projects table) */}
             {((!event.isFromProjects && (event.venue_name || event.venue_address || event.show_type || event.associations || event.disciplines || event.officials || event.judges)) || (event.isFromProjects && projectData)) && (
               <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.2 }}>
@@ -907,12 +994,12 @@ const EventDetailPage = () => {
               </motion.div>
             )}
 
-            {/* Event Highlights - Show patterns, scoresheets, divisions, and judges */}
+            {/* Event Highlights - Patterns and judges (score sheets live on the Results page) */}
             <motion.div id="event-patterns" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.2 }}>
               <Card className="bg-secondary border-border">
                 <CardHeader>
                   <CardTitle>Event Highlights</CardTitle>
-                  {event.isFromProjects && <CardDescription>Patterns, scoresheets, divisions, and judges for this event</CardDescription>}
+                  {event.isFromProjects && <CardDescription>Patterns and judges for this event</CardDescription>}
                 </CardHeader>
                 <CardContent className="space-y-6">
                   {/* Patterns and Scoresheets */}
@@ -1114,61 +1201,7 @@ const EventDetailPage = () => {
                         </div>
                       )}
 
-                      {/* Scoresheets */}
-                      {!patternsScheduled && scoresheetsData.length > 0 && (
-                        <div>
-                          <h3 className="font-semibold text-primary mb-3 flex items-center">
-                            <FileText className="h-5 w-5 mr-2" /> Score Sheets
-                          </h3>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {scoresheetsData.map((scoresheet, idx) => (
-                              <div key={idx} className="border border-border rounded-lg p-3 bg-background/50">
-                                <div className="flex items-start justify-between mb-2">
-                                  <div className="flex-1">
-                                    <p className="font-medium text-foreground">{scoresheet.fileName || 'Score Sheet'}</p>
-                                    <p className="text-sm text-muted-foreground">{scoresheet.discipline} - {scoresheet.group}</p>
-                                  </div>
-                                </div>
-                                {scoresheet.imageUrl ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setPreviewImage({ url: scoresheet.imageUrl, title: scoresheet.fileName || 'Score Sheet' })}
-                                    className="group relative block w-full mt-2"
-                                    title="Click to view full size"
-                                  >
-                                    <img
-                                      src={scoresheet.imageUrl}
-                                      alt={scoresheet.fileName || 'Score Sheet'}
-                                      className="w-full h-32 object-contain rounded border border-border bg-white transition group-hover:opacity-90"
-                                    />
-                                    <span className="absolute inset-0 flex items-center justify-center rounded bg-black/0 opacity-0 transition group-hover:bg-black/10 group-hover:opacity-100">
-                                      <span className="inline-flex items-center gap-1 rounded bg-black/70 px-2 py-1 text-xs font-medium text-white">
-                                        <ZoomIn className="h-3.5 w-3.5" /> View
-                                      </span>
-                                    </span>
-                                  </button>
-                                ) : (
-                                  <div className="w-full h-32 bg-muted rounded border border-border mt-2 flex items-center justify-center">
-                                    <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                                  </div>
-                                )}
-                                {scoresheet.divisions && scoresheet.divisions.length > 0 && (
-                                  <div className="mt-2">
-                                    <p className="text-xs text-muted-foreground mb-1">Divisions:</p>
-                                    <div className="flex flex-wrap gap-1">
-                                      {scoresheet.divisions.map((div, divIdx) => (
-                                        <Badge key={divIdx} variant="secondary" className="text-xs">
-                                          {typeof div === 'object' ? (div.division || div.name || div.id) : div}
-                                        </Badge>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      {/* Score sheets live on the Results page, not in Event Highlights. */}
 
                       {/* All Divisions Summary */}
 
@@ -1349,87 +1382,7 @@ const EventDetailPage = () => {
           </div>
 
           <div className="space-y-8">
-            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.3 }}>
-              <Card className="bg-secondary border-border">
-                <CardHeader>
-                  <CardTitle>Actions</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {/* Book Stalls, RV & Supplies — only when the organizer has published it. */}
-                  {event.isFromProjects && projectData?.moduleStatuses?.housing === 'published' && (
-                    <Button asChild className="w-full bg-blue-600 hover:bg-blue-700">
-                      <Link to={`/show/${event.id}/book`}>
-                        <Building2 className="h-4 w-4 mr-2" /> Book Stalls, RV &amp; Supplies
-                      </Link>
-                    </Button>
-                  )}
-                  {/* Stalling Chart — only when the organizer has published it (Assign
-                      Stalls tab → Publish Chart). */}
-                  {event.isFromProjects && projectData?.stallingService?.chartPublish?.enabled &&
-                    (projectData.stallingService.chartPublish.showStalls !== false || projectData.stallingService.chartPublish.showRv !== false) && (
-                    <Button asChild variant="outline" className="w-full">
-                      <Link to={`/show/${event.id}/stalling-chart`}>
-                        <MapPin className="h-4 w-4 mr-2" />
-                        {projectData.stallingService.chartPublish.showStalls === false ? 'View RV / Camping Chart'
-                          : projectData.stallingService.chartPublish.showRv === false ? 'View Stalling Chart'
-                          : 'View Stalling & RV Chart'}
-                      </Link>
-                    </Button>
-                  )}
-                  {/* Order Hay & Shavings — live at-show reorder. Shows when housing is
-                      published AND the organizer stocks supplies (hay/shavings/etc). */}
-                  {event.isFromProjects &&
-                    projectData?.moduleStatuses?.housing === 'published' &&
-                    (projectData?.stallingService?.supplies || []).length > 0 && (
-                    <Button asChild className="w-full bg-amber-600 hover:bg-amber-700">
-                      <Link to={`/show/${event.id}/order-supplies`}>
-                        <ShoppingCart className="h-4 w-4 mr-2" /> Order Hay &amp; Shavings
-                      </Link>
-                    </Button>
-                  )}
-                  {/* Pattern book: a future Publication Date holds it back with a "posted on" note;
-                      otherwise a button that jumps to the patterns below. */}
-                  {patternPublished && (
-                    patternsScheduled ? (
-                      <div className="w-full text-center text-sm text-muted-foreground p-3 bg-secondary rounded-md flex items-center justify-center gap-2">
-                        <Calendar className="h-4 w-4" /> Patterns posted on {publicationDateLabel}
-                      </div>
-                    ) : (
-                      <Button
-                        className="w-full bg-green-600 hover:bg-green-700"
-                        onClick={() => document.getElementById('event-patterns')?.scrollIntoView({ behavior: 'smooth' })}
-                      >
-                        <BookOpen className="h-4 w-4 mr-2" /> View Pattern Book
-                      </Button>
-                    )
-                  )}
-                  {getPatternStatus()}
-                  {/* Results: the completed score sheets the show office posted from the
-                      arena. Only offered once the show itself is published — the page
-                      re-checks that too, so a shared link cannot leak early results. */}
-                  {event.isFromProjects && resultsPublished && (
-                    <Button asChild className="w-full bg-purple-600 hover:bg-purple-700">
-                      <Link to={`/event-results/${event.id}`}>
-                        <Trophy className="h-4 w-4 mr-2" /> Results &amp; Score Sheets
-                      </Link>
-                    </Button>
-                  )}
-                  {(event.website || event.show_website || event.showWebsite) && (
-                    <Button asChild variant="outline" className="w-full">
-                      <a href={event.website || event.show_website || event.showWebsite} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-4 w-4 mr-2" /> Visit Official Website
-                      </a>
-                    </Button>
-                  )}
-                  <p className="text-xs text-muted-foreground pt-2 text-center">Share this event:</p>
-                   <div className="flex justify-center gap-2">
-                      <Button variant="outline" size="icon" onClick={() => handleShare('Twitter')}><Twitter className="h-4 w-4" /></Button>
-                      <Button variant="outline" size="icon" onClick={() => handleShare('Facebook')}><Facebook className="h-4 w-4" /></Button>
-                      <Button variant="outline" size="icon" onClick={() => handleShare('Link')}><Share2 className="h-4 w-4" /></Button>
-                   </div>
-                </CardContent>
-              </Card>
-            </motion.div>
+            <div className="hidden lg:block">{actionsCard}</div>
 
              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.8, delay: 0.5 }}>
               <Card className="bg-secondary border-border">

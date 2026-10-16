@@ -634,6 +634,24 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
                           </div>
                         )}
 
+                        {/* Expenses the show pays directly — not part of the reimbursement total */}
+                        {Object.keys(financials.directBreakdown).length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Paid directly by the show:</span>
+                            {Object.keys(financials.directBreakdown).map((expId) => {
+                              const meta = expenseTypeMeta[expId];
+                              if (!meta) return null;
+                              const Icon = meta.icon;
+                              return (
+                                <span key={expId} className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-md bg-blue-50 dark:bg-blue-950/30">
+                                  <Icon className="h-3 w-3 text-muted-foreground" />
+                                  {meta.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
                         {/* Contract Preview */}
                         <div className="whitespace-pre-wrap font-mono text-xs p-4 bg-muted/30 rounded-lg border max-h-[600px] overflow-y-auto leading-relaxed">
                           {renderResolvedPreview(contractText)}

@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin } from 'lucide-react';
-import { currency } from '@/lib/contractUtils';
+import { currency, isDirectExpense } from '@/lib/contractUtils';
 
 const OverviewTab = ({ personnel, travelData, contractSettings }) => {
 
@@ -13,6 +13,26 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
     if (!expense?.reimbursed) return 0;
     // Per-day expenses use 'total', lump-sum use 'max_value'
     return parseFloat(expense.total) || parseFloat(expense.max_value) || 0;
+  };
+
+  // Who buys it: the show (Direct Show Expense) or the staff member (reimbursed later).
+  // Nothing is shown when the expense switch is off in Officials & Staff.
+  const buyerLabel = (member, expenseKey) => {
+    const expense = member.reimbursable_expenses?.[expenseKey];
+    if (!expense?.reimbursed) return null;
+    return isDirectExpense(expense) ? 'Show buys' : 'Staff buys, reimbursed';
+  };
+
+  const CostCell = ({ member, cost, expenseKey }) => {
+    const buyer = buyerLabel(member, expenseKey);
+    return (
+      <td className="px-4 py-3 text-right">
+        {cost ? currency(cost) : '—'}
+        {buyer && (
+          <span className={`block text-[10px] ${buyer === 'Show buys' ? 'text-sky-600' : 'text-muted-foreground'}`}>{buyer}</span>
+        )}
+      </td>
+    );
   };
 
   const getFlightCost = (member) => {
@@ -156,10 +176,10 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
                         <td className="px-4 py-3 text-muted-foreground">{member.roleName}</td>
                         <td className="px-4 py-3">{travelStart || '—'}</td>
                         <td className="px-4 py-3">{travelEnd || '—'}</td>
-                        <td className="px-4 py-3 text-right">{getFlightCost(member) ? currency(getFlightCost(member)) : '—'}</td>
-                        <td className="px-4 py-3 text-right">{getHotelCost(member) ? currency(getHotelCost(member)) : '—'}</td>
-                        <td className="px-4 py-3 text-right">{getRentalCost(member) ? currency(getRentalCost(member)) : '—'}</td>
-                        <td className="px-4 py-3 text-right">{getMileageCost(member) ? currency(getMileageCost(member)) : '—'}</td>
+                        <CostCell member={member} cost={getFlightCost(member)} expenseKey="airfare" />
+                        <CostCell member={member} cost={getHotelCost(member)} expenseKey="hotel" />
+                        <CostCell member={member} cost={getRentalCost(member)} expenseKey="rentalCar" />
+                        <CostCell member={member} cost={getMileageCost(member)} expenseKey="mileage" />
                         <td className="px-4 py-3 text-right font-medium">{total ? currency(total) : '—'}</td>
                         <td className="px-4 py-3 text-center">
                           {hasBooking ? (

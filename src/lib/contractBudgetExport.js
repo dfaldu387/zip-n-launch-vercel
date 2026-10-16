@@ -20,7 +20,7 @@ const EXPENSE_COLUMNS = [
 ];
 
 // Numeric columns that get summed in the totals row
-const SUM_KEYS = ['Days', 'Day Pay', ...EXPENSE_COLUMNS.map(e => e.label), 'Expenses', 'Total'];
+const SUM_KEYS = ['Days', 'Day Pay', ...EXPENSE_COLUMNS.map(e => e.label), 'Expenses', 'Paid by Show', 'Total'];
 
 // Async so xlsx (~290 KB) is fetched on the export click rather than shipped
 // with the budgeting page.
@@ -48,7 +48,8 @@ export const exportBudgetToExcel = async (formData) => {
     }
 
     row['Expenses'] = fin.totalExpenses;
-    row['Total'] = fin.totalCompensation;
+    row['Paid by Show'] = fin.directExpenses;
+    row['Total'] = fin.totalCompensation + fin.directExpenses;
     return row;
   });
 

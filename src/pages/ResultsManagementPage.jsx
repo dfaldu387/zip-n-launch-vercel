@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet-async';
 import Navigation from '@/components/Navigation';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
+import { Loader2, FileText, Trophy } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
 import { ResultsDashboard } from '@/components/show-builder/results/ResultsDashboard';
@@ -14,6 +15,7 @@ import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 
 const ResultsManagementPage = () => {
     const { showId } = useParams();
+    const navigate = useNavigate();
     const { user } = useAuth();
     const { toast } = useToast();
     const [shows, setShows] = useState([]);
@@ -93,6 +95,17 @@ const ResultsManagementPage = () => {
                         title="Results Entry"
                         backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'}
                     />
+
+                    {selectedShow && (
+                        <div className="mb-6 flex flex-wrap gap-2">
+                            <Button variant="outline" size="sm" onClick={() => navigate(`/horse-show-manager/patterns-scoresheets/${selectedShow.id}`)}>
+                                <FileText className="h-4 w-4 mr-2" /> Patterns &amp; Scoresheets
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => window.open(`/event-results/${selectedShow.id}`, '_blank')}>
+                                <Trophy className="h-4 w-4 mr-2" /> View public Results page
+                            </Button>
+                        </div>
+                    )}
 
                     {!showId && (
                         <div className="mb-6">

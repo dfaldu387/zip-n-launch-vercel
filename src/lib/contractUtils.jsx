@@ -387,33 +387,48 @@ export const flattenPersonnel = (formData) => {
   return result;
 };
 
+// An expense the show pays directly (not reimbursed to the person) is saved as
+// expense_type: 'direct'. Anything else — including old data with no type — is a reimbursement.
+export const isDirectExpense = (expense) => expense?.expense_type === 'direct';
+
+// Splits a person's switched-on expenses into reimbursed vs paid directly by the show.
+const splitExpenses = (member) => {
+  const expenseBreakdown = {};
+  const directBreakdown = {};
+  let totalExpenses = 0;
+  let directExpenses = 0;
+  for (const [expId, expense] of Object.entries(member.reimbursable_expenses || {})) {
+    if (!expense?.reimbursed) continue;
+    const meta = expenseTypeMeta[expId];
+    const amount = (meta?.isPerDay || meta?.isMileage)
+      ? (parseFloat(expense.total) || 0)
+      : (parseFloat(expense.max_value) || 0);
+    if (isDirectExpense(expense)) {
+      directBreakdown[expId] = amount;
+      directExpenses += amount;
+    } else {
+      expenseBreakdown[expId] = amount;
+      totalExpenses += amount;
+    }
+  }
+  return { expenseBreakdown, directBreakdown, totalExpenses, directExpenses };
+};
+
 export const calculateMemberFinancials = (member) => {
   const employmentDays = calculateDays(member.employment_start_date, member.employment_end_date);
   const dayFee = parseFloat(member.day_fee) || 0;
   const totalDayFee = employmentDays * dayFee;
 
-  const expenseBreakdown = {};
-  let totalExpenses = 0;
-
-  if (member.reimbursable_expenses) {
-    for (const [expId, expense] of Object.entries(member.reimbursable_expenses)) {
-      if (expense.reimbursed) {
-        const meta = expenseTypeMeta[expId];
-        const amount = (meta?.isPerDay || meta?.isMileage)
-          ? (parseFloat(expense.total) || 0)
-          : (parseFloat(expense.max_value) || 0);
-        expenseBreakdown[expId] = amount;
-        totalExpenses += amount;
-      }
-    }
-  }
+  const { expenseBreakdown, directBreakdown, totalExpenses, directExpenses } = splitExpenses(member);
 
   return {
     employmentDays,
     dayFee,
     totalDayFee,
     expenseBreakdown,
+    directBreakdown,
     totalExpenses,
+    directExpenses,
     totalCompensation: totalDayFee + totalExpenses,
     hasOvertime: member.has_overtime,
     overtimeThreshold: member.overtime_hours_threshold,
@@ -433,20 +448,20 @@ export const calculateStaffCost = (member) => {
   const hourlyPay = (parseFloat(member.hours_worked) || 0) * (parseFloat(member.hourly_rate) || 0);
   const overtimePay = (parseFloat(member.overtime_hours) || 0) * (parseFloat(member.overtime_rate_per_hour) || 0);
 
-  const expenseBreakdown = {};
-  let totalExpenses = 0;
-  for (const [expId, expense] of Object.entries(member.reimbursable_expenses || {})) {
-    if (!expense?.reimbursed) continue;
-    const meta = expenseTypeMeta[expId];
-    const amount = (meta?.isPerDay || meta?.isMileage)
-      ? (parseFloat(expense.total) || 0)
-      : (parseFloat(expense.max_value) || 0);
-    expenseBreakdown[expId] = amount;
-    totalExpenses += amount;
-  }
+  const { expenseBreakdown, directBreakdown, totalExpenses, directExpenses } = splitExpenses(member);
 
   const totalPay = dayPay + hourlyPay + overtimePay;
-  return { totalPay, totalExpenses, expenseBreakdown, totalCompensation: totalPay + totalExpenses };
+  // totalCompensation = what the person receives (pay + reimbursements).
+  // totalShowCost = what the show spends in all (also includes expenses it pays directly).
+  return {
+    totalPay,
+    totalExpenses,
+    directExpenses,
+    expenseBreakdown,
+    directBreakdown,
+    totalCompensation: totalPay + totalExpenses,
+    totalShowCost: totalPay + totalExpenses + directExpenses,
+  };
 };
 
 export const getTravelMethod = (member) => {
@@ -466,6 +481,7 @@ export const resolvePlaceholders = (templateText, member, formData) => {
   const expenseLabel = (expId) => {
     const expense = member.reimbursable_expenses?.[expId];
     if (!expense?.reimbursed) return 'N/A';
+    if (isDirectExpense(expense)) return 'Paid directly by the show';
     return currency(financials.expenseBreakdown[expId] || 0);
   };
 

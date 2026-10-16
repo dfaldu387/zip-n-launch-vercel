@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BookOpen, Loader2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, Loader2, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Navigation from '@/components/Navigation';
 import PatternBookDialogContent from '@/components/customer-portal/PatternBookDialogContent';
@@ -82,6 +82,10 @@ const ShowPatternsScoresheetsPage = () => {
             Back to show
           </Button>
           <span className="truncate text-sm text-muted-foreground">{showName} · Patterns &amp; Scoresheets</span>
+          <Button variant="outline" size="sm" className="ml-auto" onClick={() => navigate(`/horse-show-manager/results-management/${showId}`)}>
+            <Trophy className="mr-1.5 h-4 w-4" />
+            Results Entry
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1">

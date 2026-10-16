@@ -125,7 +125,7 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, assoc
         if (member.reimbursable_expenses) {
             for (const key in member.reimbursable_expenses) {
                 const expense = member.reimbursable_expenses[key];
-                if (expense.reimbursed) {
+                if (expense.reimbursed && expense.expense_type !== 'direct') {
                     const expenseType = expenseTypes.find(e => e.id === key);
                     if (expenseType?.isPerDay || expenseType?.isMileage) {
                         expensesTotal += parseFloat(expense.total) || 0;
@@ -286,7 +286,8 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, assoc
                         </div>
 
                         <div className="border-t pt-4 mt-4">
-                                <h5 className="font-semibold text-md mb-2">Reimbursable Expenses</h5>
+                                <h5 className="font-semibold text-md">Contract Expenses &amp; Reimbursements</h5>
+                                <p className="text-xs text-muted-foreground mb-2">Choose which expenses are reimbursed to this person and which are paid directly by the show.</p>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {expenseTypes.map(expense => {
                                     const currentExpense = member.reimbursable_expenses?.[expense.id];
@@ -301,6 +302,19 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, assoc
                                         </div>
                                         {currentExpense?.reimbursed && (
                                             <div className="pt-2 space-y-2">
+                                                <div className="flex items-center gap-2">
+                                                    <Label htmlFor={`type-${member.id}-${expense.id}`} className="text-xs whitespace-nowrap">Expense Type</Label>
+                                                    <select
+                                                        id={`type-${member.id}-${expense.id}`}
+                                                        disabled={memberFrozen}
+                                                        className={cn("h-9 w-full rounded-md border border-input bg-background px-2 text-sm", currentExpense.expense_type === 'direct' && "bg-blue-50 dark:bg-blue-950/30", memberFrozen && "bg-muted")}
+                                                        value={currentExpense.expense_type === 'direct' ? 'direct' : 'reimbursement'}
+                                                        onChange={(e) => handleExpenseChange(expense.id, 'expense_type', e.target.value)}
+                                                    >
+                                                        <option value="reimbursement">Reimbursement</option>
+                                                        <option value="direct">Direct Show Expense</option>
+                                                    </select>
+                                                </div>
                                                 {expense.isMileage ? (
                                                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                                                         <div className="space-y-1">
@@ -593,7 +607,7 @@ export const Step2_OfficialsStaff = ({ formData, setFormData }) => {
         if (member.reimbursable_expenses) {
             for (const key in member.reimbursable_expenses) {
                 const expense = member.reimbursable_expenses[key];
-                if (expense.reimbursed) {
+                if (expense.reimbursed && expense.expense_type !== 'direct') {
                     const expenseType = expenseTypes.find(e => e.id === key);
                     if (expenseType?.isPerDay || expenseType?.isMileage) {
                         expensesTotal += parseFloat(expense.total) || 0;

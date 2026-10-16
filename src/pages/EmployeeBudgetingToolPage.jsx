@@ -151,31 +151,38 @@ const BudgetDashboard = ({ show, contractProject }) => {
     const employeeCosts = useMemo(() => {
         const personnel = usingContractFallback ? flattenPersonnel(cpd) : showPersonnel;
         let totalDayPay = 0;
-        let totalExpenses = 0;
-        let totalCompensation = 0;
+        let totalExpenses = 0;      // reimbursed to staff
+        let directExpenses = 0;     // paid directly by the show
+        let totalCompensation = 0;  // total cost to the show: pay + reimbursed + direct
         const byRole = {};
         const byExpenseType = {};
+        const byDirectType = {};
 
         for (const member of personnel) {
             const fin = calculateStaffCost(member);
             totalDayPay += fin.totalPay;
             totalExpenses += fin.totalExpenses;
-            totalCompensation += fin.totalCompensation;
+            directExpenses += fin.directExpenses;
+            totalCompensation += fin.totalShowCost;
 
             const role = member.roleName || 'Other';
-            if (!byRole[role]) byRole[role] = { count: 0, total: 0, dayPay: 0, expenses: 0 };
+            if (!byRole[role]) byRole[role] = { count: 0, total: 0, dayPay: 0, expenses: 0, direct: 0 };
             byRole[role].count += 1;
-            byRole[role].total += fin.totalCompensation;
+            byRole[role].total += fin.totalShowCost;
             byRole[role].dayPay += fin.totalPay;
             byRole[role].expenses += fin.totalExpenses;
+            byRole[role].direct += fin.directExpenses;
 
             // Aggregate expense types
             for (const [expId, amount] of Object.entries(fin.expenseBreakdown)) {
                 byExpenseType[expId] = (byExpenseType[expId] || 0) + amount;
             }
+            for (const [expId, amount] of Object.entries(fin.directBreakdown)) {
+                byDirectType[expId] = (byDirectType[expId] || 0) + amount;
+            }
         }
 
-        return { personnelCount: personnel.length, totalDayPay, totalExpenses, totalCompensation, byRole, byExpenseType, personnel };
+        return { personnelCount: personnel.length, totalDayPay, totalExpenses, directExpenses, totalCompensation, byRole, byExpenseType, byDirectType, personnel };
     }, [cpd, showPersonnel, usingContractFallback]);
 
     const employeeTotal = employeeCosts.totalCompensation;
@@ -232,7 +239,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <KpiCard title="Total Staff Costs" value={currency(employeeTotal)} subtitle={`${employeeCosts.personnelCount} personnel`} icon={Users} color="purple" />
                 <KpiCard title="Day Pay" value={currency(employeeCosts.totalDayPay)} subtitle="Compensation fees" icon={Briefcase} color="blue" />
-                <KpiCard title="Travel & Expenses" value={currency(employeeCosts.totalExpenses)} subtitle="Reimbursable costs" icon={TrendingDown} color="amber" />
+                <KpiCard title="Travel & Expenses" value={currency(employeeCosts.totalExpenses + employeeCosts.directExpenses)} subtitle={`${currency(employeeCosts.totalExpenses)} reimbursed · ${currency(employeeCosts.directExpenses)} paid by show`} icon={TrendingDown} color="amber" />
                 <KpiCard title="Roles" value={String(Object.keys(employeeCosts.byRole).length)} subtitle={`${employeeCosts.personnelCount} staff total`} icon={Users} color="green" />
             </div>
 
@@ -258,7 +265,8 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                                 <AccordionTrigger className="text-sm hover:no-underline">{role} — {data.count} staff</AccordionTrigger>
                                                 <AccordionContent>
                                                     <BudgetLine label="Day Pay" amount={data.dayPay} indent />
-                                                    <BudgetLine label="Travel & Expenses" amount={data.expenses} indent />
+                                                    <BudgetLine label="Reimbursed Expenses" amount={data.expenses} indent />
+                                                    <BudgetLine label="Paid Directly by Show" amount={data.direct} indent />
                                                     <BudgetLine label={`Total ${role} Costs`} amount={data.total} bold />
                                                 </AccordionContent>
                                             </AccordionItem>
@@ -273,16 +281,30 @@ const BudgetDashboard = ({ show, contractProject }) => {
                     </Card>
 
                     {/* Expense Type Breakdown */}
-                    {Object.keys(employeeCosts.byExpenseType).length > 0 && (
+                    {(Object.keys(employeeCosts.byExpenseType).length > 0 || Object.keys(employeeCosts.byDirectType).length > 0) && (
                         <Card>
                             <CardHeader className="pb-3">
                                 <CardTitle className="text-base flex items-center gap-2"><Receipt className="h-4 w-4 text-amber-600" /> Travel & Expense Breakdown</CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-3">
-                                {Object.entries(employeeCosts.byExpenseType).map(([expId, amount]) => (
-                                    <BudgetBar key={expId} label={EXPENSE_LABELS[expId] || expId} amount={amount} total={employeeCosts.totalExpenses} color="bg-amber-500" />
-                                ))}
-                                <BudgetLine label="TOTAL TRAVEL & EXPENSES" amount={employeeCosts.totalExpenses} bold color="text-amber-600" />
+                                {Object.keys(employeeCosts.byExpenseType).length > 0 && (
+                                    <>
+                                        <p className="text-xs font-semibold text-muted-foreground uppercase">Reimbursed to staff</p>
+                                        {Object.entries(employeeCosts.byExpenseType).map(([expId, amount]) => (
+                                            <BudgetBar key={expId} label={EXPENSE_LABELS[expId] || expId} amount={amount} total={employeeCosts.totalExpenses} color="bg-amber-500" />
+                                        ))}
+                                        <BudgetLine label="TOTAL REIMBURSED" amount={employeeCosts.totalExpenses} bold color="text-amber-600" />
+                                    </>
+                                )}
+                                {Object.keys(employeeCosts.byDirectType).length > 0 && (
+                                    <>
+                                        <p className="text-xs font-semibold text-muted-foreground uppercase pt-2">Paid directly by the show</p>
+                                        {Object.entries(employeeCosts.byDirectType).map(([expId, amount]) => (
+                                            <BudgetBar key={expId} label={EXPENSE_LABELS[expId] || expId} amount={amount} total={employeeCosts.directExpenses} color="bg-sky-500" />
+                                        ))}
+                                        <BudgetLine label="TOTAL PAID DIRECTLY BY SHOW" amount={employeeCosts.directExpenses} bold color="text-sky-600" />
+                                    </>
+                                )}
                             </CardContent>
                         </Card>
                     )}
@@ -301,7 +323,8 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                                 <th className="text-left px-3 py-2 font-medium text-xs uppercase">Name</th>
                                                 <th className="text-left px-3 py-2 font-medium text-xs uppercase">Role</th>
                                                 <th className="text-right px-3 py-2 font-medium text-xs uppercase">Day Pay</th>
-                                                <th className="text-right px-3 py-2 font-medium text-xs uppercase">Expenses</th>
+                                                <th className="text-right px-3 py-2 font-medium text-xs uppercase">Reimbursed</th>
+                                                <th className="text-right px-3 py-2 font-medium text-xs uppercase">Paid by Show</th>
                                                 <th className="text-right px-3 py-2 font-medium text-xs uppercase">Total</th>
                                             </tr>
                                         </thead>
@@ -314,7 +337,8 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                                         <td className="px-3 py-2 text-muted-foreground">{member.roleName || ''}</td>
                                                         <td className="px-3 py-2 text-right">{currency(fin.totalPay)}</td>
                                                         <td className="px-3 py-2 text-right">{currency(fin.totalExpenses)}</td>
-                                                        <td className="px-3 py-2 text-right font-semibold">{currency(fin.totalCompensation)}</td>
+                                                        <td className="px-3 py-2 text-right">{currency(fin.directExpenses)}</td>
+                                                        <td className="px-3 py-2 text-right font-semibold">{currency(fin.totalShowCost)}</td>
                                                     </tr>
                                                 );
                                             })}
@@ -322,6 +346,7 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                                 <td className="px-3 py-2" colSpan={2}>TOTAL</td>
                                                 <td className="px-3 py-2 text-right">{currency(employeeCosts.totalDayPay)}</td>
                                                 <td className="px-3 py-2 text-right">{currency(employeeCosts.totalExpenses)}</td>
+                                                <td className="px-3 py-2 text-right">{currency(employeeCosts.directExpenses)}</td>
                                                 <td className="px-3 py-2 text-right">{currency(employeeTotal)}</td>
                                             </tr>
                                         </tbody>
@@ -345,8 +370,12 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                 <span className="font-medium">{currency(employeeCosts.totalDayPay)}</span>
                             </div>
                             <div className="flex justify-between text-sm">
-                                <span className="flex items-center gap-1.5"><TrendingDown className="h-3.5 w-3.5 text-amber-500" /> Travel & Expenses</span>
+                                <span className="flex items-center gap-1.5"><TrendingDown className="h-3.5 w-3.5 text-amber-500" /> Reimbursed Expenses</span>
                                 <span className="font-medium">{currency(employeeCosts.totalExpenses)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                                <span className="flex items-center gap-1.5"><TrendingDown className="h-3.5 w-3.5 text-sky-500" /> Paid Directly by Show</span>
+                                <span className="font-medium">{currency(employeeCosts.directExpenses)}</span>
                             </div>
                             <div className="border-t pt-2 mt-2 flex justify-between text-sm font-semibold">
                                 <span>Total</span>
@@ -357,9 +386,16 @@ const BudgetDashboard = ({ show, contractProject }) => {
                                     <div className="bg-blue-500 flex items-center justify-center text-[10px] text-white font-medium" style={{ width: `${(employeeCosts.totalDayPay / employeeTotal * 100)}%` }}>
                                         Pay
                                     </div>
-                                    <div className="bg-amber-500 flex items-center justify-center text-[10px] text-white font-medium" style={{ width: `${(employeeCosts.totalExpenses / employeeTotal * 100)}%` }}>
-                                        Travel
-                                    </div>
+                                    {employeeCosts.totalExpenses > 0 && (
+                                        <div className="bg-amber-500 flex items-center justify-center text-[10px] text-white font-medium" style={{ width: `${(employeeCosts.totalExpenses / employeeTotal * 100)}%` }}>
+                                            Travel
+                                        </div>
+                                    )}
+                                    {employeeCosts.directExpenses > 0 && (
+                                        <div className="bg-sky-500 flex items-center justify-center text-[10px] text-white font-medium" style={{ width: `${(employeeCosts.directExpenses / employeeTotal * 100)}%` }}>
+                                            Direct
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </CardContent>

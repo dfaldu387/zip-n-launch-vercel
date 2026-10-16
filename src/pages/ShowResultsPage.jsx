@@ -26,6 +26,7 @@ const ShowResultsPage = () => {
     const { toast } = useToast();
     const [project, setProject] = useState(null);
     const [sheets, setSheets] = useState([]);
+    const [published, setPublished] = useState(false);
     const [status, setStatus] = useState('loading');
     const [error, setError] = useState(null);
     const [discipline, setDiscipline] = useState('');
@@ -80,6 +81,7 @@ const ShowResultsPage = () => {
             }
 
             setSheets(sheets);
+            setPublished(!!posted?.published);
             setStatus('ready');
         };
 
@@ -110,6 +112,17 @@ const ShowResultsPage = () => {
     }, [sheets, discipline, judge, search]);
 
     const showName = project?.project_name || 'Show';
+
+    // Official placings / scores typed into Results Entry. Shown only once the show
+    // is published — the same gate the score sheets use.
+    const finalResults = useMemo(() => {
+        if (!published) return [];
+        const all = project?.project_data?.results?.classResults;
+        if (!all) return [];
+        return Object.values(all)
+            .filter(r => r.status === 'final')
+            .sort((a, b) => (a.classNumber || 0) - (b.classNumber || 0));
+    }, [published, project]);
 
     // Sheets posted since the private bucket went in have no permanent address, so
     // the link is fetched on click and expires afterwards. Older ones still carry
@@ -170,7 +183,7 @@ const ShowResultsPage = () => {
                         </Card>
                     )}
 
-                    {status === 'ready' && sheets.length === 0 && (
+                    {status === 'ready' && sheets.length === 0 && finalResults.length === 0 && (
                         <Card>
                             <CardContent className="py-12 text-center space-y-3">
                                 <FileText className="h-10 w-10 mx-auto text-muted-foreground opacity-40" />
@@ -178,6 +191,49 @@ const ShowResultsPage = () => {
                                 <p className="text-sm text-muted-foreground">
                                     Check back once the classes have been judged.
                                 </p>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {status === 'ready' && finalResults.length > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Class Placings</CardTitle>
+                                <CardDescription>Official results for {finalResults.length} class{finalResults.length !== 1 ? 'es' : ''}</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {finalResults.map((result, idx) => (
+                                    <div key={idx} className="rounded-lg border bg-background/50 overflow-hidden">
+                                        <div className="px-4 py-2 bg-muted/50 font-medium text-sm flex items-center gap-2">
+                                            <span className="font-mono text-muted-foreground">#{result.classNumber}</span>
+                                            <span>{result.className}</span>
+                                            {result.scoringType === 'timed' && <Badge variant="outline" className="text-[10px]">Timed</Badge>}
+                                            {result.scoringType === 'scored' && <Badge variant="outline" className="text-[10px]">Scored</Badge>}
+                                        </div>
+                                        <table className="w-full text-sm">
+                                            <thead>
+                                                <tr className="text-xs text-muted-foreground border-b">
+                                                    <th className="px-4 py-1 text-left w-14">Place</th>
+                                                    <th className="px-4 py-1 text-left">Rider</th>
+                                                    <th className="px-4 py-1 text-left">Horse</th>
+                                                    {result.scoringType === 'scored' && <th className="px-4 py-1 text-left w-20">Score</th>}
+                                                    {result.scoringType === 'timed' && <th className="px-4 py-1 text-left w-20">Time</th>}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {(result.entries || []).filter(e => e.riderName?.trim()).map((entry, eIdx) => (
+                                                    <tr key={eIdx} className="border-b last:border-0">
+                                                        <td className="px-4 py-1.5 font-bold text-muted-foreground">{entry.placing}</td>
+                                                        <td className="px-4 py-1.5">{entry.riderName}</td>
+                                                        <td className="px-4 py-1.5 text-muted-foreground">{entry.horseName || '—'}</td>
+                                                        {result.scoringType === 'scored' && <td className="px-4 py-1.5 font-mono">{entry.score ?? '—'}</td>}
+                                                        {result.scoringType === 'timed' && <td className="px-4 py-1.5 font-mono">{entry.time ?? '—'}</td>}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ))}
                             </CardContent>
                         </Card>
                     )}
