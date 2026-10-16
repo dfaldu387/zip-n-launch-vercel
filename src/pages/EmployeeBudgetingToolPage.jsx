@@ -22,6 +22,7 @@ import { flattenPersonnel, calculateStaffCost } from '@/lib/contractUtils';
 import { ShowOfficialsStaffPanel } from '@/components/shared/ShowOfficialsStaffPanel';
 import { exportBudgetToExcel } from '@/lib/contractBudgetExport';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { EmployeeCloseout } from '@/components/budgeting/EmployeeCloseout';
 
 const currency = (val) => {
     const num = parseFloat(val);
@@ -132,7 +133,7 @@ const ShowPicker = ({ shows, onSelect }) => {
 
 // ── Budget Dashboard ──
 
-const BudgetDashboard = ({ show, contractProject }) => {
+const BudgetDashboard = ({ show, contractProject, readOnly }) => {
     const pd = show.project_data || {};
     const cpd = contractProject?.project_data || {};
 
@@ -419,6 +420,9 @@ const BudgetDashboard = ({ show, contractProject }) => {
                     </Card>
                 </div>
             </div>
+
+            {/* Employee Closeout: budget row vs actual row for each person */}
+            <EmployeeCloseout show={show} personnel={employeeCosts.personnel} readOnly={readOnly} />
         </div>
     );
 };
@@ -511,7 +515,7 @@ const EmployeeBudgetingToolPage = () => {
                     {selectedShow && (
                         <div className="mt-6">
                             <ModuleLockGuard isLocked={isReadOnly} moduleName="Employee Budgeting Tool">
-                                <BudgetDashboard show={selectedShow} contractProject={linkedContract} />
+                                <BudgetDashboard show={selectedShow} contractProject={linkedContract} readOnly={isReadOnly} />
                             </ModuleLockGuard>
                         </div>
                     )}

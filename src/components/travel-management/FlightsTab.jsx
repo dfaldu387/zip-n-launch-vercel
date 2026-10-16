@@ -5,8 +5,11 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Plane } from 'lucide-react';
 import { currency } from '@/lib/contractUtils';
+import DatesLockButton from './DatesLockButton';
+import ReceiptsField from './ReceiptsField';
+import ExpenseTypeSelect from './ExpenseTypeSelect';
 
-const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage }) => {
+const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange }) => {
 
   const updateFlight = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -47,11 +50,17 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                       <p className="text-xs text-muted-foreground">{member.roleName}</p>
                     </div>
                   </div>
-                  {hasFlight ? (
+                  <div className="flex items-center gap-2">
+                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.airfare} disabled={budgetFrozen} onChange={(v) => onExpenseTypeChange?.(member.id, 'airfare', v)} />
+                    <DatesLockButton locked={!!flight.datesLocked} onToggle={() => updateFlight(member.id, 'datesLocked', !flight.datesLocked)} />
+                    {hasFlight ? (
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>
-                  ) : (
+
+                    ) : (
                     <Badge variant="secondary">Not Set</Badge>
-                  )}
+
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="pt-4">
@@ -94,6 +103,7 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                       type="datetime-local"
                       value={flight.departureTime || ''}
                       onChange={(e) => updateFlight(member.id, 'departureTime', e.target.value)}
+                      disabled={!!flight.datesLocked}
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -102,10 +112,11 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                       type="datetime-local"
                       value={flight.arrivalTime || ''}
                       onChange={(e) => updateFlight(member.id, 'arrivalTime', e.target.value)}
+                      disabled={!!flight.datesLocked}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Cost</Label>
+                    <Label className="text-xs">Budget ($)</Label>
                     <Input
                       type="number"
                       min="0"
@@ -118,6 +129,30 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                     />
                   </div>
                   <div className="space-y-1.5">
+                    <Label className="text-xs">Actual Expense ($)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={flight.actualCost ?? ''}
+                      onChange={(e) => updateFlight(member.id, 'actualCost', e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Variance ($)</Label>
+                    {(() => {
+                      const hasActual = flight.actualCost !== undefined && flight.actualCost !== '' && flight.actualCost !== null;
+                      const variance = hasActual ? (parseFloat(flight.actualCost) || 0) - (parseFloat(flight.cost) || 0) : null;
+                      const tone = variance === null || variance === 0 ? '' : variance < 0 ? 'text-green-600' : 'text-red-600';
+                      return (
+                        <div className={`flex h-10 items-center rounded-md border bg-muted px-3 text-sm font-medium ${tone}`}>
+                          {variance === null ? '—' : `${variance < 0 ? '−' : ''}${Math.abs(variance).toFixed(2)} ${variance < 0 ? '↓' : variance > 0 ? '↑' : ''}`}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Confirmation #</Label>
                     <Input
                       placeholder="e.g. ABC123"
@@ -125,6 +160,31 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                       onChange={(e) => updateFlight(member.id, 'confirmation', e.target.value)}
                     />
                   </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Return Departure Date/Time</Label>
+                    <Input
+                      type="datetime-local"
+                      value={flight.returnDepartureTime || ''}
+                      onChange={(e) => updateFlight(member.id, 'returnDepartureTime', e.target.value)}
+                      disabled={!!flight.datesLocked}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Return Arrival Date/Time</Label>
+                    <Input
+                      type="datetime-local"
+                      value={flight.returnArrivalTime || ''}
+                      onChange={(e) => updateFlight(member.id, 'returnArrivalTime', e.target.value)}
+                      disabled={!!flight.datesLocked}
+                    />
+                  </div>
+                  <ReceiptsField
+                    storageKey={storageKey}
+                    receipts={flight.receipts || []}
+                    onChange={(next) => updateFlight(member.id, 'receipts', next)}
+                    notes={flight.notes}
+                    onNotesChange={(v) => updateFlight(member.id, 'notes', v)}
+                  />
                 </div>
               </CardContent>
             </Card>

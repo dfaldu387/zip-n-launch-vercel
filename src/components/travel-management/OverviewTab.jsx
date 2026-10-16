@@ -2,6 +2,61 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin } from 'lucide-react';
 import { currency, isDirectExpense } from '@/lib/contractUtils';
+import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines } from '@/lib/travelActuals';
+
+// Over budget is red, under budget is green; "—" until an actual has been entered.
+const VarianceBadge = ({ value }) => {
+  if (value === null) return <span className="text-muted-foreground">—</span>;
+  if (value === 0) return <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">On budget</span>;
+  const over = value > 0;
+  return (
+    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${over ? 'bg-red-500/10 text-red-600' : 'bg-green-500/10 text-green-600'}`}>
+      {over ? '' : '−'}{currency(Math.abs(value))} {over ? '↑' : '↓'}
+    </span>
+  );
+};
+
+// "2 of 3" with a small bar, so it is clear how much of the budget has real numbers behind it.
+const EnteredMeter = ({ counted, total }) => {
+  if (total === 0) return <span className="text-muted-foreground">—</span>;
+  const pct = Math.round((counted / total) * 100);
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs text-muted-foreground">{counted} of {total}</span>
+    </div>
+  );
+};
+
+const WhoPaysCard = ({ title, hint, accent, summary }) => (
+  <Card className={accent}>
+    <CardContent className="pt-4 pb-4">
+      <p className="font-semibold">{title}</p>
+      <p className="text-xs text-muted-foreground mb-3">{hint}</p>
+      {summary.total === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing in this group yet.</p>
+      ) : (
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <div>
+            <p className="text-xs text-muted-foreground">Budget</p>
+            <p className="text-lg font-bold">{currency(summary.budget)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Actual so far</p>
+            <p className="text-lg font-bold">{summary.actual === null ? '—' : currency(summary.actual)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Variance</p>
+            <div className="pt-1"><VarianceBadge value={summary.variance} /></div>
+          </div>
+        </div>
+      )}
+      {summary.total > 0 && <div className="mt-3"><EnteredMeter counted={summary.counted} total={summary.total} /></div>}
+    </CardContent>
+  </Card>
+);
 
 const OverviewTab = ({ personnel, travelData, contractSettings }) => {
 
@@ -68,6 +123,28 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
   const grandTotalMileage = personnel.reduce((s, m) => s + getMileageCost(m), 0);
   const grandTotal = grandTotalFlights + grandTotalHotels + grandTotalRentals + grandTotalMileage;
 
+  // One line per person per travel type: its budget (same number as the table below) and its
+  // actual once one has been entered. Rows, totals and "who pays" are all built from these.
+  const allLines = personnel.flatMap((m) => {
+    const t = getPersonTravel(m.id);
+    return [
+      { type: 'flights', key: 'airfare', budget: getFlightCost(m), actual: flightFigures(t.flight).actual },
+      { type: 'hotels', key: 'hotel', budget: getHotelCost(m), actual: hotelFigures(t.hotel).actual },
+      { type: 'rentals', key: 'rentalCar', budget: getRentalCost(m), actual: rentalFigures(t.rentalCar).actual },
+      { type: 'mileage', key: 'mileage', budget: getMileageCost(m), actual: mileageFigures(t.mileage).actual },
+    ].map((line) => ({ ...line, direct: isDirectExpense(m.reimbursable_expenses?.[line.key]) }));
+  });
+  const rowFor = (type) => summarizeLines(allLines.filter((l) => l.type === type));
+  const comparisonRows = [
+    { label: 'Flights', Icon: Plane, tone: 'text-blue-500', ...rowFor('flights') },
+    { label: 'Hotels', Icon: Hotel, tone: 'text-amber-500', ...rowFor('hotels') },
+    { label: 'Rental Cars', Icon: Car, tone: 'text-green-500', ...rowFor('rentals') },
+    { label: 'Mileage', Icon: MapPin, tone: 'text-purple-500', ...rowFor('mileage') },
+  ];
+  const comparisonTotal = summarizeLines(allLines);
+  const paidByShow = summarizeLines(allLines.filter((l) => l.direct));
+  const reimbursed = summarizeLines(allLines.filter((l) => !l.direct));
+
   const completedCount = personnel.filter((m) => {
     const t = getPersonTravel(m.id);
     return t.flight?.airline || t.hotel?.hotelName || t.rentalCar?.company;
@@ -130,6 +207,62 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
             Event: {contractSettings.effectiveDate} to {contractSettings.expirationDate}
           </span>
         )}
+      </div>
+
+      {/* Budget vs Actual */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Budget vs Actual</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            The budget stays fixed and matches the contracts. Actuals are typed on the Flights, Hotels, Rental Cars and Mileage tabs.
+          </p>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="text-left px-4 py-3 font-medium">Travel</th>
+                  <th className="text-right px-4 py-3 font-medium">Budget</th>
+                  <th className="text-right px-4 py-3 font-medium">Actual so far</th>
+                  <th className="text-right px-4 py-3 font-medium">Variance</th>
+                  <th className="text-left px-4 py-3 font-medium w-44">Actuals entered</th>
+                </tr>
+              </thead>
+              <tbody>
+                {comparisonRows.map(({ label, Icon, tone, ...row }) => (
+                  <tr key={label} className="border-b">
+                    <td className="px-4 py-3 font-medium">
+                      <span className="inline-flex items-center gap-2"><Icon className={`h-4 w-4 ${tone}`} />{label}</span>
+                    </td>
+                    <td className="px-4 py-3 text-right">{currency(row.budget)}</td>
+                    <td className="px-4 py-3 text-right">{row.actual === null ? '—' : currency(row.actual)}</td>
+                    <td className="px-4 py-3 text-right"><VarianceBadge value={row.variance} /></td>
+                    <td className="px-4 py-3"><EnteredMeter counted={row.counted} total={row.total} /></td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-muted/50 font-semibold">
+                  <td className="px-4 py-3">TOTAL</td>
+                  <td className="px-4 py-3 text-right">{currency(comparisonTotal.budget)}</td>
+                  <td className="px-4 py-3 text-right">{comparisonTotal.actual === null ? '—' : currency(comparisonTotal.actual)}</td>
+                  <td className="px-4 py-3 text-right"><VarianceBadge value={comparisonTotal.variance} /></td>
+                  <td className="px-4 py-3"><EnteredMeter counted={comparisonTotal.counted} total={comparisonTotal.total} /></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <p className="px-4 py-3 text-xs text-muted-foreground border-t">
+            Variance compares each actual with its own budget, so a line with no actual yet is never counted as a saving.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Who pays: Direct Show Expense vs Reimbursement */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <WhoPaysCard title="Paid by the show" hint="Direct Show Expense: the show pays the vendor." accent="border-sky-500/40 bg-sky-500/5" summary={paidByShow} />
+        <WhoPaysCard title="Reimbursed to staff" hint="Staff pay first and are paid back." accent="border-border" summary={reimbursed} />
       </div>
 
       {/* Employee Travel Overview Table */}

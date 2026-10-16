@@ -246,6 +246,40 @@ const TravelManagementPage = () => {
   // Each travel tab lists only the people whose box for that need is checked in
   // Officials & Staff. Anyone who already has details saved for that need stays listed
   // so nothing already entered disappears.
+  // Expense Type (Direct / Reimbursement) lives on the person in Officials & Staff, the same
+  // value Contract and Budgeting read. Travel edits that value instead of keeping its own.
+  const handleExpenseTypeChange = async (memberId, expenseKey, value) => {
+    if (!user) return;
+    const notFound = () => toast({ title: 'Could not change', description: 'This person is not on the Officials & Staff list.', variant: 'destructive' });
+    try {
+      if (showId) {
+        const { data: row, error: readError } = await supabase.from('projects').select('project_data').eq('id', showId).maybeSingle();
+        if (readError) throw readError;
+        const latest = row?.project_data || showProject?.project_data || {};
+        if (latest.isShowLocked === true) {
+          toast({ title: 'Show Locked', description: 'Unlock the show to change the expense type.', variant: 'destructive' });
+          return;
+        }
+        const next = applyExpenseType(latest, memberId, expenseKey, value);
+        if (!next) return notFound();
+        const updated = { ...next, travelData };
+        const { error } = await supabase.from('projects').update({ project_data: updated }).eq('id', showId);
+        if (error) throw error;
+        setShowProject((prev) => (prev ? { ...prev, project_data: updated } : prev));
+      } else if (selectedProjectId) {
+        const project = contractProjects.find((p) => p.id === selectedProjectId);
+        const next = applyExpenseType(project?.project_data, memberId, expenseKey, value);
+        if (!next) return notFound();
+        const updated = { ...next, travelData };
+        const { error } = await supabase.from('projects').update({ project_data: updated }).eq('id', selectedProjectId);
+        if (error) throw error;
+        setContractProjects((prev) => prev.map((p) => (p.id === selectedProjectId ? { ...p, project_data: updated } : p)));
+      }
+    } catch (error) {
+      toast({ title: 'Error saving', description: error.message, variant: 'destructive' });
+    }
+  };
+
   const forNeed = (expenseId, travelKey) =>
     personnel.filter((m) => {
       if (m.reimbursable_expenses?.[expenseId]?.reimbursed) return true;
@@ -418,6 +452,8 @@ const TravelManagementPage = () => {
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
+                    storageKey={showId || selectedProjectId}
+                    onExpenseTypeChange={handleExpenseTypeChange}
                   />
                 </TabsContent>
 
@@ -428,6 +464,8 @@ const TravelManagementPage = () => {
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
+                    storageKey={showId || selectedProjectId}
+                    onExpenseTypeChange={handleExpenseTypeChange}
                   />
                 </TabsContent>
 
@@ -438,6 +476,8 @@ const TravelManagementPage = () => {
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
+                    storageKey={showId || selectedProjectId}
+                    onExpenseTypeChange={handleExpenseTypeChange}
                   />
                 </TabsContent>
 
@@ -448,6 +488,8 @@ const TravelManagementPage = () => {
                     travelData={travelData}
                     setTravelData={setTravelData}
                     budgetFrozen={budgetFrozen}
+                    storageKey={showId || selectedProjectId}
+                    onExpenseTypeChange={handleExpenseTypeChange}
                   />
                 </TabsContent>
               </Tabs>
@@ -503,9 +545,68 @@ function mergeTravelDefaults(flatPersonnel, saved, eventStart, eventEnd) {
     if (!entry.mileage?.cost && mileageExp?.reimbursed) {
       entry.mileage = { ...entry.mileage, cost: parseFloat(mileageExp.total) || 0 };
     }
+
+    // Pre-fill empty travel dates from the person's dates (else the show's dates).
+    // A date someone already typed is never replaced; the budget dates are not touched.
+    // Each expense block on the Staff page has its own dates; use them first.
+    const personStart = member.employment_start_date || eventStart;
+    const personEnd = member.employment_end_date || eventEnd;
+    const startOf = (exp) => toDayString(exp?.start_date || personStart);
+    const endOf = (exp) => toDayString(exp?.end_date || personEnd);
+    const at = (d, time = '12:00') => (d ? `${d}T${time}` : '');
+    const fillEmpty = (obj, patch) => {
+      const out = { ...(obj || {}) };
+      // A value that is not a clean YYYY-MM-DD (or YYYY-MM-DDTHH:MM) counts as empty.
+      const valid = (x) => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(x);
+      for (const [k, v] of Object.entries(patch)) if (!valid(out[k]) && v) out[k] = v;
+      return out;
+    };
+    entry.flight = fillEmpty(entry.flight, {
+      departureTime: at(startOf(airfareExp) ? shiftDate(startOf(airfareExp), -1) : ''),
+      arrivalTime: at(startOf(airfareExp)),
+      returnDepartureTime: at(endOf(airfareExp)),
+    });
+    entry.hotel = fillEmpty(entry.hotel, { checkIn: startOf(hotelExp), checkOut: endOf(hotelExp) });
+    entry.rentalCar = fillEmpty(entry.rentalCar, { pickupTime: at(startOf(rentalCarExp)), returnTime: at(endOf(rentalCarExp)) });
+    entry.mileage = fillEmpty(entry.mileage, { startDate: startOf(mileageExp), endDate: endOf(mileageExp) });
   }
 
   return merged;
+}
+
+/** Copy of the project data with one person's expense_type changed; null if that person/expense is not found. */
+function applyExpenseType(projectData, memberId, expenseKey, value) {
+  const officials = projectData?.showDetails?.officials;
+  if (!officials) return null;
+  let found = false;
+  const nextOfficials = {};
+  for (const [assocId, roles] of Object.entries(officials)) {
+    nextOfficials[assocId] = {};
+    for (const [roleId, members] of Object.entries(roles || {})) {
+      nextOfficials[assocId][roleId] = (members || []).map((m) => {
+        if (m.id !== memberId || !m.reimbursable_expenses?.[expenseKey]) return m;
+        found = true;
+        return {
+          ...m,
+          reimbursable_expenses: {
+            ...m.reimbursable_expenses,
+            [expenseKey]: { ...m.reimbursable_expenses[expenseKey], expense_type: value },
+          },
+        };
+      });
+    }
+  }
+  return found ? { ...projectData, showDetails: { ...projectData.showDetails, officials: nextOfficials } } : null;
+}
+
+/** Staff dates are saved as full timestamps; date fields need the local day, YYYY-MM-DD. */
+function toDayString(value) {
+  if (!value) return '';
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** Shift an ISO date string by N days */

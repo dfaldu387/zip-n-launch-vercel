@@ -4,8 +4,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Car } from 'lucide-react';
+import DatesLockButton from './DatesLockButton';
+import ReceiptsField from './ReceiptsField';
+import { rentalFigures } from '@/lib/travelActuals';
+import ExpenseTypeSelect from './ExpenseTypeSelect';
 
-const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage }) => {
+const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange }) => {
 
   const updateRentalCar = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -16,6 +20,17 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
           ...(prev[memberId]?.rentalCar || {}),
           [field]: value,
         },
+      },
+    }));
+  };
+
+  // Several fields change together (e.g. a new actual rate clears an old typed total).
+  const updateRentalCarFields = (memberId, patch) => {
+    setTravelData((prev) => ({
+      ...prev,
+      [memberId]: {
+        ...prev[memberId],
+        rentalCar: { ...(prev[memberId]?.rentalCar || {}), ...patch },
       },
     }));
   };
@@ -33,6 +48,11 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
           const rental = travelData[member.id]?.rentalCar || {};
           const hasRental = rental.company || rental.confirmation;
 
+          // Days, budget rate, actual total (rate x days unless a total was typed) and variance
+          // come from one shared calculation, the same one the Overview uses.
+          const { days, budgetRate, hasOverride, actual: actualTotal, variance } = rentalFigures(rental);
+          const tone = variance === null || variance === 0 ? '' : variance < 0 ? 'text-green-600' : 'text-red-600';
+
           return (
             <Card key={member.id} className="overflow-hidden">
               <CardHeader className="pb-3 bg-muted/30">
@@ -46,11 +66,17 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                       <p className="text-xs text-muted-foreground">{member.roleName}</p>
                     </div>
                   </div>
-                  {hasRental ? (
+                  <div className="flex items-center gap-2">
+                    <ExpenseTypeSelect expense={member.reimbursable_expenses?.rentalCar} disabled={budgetFrozen} onChange={(v) => onExpenseTypeChange?.(member.id, 'rentalCar', v)} />
+                    <DatesLockButton locked={!!rental.datesLocked} onToggle={() => updateRentalCar(member.id, 'datesLocked', !rental.datesLocked)} />
+                    {hasRental ? (
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>
-                  ) : (
+
+                    ) : (
                     <Badge variant="secondary">Not Set</Badge>
-                  )}
+
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="pt-4">
@@ -69,6 +95,7 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                       type="datetime-local"
                       value={rental.pickupTime || ''}
                       onChange={(e) => updateRentalCar(member.id, 'pickupTime', e.target.value)}
+                      disabled={!!rental.datesLocked}
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -77,10 +104,46 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                       type="datetime-local"
                       value={rental.returnTime || ''}
                       onChange={(e) => updateRentalCar(member.id, 'returnTime', e.target.value)}
+                      disabled={!!rental.datesLocked}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Cost</Label>
+                    <Label className="text-xs">Pickup Location</Label>
+                    <Input
+                      placeholder="e.g. Denver International Airport"
+                      value={rental.pickupLocation || ''}
+                      onChange={(e) => updateRentalCar(member.id, 'pickupLocation', e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Vehicle Type</Label>
+                    <Input
+                      placeholder="e.g. Intermediate SUV"
+                      value={rental.vehicleType || ''}
+                      onChange={(e) => updateRentalCar(member.id, 'vehicleType', e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Days</Label>
+                    <Input value={days > 0 ? days : ''} placeholder="—" readOnly disabled className="bg-muted" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Rate/Day (Budget $)</Label>
+                    <Input value={budgetRate === null ? '' : budgetRate.toFixed(2)} placeholder="—" readOnly disabled className="bg-muted" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Rate/Day (Actual $)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={rental.actualRate ?? ''}
+                      onChange={(e) => updateRentalCarFields(member.id, { actualRate: e.target.value, actualCost: '' })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Budget Total ($)</Label>
                     <Input
                       type="number"
                       min="0"
@@ -93,6 +156,23 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                     />
                   </div>
                   <div className="space-y-1.5">
+                    <Label className="text-xs">Actual Expense ($)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={hasOverride ? rental.actualCost : actualTotal === null ? '' : actualTotal.toFixed(2)}
+                      onChange={(e) => updateRentalCar(member.id, 'actualCost', e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Variance ($)</Label>
+                    <div className={`flex h-10 items-center rounded-md border bg-muted px-3 text-sm font-medium ${tone}`}>
+                      {variance === null ? '—' : `${variance < 0 ? '−' : ''}${Math.abs(variance).toFixed(2)} ${variance < 0 ? '↓' : variance > 0 ? '↑' : ''}`}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Confirmation #</Label>
                     <Input
                       placeholder="e.g. R5678901"
@@ -100,6 +180,13 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                       onChange={(e) => updateRentalCar(member.id, 'confirmation', e.target.value)}
                     />
                   </div>
+                  <ReceiptsField
+                    storageKey={storageKey}
+                    receipts={rental.receipts || []}
+                    onChange={(next) => updateRentalCar(member.id, 'receipts', next)}
+                    notes={rental.notes}
+                    onNotesChange={(v) => updateRentalCar(member.id, 'notes', v)}
+                  />
                 </div>
               </CardContent>
             </Card>

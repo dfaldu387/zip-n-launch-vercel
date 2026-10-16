@@ -455,6 +455,9 @@ export const calculateStaffCost = (member) => {
   // totalShowCost = what the show spends in all (also includes expenses it pays directly).
   return {
     totalPay,
+    dayPay,
+    hourlyPay,
+    overtimePay,
     totalExpenses,
     directExpenses,
     expenseBreakdown,
