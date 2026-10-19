@@ -22,7 +22,7 @@ import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusSer
 import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { staffRoles } from '@/lib/staffingData';
-import { qtyForDate, totalSlots as slotsForDates, filledSlots as filledForDates } from '@/lib/staffQty';
+import { qtyForDate, requiredDates, totalSlots as slotsForDates, filledSlots as filledForDates } from '@/lib/staffQty';
 import { flattenPersonnel } from '@/lib/contractUtils';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -293,7 +293,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                                     {role?.name || pos.roleId}
                                                     {qty > 1 && <span className="text-muted-foreground ml-1">#{slotIdx + 1}</span>}
                                                 </span>
-                                                {pos.required && <Badge variant="outline" className="text-[9px] px-1 py-0">Req</Badge>}
+                                                <RequiredBadge pos={pos} dates={dates} />
                                             </div>
                                         </td>
                                         {dates.map(dateStr => {
@@ -393,6 +393,7 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                                                     {role?.name || pos.roleId}
                                                     {qty > 1 && <span className="text-muted-foreground ml-1">#{slotIdx + 1}</span>}
                                                 </span>
+                                                <RequiredBadge pos={pos} dates={dates} />
                                             </div>
                                         </td>
                                         {dates.map(dateStr => {
@@ -435,6 +436,14 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
 };
 
 // ── Helpers ──
+
+// "Req" when the position is required every day, "Req: Thu, Oct 22" when only some days.
+function RequiredBadge({ pos, dates }) {
+    const reqDays = requiredDates(pos, dates);
+    if (reqDays.length === 0) return null;
+    const label = reqDays.length === dates.length ? 'Req' : `Req: ${reqDays.map(formatDate).join(', ')}`;
+    return <Badge variant="outline" className="text-[9px] px-1 py-0">{label}</Badge>;
+}
 
 function formatDate(dateStr) {
     try {

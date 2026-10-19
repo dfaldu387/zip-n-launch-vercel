@@ -75,6 +75,29 @@ function syncDates(card, wanted, group, autoPrev, autoNext) {
 }
 
 /**
+ * True when someone typed real details into one travel card (flight, hotel, ...).
+ * Dates (filled in by the page or old saved ones), empty lists, an unlocked lock and zero costs do not
+ * count, so a person with nothing booked and no budget for that need stays off its tab.
+ */
+const DATE_FIELDS = new Set([
+  'departureTime', 'arrivalTime', 'returnDepartureTime', 'returnArrivalTime',
+  'checkIn', 'checkOut', 'pickupTime', 'returnTime', 'startDate', 'endDate',
+]);
+
+export function hasEnteredTravel(entry, travelKey) {
+  const card = entry?.[travelKey];
+  if (!card) return false;
+  const auto = entry.autoDates || {};
+  return Object.entries(card).some(([field, v]) => {
+    if (DATE_FIELDS.has(field)) return false; // dates alone never put someone on a tab
+    if (v === '' || v == null || v === 0 || v === false) return false;
+    if (Array.isArray(v) && v.length === 0) return false;
+    if (auto[`${travelKey}.${field}`] === v) return false;
+    return true;
+  });
+}
+
+/**
  * Start from the saved travel data and add a default entry for anyone new. Costs a person
  * already has as reimbursable expenses are copied in when the travel entry has none yet, and
  * the dates come over from Officials & Staff. Same rules for a contract project and for a

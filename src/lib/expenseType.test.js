@@ -50,3 +50,27 @@ describe('expense type split', () => {
     expect(fin.totalShowCost).toBe(fin.totalCompensation);
   });
 });
+
+describe('hotel $1,798 ties from the staff page to Budgeting', () => {
+  const member = (type) => ({
+    id: 'h1',
+    day_fee: 0,
+    employment_start_date: '2026-10-21',
+    employment_end_date: '2026-10-22',
+    reimbursable_expenses: {
+      hotel: { reimbursed: true, expense_type: type, cost_per_day: 299.67, days: 6, total: 1798 },
+    },
+  });
+  it('a Direct hotel counts in the show cost and shows as Paid by Show', () => {
+    const c = calculateStaffCost(member('direct'));
+    expect(c.directExpenses).toBe(1798);
+    expect(c.totalExpenses).toBe(0);
+    expect(c.totalShowCost).toBe(1798);
+  });
+  it('a Reimbursed hotel counts the same in the show cost', () => {
+    const c = calculateStaffCost(member('reimbursement'));
+    expect(c.totalExpenses).toBe(1798);
+    expect(c.directExpenses).toBe(0);
+    expect(c.totalShowCost).toBe(1798);
+  });
+});

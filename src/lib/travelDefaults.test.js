@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeTravelDefaults, shiftDate, toDayString, applyExpenseType } from '@/lib/travelDefaults';
+import { mergeTravelDefaults, shiftDate, toDayString, applyExpenseType, hasEnteredTravel } from '@/lib/travelDefaults';
 
 // The Staff page saves dates as full timestamps.
 const person = (over = {}) => ({
@@ -128,5 +128,27 @@ describe('applyExpenseType', () => {
     expect(applyExpenseType(project, 'nobody', 'airfare', 'direct')).toBeNull();
     expect(applyExpenseType(project, 'p1', 'hotel', 'direct')).toBeNull();
     expect(applyExpenseType({}, 'p1', 'airfare', 'direct')).toBeNull();
+  });
+});
+
+describe('hasEnteredTravel', () => {
+  it('ignores dates the page filled in by itself', () => {
+    const merged = mergeTravelDefaults([person({ reimbursable_expenses: {} })], {}, '2026-10-23', '2026-10-24');
+    expect(hasEnteredTravel(merged.p1, 'flight')).toBe(false);
+    expect(hasEnteredTravel(merged.p1, 'hotel')).toBe(false);
+    expect(hasEnteredTravel(merged.p1, 'mileage')).toBe(false);
+  });
+  it('counts something a person typed', () => {
+    const merged = mergeTravelDefaults([person({ reimbursable_expenses: {} })], {}, '2026-10-23', '2026-10-24');
+    merged.p1.hotel.hotelName = 'Hilton';
+    expect(hasEnteredTravel(merged.p1, 'hotel')).toBe(true);
+  });
+  it('does not count dates alone, even old ones the page cannot recognise', () => {
+    const merged = mergeTravelDefaults([person({ reimbursable_expenses: {} })], {}, '2026-10-23', '2026-10-24');
+    merged.p1.hotel.checkIn = '2026-10-20';
+    expect(hasEnteredTravel(merged.p1, 'hotel')).toBe(false);
+  });
+  it('ignores empty receipts, zero cost and an unlocked lock', () => {
+    expect(hasEnteredTravel({ flight: { receipts: [], cost: 0, datesLocked: false } }, 'flight')).toBe(false);
   });
 });

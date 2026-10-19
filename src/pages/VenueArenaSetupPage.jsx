@@ -24,7 +24,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { staffRoles, roleGroups } from '@/lib/staffingData';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
-import { setupQtyForDate, withQtyForDate, hasDayOverrides, peakQty } from '@/lib/staffQty';
+import { setupQtyForDate, withQtyForDate, hasDayOverrides, peakQty, requiredForDate, withRequiredForDate, hasRequiredOverrides, peakRequiredQty } from '@/lib/staffQty';
 
 // ── Day selector: "All days" edits the base Qty, a single day edits only that day ──
 
@@ -161,8 +161,13 @@ const StaffPositionRow = ({ position, onUpdate, onRemove, date = null, dates = [
     const role = staffRoles[position.roleId];
     const Icon = role?.icon || Users;
     const qtyValue = date ? setupQtyForDate(position, date) : position.qty;
-    const isOverridden = date && position.qtyByDate?.[date] !== undefined;
-    const varies = !date && hasDayOverrides(position, dates);
+    const isOverridden = date && (position.qtyByDate?.[date] !== undefined || position.requiredByDate?.[date] !== undefined);
+    const varies = !date && (hasDayOverrides(position, dates) || hasRequiredOverrides(position, dates));
+    const requiredValue = date ? requiredForDate(position, date) : !!position.required;
+    const handleRequired = (checked) => {
+        if (date) onUpdate('requiredByDate', withRequiredForDate(position, date, checked).requiredByDate);
+        else onUpdate('required', checked);
+    };
     const handleQty = (e) => {
         const n = parseInt(e.target.value) || 0;
         if (date) onUpdate('qtyByDate', withQtyForDate(position, date, n).qtyByDate);
@@ -186,8 +191,8 @@ const StaffPositionRow = ({ position, onUpdate, onRemove, date = null, dates = [
             </div>
             <div className="flex items-center gap-1.5">
                 <Checkbox
-                    checked={position.required}
-                    onCheckedChange={(checked) => onUpdate('required', checked)}
+                    checked={requiredValue}
+                    onCheckedChange={handleRequired}
                     id={`req-${position.id}`}
                 />
                 <Label htmlFor={`req-${position.id}`} className="text-xs text-muted-foreground cursor-pointer">Required</Label>
@@ -223,7 +228,7 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [], l
     const arenaDays = (arena.dates || []).length > 0 ? [...arena.dates].sort() : showDates;
     const day = selectedDay && arenaDays.includes(selectedDay) ? selectedDay : null;
     const totalStaff = staffPositions.reduce((sum, p) => sum + peakQty(p, arenaDays), 0);
-    const requiredStaff = staffPositions.filter(p => p.required).reduce((sum, p) => sum + peakQty(p, arenaDays), 0);
+    const requiredStaff = staffPositions.reduce((sum, p) => sum + peakRequiredQty(p, arenaDays), 0);
 
     const addStaffPosition = (roleId) => {
         if (staffPositions.find(p => p.roleId === roleId)) return;

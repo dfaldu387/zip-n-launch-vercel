@@ -12,7 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { flattenPersonnel, isBudgetFrozen } from '@/lib/contractUtils';
-import { mergeTravelDefaults, applyExpenseType } from '@/lib/travelDefaults';
+import { mergeTravelDefaults, applyExpenseType, hasEnteredTravel } from '@/lib/travelDefaults';
 import { BudgetFrozenBanner } from '@/components/contract-management/BudgetFrozenBanner';
 import { exportTravelToExcel } from '@/lib/travelExport';
 
@@ -284,8 +284,7 @@ const TravelManagementPage = () => {
   const forNeed = (expenseId, travelKey) =>
     personnel.filter((m) => {
       if (m.reimbursable_expenses?.[expenseId]?.reimbursed) return true;
-      const saved = travelData[m.id]?.[travelKey];
-      return !!saved && Object.values(saved).some((v) => v !== '' && v != null && v !== 0);
+      return hasEnteredTravel(travelData[m.id], travelKey);
     });
   const noNeedMessage = (label) =>
     personnel.length === 0

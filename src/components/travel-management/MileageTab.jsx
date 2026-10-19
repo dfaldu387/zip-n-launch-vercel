@@ -7,8 +7,13 @@ import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import { mileageFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
+import { useTravelList, TravelListToolbar, CardToggle, NoMatches } from './useTravelList';
 
 const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
+  const list = useTravelList(personnel, (m) => {
+    const mi = travelData[m.id]?.mileage || {};
+    return mi.miles || mi.origin;
+  });
 
   const updateMileage = (memberId, field, value) => {
     setTravelData((prev) => {
@@ -45,6 +50,8 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
 
   return (
     <div className="space-y-4">
+      <TravelListToolbar list={list} total={personnel.length} />
+      {personnel.length > 0 && list.filtered.length === 0 && <NoMatches />}
       {personnel.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
@@ -52,7 +59,8 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
           </CardContent>
         </Card>
       ) : (
-        personnel.map((member) => {
+        list.filtered.map((member) => {
+          const open = list.isOpen(member.id);
           const mileage = travelData[member.id]?.mileage || {};
           const hasMileage = mileage.miles || mileage.origin;
 
@@ -66,6 +74,7 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
               <CardHeader className="pb-3 bg-muted/30">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
+                    <CardToggle open={open} onToggle={() => list.toggle(member.id)} label={member.name || 'staff member'} />
                     <div className="p-2 bg-purple-500/10 rounded-lg">
                       <MapPin className="h-4 w-4 text-purple-500" />
                     </div>
@@ -87,7 +96,7 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="pt-4">
+              {open && <CardContent className="pt-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-xs">Origin</Label>
@@ -200,7 +209,7 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                     onChange={(next) => updateMileage(member.id, 'receipts', next)}
                   />
                 </div>
-              </CardContent>
+              </CardContent>}
             </Card>
           );
         })

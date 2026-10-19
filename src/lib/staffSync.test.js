@@ -58,3 +58,27 @@ describe('per-day staff quantity', () => {
     expect(peakQty(next, ['a', 'b'])).toBe(5);
   });
 });
+
+import { requiredForDate, withRequiredForDate, peakRequiredQty, requiredDates } from '@/lib/staffQty';
+
+describe('per-day Required', () => {
+  const days = ['2026-10-23', '2026-10-24'];
+  it('follows the base flag until a day is changed', () => {
+    const pos = { id: 'a', qty: 1, required: true };
+    expect(requiredForDate(pos, days[0])).toBe(true);
+    const next = withRequiredForDate(pos, days[1], false);
+    expect(requiredForDate(next, days[0])).toBe(true);
+    expect(requiredForDate(next, days[1])).toBe(false);
+    expect(requiredDates(next, days)).toEqual([days[0]]);
+  });
+  it('clears the override when it matches the base flag again', () => {
+    const pos = withRequiredForDate({ id: 'a', qty: 1, required: false }, days[0], true);
+    expect(pos.requiredByDate).toEqual({ [days[0]]: true });
+    expect(withRequiredForDate(pos, days[0], false).requiredByDate).toBeUndefined();
+  });
+  it('counts headcount only on required days', () => {
+    const pos = { id: 'a', qty: 2, required: false, requiredByDate: { [days[1]]: true } };
+    expect(peakRequiredQty(pos, days)).toBe(2);
+    expect(peakRequiredQty({ id: 'b', qty: 2, required: false }, days)).toBe(0);
+  });
+});

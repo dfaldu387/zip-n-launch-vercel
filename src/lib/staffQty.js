@@ -44,6 +44,44 @@ export function peakQty(pos, dates) {
   return Math.max(...dates.map((d) => setupQtyForDate(pos, d)));
 }
 
+// "Required" works the same way: the base `required` flag applies to every day, and an
+// optional `requiredByDate: { 'YYYY-MM-DD': true|false }` overrides single days.
+
+/** Is this position required on one date? */
+export function requiredForDate(pos, date) {
+  const override = pos?.requiredByDate?.[date];
+  if (override !== undefined && override !== null) return !!override;
+  return !!pos?.required;
+}
+
+/** Position with one day's Required flag changed. Matching the base flag clears the override. */
+export function withRequiredForDate(pos, date, required) {
+  const next = { ...(pos.requiredByDate || {}) };
+  if (!!required === !!pos.required) delete next[date];
+  else next[date] = !!required;
+  const out = { ...pos };
+  if (Object.keys(next).length > 0) out.requiredByDate = next;
+  else delete out.requiredByDate;
+  return out;
+}
+
+/** True when at least one of the given dates differs from the base Required flag. */
+export function hasRequiredOverrides(pos, dates) {
+  return (dates || []).some((d) => pos?.requiredByDate?.[d] !== undefined && !!pos.requiredByDate[d] !== !!pos.required);
+}
+
+/** The dates (from the list) on which the position is required. */
+export function requiredDates(pos, dates) {
+  return (dates || []).filter((d) => requiredForDate(pos, d));
+}
+
+/** Headcount that is required on the busiest required day. */
+export function peakRequiredQty(pos, dates) {
+  const days = requiredDates(pos, dates);
+  if (days.length === 0) return 0;
+  return Math.max(...days.map((d) => setupQtyForDate(pos, d)));
+}
+
 /** Total slots a list of positions needs across the dates. */
 export function totalSlots(positions, dates) {
   let n = 0;

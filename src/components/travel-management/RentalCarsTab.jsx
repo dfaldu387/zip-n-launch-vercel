@@ -8,8 +8,13 @@ import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import { rentalFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
+import { useTravelList, TravelListToolbar, CardToggle, NoMatches } from './useTravelList';
 
 const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
+  const list = useTravelList(personnel, (m) => {
+    const r = travelData[m.id]?.rentalCar || {};
+    return r.company || r.confirmation;
+  });
 
   const updateRentalCar = (memberId, field, value) => {
     setTravelData((prev) => ({
@@ -37,6 +42,8 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
 
   return (
     <div className="space-y-4">
+      <TravelListToolbar list={list} total={personnel.length} />
+      {personnel.length > 0 && list.filtered.length === 0 && <NoMatches />}
       {personnel.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
@@ -44,7 +51,8 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
           </CardContent>
         </Card>
       ) : (
-        personnel.map((member) => {
+        list.filtered.map((member) => {
+          const open = list.isOpen(member.id);
           const rental = travelData[member.id]?.rentalCar || {};
           const hasRental = rental.company || rental.confirmation;
 
@@ -58,6 +66,7 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
               <CardHeader className="pb-3 bg-muted/30">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
+                    <CardToggle open={open} onToggle={() => list.toggle(member.id)} label={member.name || 'staff member'} />
                     <div className="p-2 bg-green-500/10 rounded-lg">
                       <Car className="h-4 w-4 text-green-500" />
                     </div>
@@ -79,7 +88,7 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="pt-4">
+              {open && <CardContent className="pt-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-xs">Rental Company</Label>
@@ -188,7 +197,7 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                     onNotesChange={(v) => updateRentalCar(member.id, 'notes', v)}
                   />
                 </div>
-              </CardContent>
+              </CardContent>}
             </Card>
           );
         })
