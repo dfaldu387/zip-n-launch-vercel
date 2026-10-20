@@ -920,9 +920,9 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6">
-                {/* Scheduling grids */}
-                <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-6">
+                {/* Scheduling grids (min-w-0 lets a wide table scroll inside its card instead of pushing the sidebar off the page) */}
+                <div className="space-y-4 min-w-0">
                     <div className="flex items-center justify-between">
                         <h3 className="text-lg font-semibold">Schedule by Arena</h3>
                         <Button onClick={handleSave} disabled={isSaving}>
