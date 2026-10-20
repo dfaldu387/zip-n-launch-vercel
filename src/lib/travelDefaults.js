@@ -98,6 +98,15 @@ export function hasEnteredTravel(entry, travelKey) {
 }
 
 /**
+ * One travel card (flight, hotel, ...) with everything typed on it removed. When the budget is frozen
+ * (locked from the contract) the Budget box is kept so the contract number is never lost.
+ */
+export function clearTravelCard(card, keepBudget = false) {
+  const cost = card?.cost;
+  return keepBudget && cost !== undefined && cost !== '' && cost !== null ? { cost } : {};
+}
+
+/**
  * Start from the saved travel data and add a default entry for anyone new. Costs a person
  * already has as reimbursable expenses are copied in when the travel entry has none yet, and
  * the dates come over from Officials & Staff. Same rules for a contract project and for a

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeTravelDefaults, shiftDate, toDayString, applyExpenseType, hasEnteredTravel } from '@/lib/travelDefaults';
+import { mergeTravelDefaults, shiftDate, toDayString, applyExpenseType, hasEnteredTravel, clearTravelCard } from '@/lib/travelDefaults';
 
 // The Staff page saves dates as full timestamps.
 const person = (over = {}) => ({
@@ -150,5 +150,17 @@ describe('hasEnteredTravel', () => {
   });
   it('ignores empty receipts, zero cost and an unlocked lock', () => {
     expect(hasEnteredTravel({ flight: { receipts: [], cost: 0, datesLocked: false } }, 'flight')).toBe(false);
+  });
+});
+
+describe('clearTravelCard', () => {
+  it('wipes everything typed on a card', () => {
+    expect(clearTravelCard({ hotelName: 'Taj', cost: '400', actualCost: '300' })).toEqual({});
+  });
+  it('keeps the Budget box when the budget is frozen', () => {
+    expect(clearTravelCard({ hotelName: 'Taj', cost: '400', actualCost: '300' }, true)).toEqual({ cost: '400' });
+  });
+  it('handles a missing card', () => {
+    expect(clearTravelCard(undefined, true)).toEqual({});
   });
 });

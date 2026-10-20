@@ -46,6 +46,15 @@ export const buildCloseoutCells = (member, travel = {}, typed = {}) => {
   ];
 };
 
+// Travel only (Flight, Hotel, Rental Car, Mileage) across everyone: the budget on the Travel cards
+// and the actuals typed on the Travel tabs. Shown near the top of the Budgeting page.
+export const summarizeTravel = (people, travelData = {}) => {
+  const travelCells = people.flatMap((member) =>
+    buildCloseoutCells(member, travelData[member.id] || {}, {}).filter((c) => ['flight', 'hotel', 'rentalCar', 'mileage'].includes(c.key))
+  );
+  return summarizeLines(travelCells);
+};
+
 // Per-person and whole-show totals, using the same "only lines with an actual" rule as Travel.
 export const summarizeCloseout = (people, travelData = {}, closeout = {}) => {
   const perPerson = people.map((member) => {

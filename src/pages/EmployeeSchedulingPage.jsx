@@ -287,7 +287,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                 return Array.from({ length: qty }, (_, slotIdx) => (
                                     <tr key={`${pos.id}-${slotIdx}`} className="border-b last:border-0">
                                         <td className="px-3 py-2">
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                                 <Icon className="h-3.5 w-3.5 text-primary flex-shrink-0" />
                                                 <span className="font-medium text-xs">
                                                     {role?.name || pos.roleId}
@@ -387,7 +387,7 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                                 return Array.from({ length: qty }, (_, slotIdx) => (
                                     <tr key={`${pos.id}-${slotIdx}`} className="border-b last:border-0">
                                         <td className="px-3 py-2">
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                                 <Icon className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0" />
                                                 <span className="font-medium text-xs">
                                                     {role?.name || pos.roleId}
@@ -437,12 +437,19 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
 
 // ── Helpers ──
 
-// "Req" when the position is required every day, "Req: Thu, Oct 22" when only some days.
+// "Req" when the position is required every day, "Req: Fri 6/19" for one or two days,
+// "Req: 3 days" for more (the hover text lists them). Always one line.
 function RequiredBadge({ pos, dates }) {
     const reqDays = requiredDates(pos, dates);
     if (reqDays.length === 0) return null;
-    const label = reqDays.length === dates.length ? 'Req' : `Req: ${reqDays.map(formatDate).join(', ')}`;
-    return <Badge variant="outline" className="text-[9px] px-1 py-0">{label}</Badge>;
+    const everyDay = reqDays.length === dates.length;
+    const short = (d) => {
+        const dt = new Date(d + 'T00:00:00');
+        return Number.isNaN(dt.getTime()) ? d : `${dt.toLocaleDateString('en-US', { weekday: 'short' })} ${dt.getMonth() + 1}/${dt.getDate()}`;
+    };
+    const label = everyDay ? 'Req' : reqDays.length <= 2 ? `Req: ${reqDays.map(short).join(', ')}` : `Req: ${reqDays.length} days`;
+    const title = everyDay ? 'Required every day' : `Required: ${reqDays.map(formatDate).join(', ')}`;
+    return <Badge variant="outline" title={title} className="text-[9px] px-1 py-0 whitespace-nowrap shrink-0">{label}</Badge>;
 }
 
 function formatDate(dateStr) {

@@ -24,7 +24,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { staffRoles, roleGroups } from '@/lib/staffingData';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
-import { setupQtyForDate, withQtyForDate, hasDayOverrides, peakQty, requiredForDate, withRequiredForDate, hasRequiredOverrides, peakRequiredQty } from '@/lib/staffQty';
+import { setupQtyForDate, withQtyForDate, hasDayOverrides, peakQty, requiredForDate, withRequiredForDate, hasRequiredOverrides, peakRequiredQty, newPosition } from '@/lib/staffQty';
 
 // ── Day selector: "All days" edits the base Qty, a single day edits only that day ──
 
@@ -232,8 +232,8 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [], l
 
     const addStaffPosition = (roleId) => {
         if (staffPositions.find(p => p.roleId === roleId)) return;
-        const newPosition = { id: uuidv4(), roleId, qty: 1, required: false };
-        onUpdateStaff([...staffPositions, newPosition]);
+        // With a day picked above, the new position is needed on that day only.
+        onUpdateStaff([...staffPositions, newPosition(uuidv4(), roleId, day)]);
     };
 
     const updatePosition = (posId, field, value) => {
@@ -306,9 +306,9 @@ const ArenaCard = ({ arena, onUpdate, onRemove, onUpdateStaff, showDates = [], l
                         ))}
                     </div>
                     {availableRoles.length > 0 && (
-                        <Select onValueChange={addStaffPosition}>
+                        <Select value="" onValueChange={addStaffPosition}>
                             <SelectTrigger className="h-8 text-xs">
-                                <SelectValue placeholder="+ Add staff position..." />
+                                <SelectValue placeholder={day ? `+ Add staff position for ${formatDay(day)} only...` : '+ Add staff position...'} />
                             </SelectTrigger>
                             <SelectContent>
                                 {Object.entries(roleGroups).map(([groupId, group]) => {
@@ -563,12 +563,12 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
                             onRemove={() => setSharedStaff(prev => prev.filter(p => p.id !== pos.id))}
                         />
                     ))}
-                    <Select onValueChange={(roleId) => {
+                    <Select value="" onValueChange={(roleId) => {
                         if (sharedStaff.find(p => p.roleId === roleId)) return;
-                        setSharedStaff(prev => [...prev, { id: uuidv4(), roleId, qty: 1, required: false }]);
+                        setSharedStaff(prev => [...prev, newPosition(uuidv4(), roleId, sharedDaySafe)]);
                     }}>
                         <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="+ Add shared staff position..." />
+                            <SelectValue placeholder={sharedDaySafe ? `+ Add shared staff position for ${formatDay(sharedDaySafe)} only...` : '+ Add shared staff position...'} />
                         </SelectTrigger>
                         <SelectContent>
                             {Object.entries(staffRoles)

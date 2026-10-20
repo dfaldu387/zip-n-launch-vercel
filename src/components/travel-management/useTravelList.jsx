@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eraser, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { hasEnteredTravel, clearTravelCard } from '@/lib/travelDefaults';
 
 // Shared by the Flights, Hotels, Rental Cars and Mileage tabs: each person's card can be
 // opened or closed, and the list can be searched and filtered by Booked / Not set.
@@ -82,6 +83,40 @@ export const CardToggle = ({ open, onToggle, label }) => (
     {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
   </Button>
 );
+
+// Two-click "Clear": the first click asks, the second wipes what was typed on this one card
+// (not the other travel cards, not the staff member). Shown only when something was typed.
+export const ClearCardButton = ({ entry, memberId, travelKey, setTravelData, budgetFrozen }) => {
+  const [asking, setAsking] = useState(false);
+  if (!hasEnteredTravel(entry, travelKey)) return null;
+  const clear = () => {
+    setTravelData((prev) => ({
+      ...prev,
+      [memberId]: { ...prev[memberId], [travelKey]: clearTravelCard(prev[memberId]?.[travelKey], budgetFrozen) },
+    }));
+    setAsking(false);
+  };
+  if (asking) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <Button type="button" size="sm" variant="destructive" className="h-8 px-2 text-xs" onClick={clear}>Yes, clear</Button>
+        <Button type="button" size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => setAsking(false)}>Cancel</Button>
+      </span>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="h-8 px-2 text-xs text-muted-foreground"
+      title="Remove everything typed on this card"
+      onClick={() => setAsking(true)}
+    >
+      <Eraser className="h-3.5 w-3.5 mr-1" /> Clear
+    </Button>
+  );
+};
 
 export const NoMatches = () => (
   <div className="py-8 text-center text-sm text-muted-foreground">No staff match this search.</div>

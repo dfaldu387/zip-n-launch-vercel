@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCloseoutCells, summarizeCloseout } from '@/lib/employeeCloseout';
+import { buildCloseoutCells, summarizeCloseout, summarizeTravel } from '@/lib/employeeCloseout';
 
 // 2 days x $75 = $150 day pay; 3 overtime hours x $5 = $15; airfare $300 paid by the show,
 // hotel $200 reimbursed, tolls $40 reimbursed (an "other" expense).
@@ -78,5 +78,16 @@ describe('summarizeCloseout', () => {
     const { total } = summarizeCloseout([member, other], {}, { m1: { dayPay: '100' }, m2: { dayPay: '200' } });
     expect(total.actual).toBe(300);
     expect(total.variance).toBe(-50 + 50); // 100-150 and 200-150
+  });
+});
+
+describe('summarizeTravel', () => {
+  it('adds up travel budget and travel actuals only (no day pay or overtime)', () => {
+    const t = summarizeTravel([member], { m1: { hotel: { cost: '200', actualCost: '180' } } });
+    expect(t.actual).toBe(180);
+    expect(t.budget).toBeGreaterThanOrEqual(200);
+  });
+  it('has no actual until something is typed on a Travel tab', () => {
+    expect(summarizeTravel([member], {}).actual).toBeNull();
   });
 });

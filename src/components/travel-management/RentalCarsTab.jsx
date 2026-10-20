@@ -8,7 +8,7 @@ import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import { rentalFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
-import { useTravelList, TravelListToolbar, CardToggle, NoMatches } from './useTravelList';
+import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton } from './useTravelList';
 
 const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
   const list = useTravelList(personnel, (m) => {
@@ -77,6 +77,7 @@ const RentalCarsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emp
                   </div>
                   <div className="flex items-center gap-2">
                     <ExpenseTypeSelect expense={member.reimbursable_expenses?.rentalCar} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'rentalCar', v)} />
+                    <ClearCardButton entry={travelData[member.id]} memberId={member.id} travelKey="rentalCar" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <DatesLockButton locked={!!rental.datesLocked} onToggle={() => updateRentalCar(member.id, 'datesLocked', !rental.datesLocked)} />
                     {hasRental ? (
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>

@@ -23,6 +23,7 @@ import { ShowOfficialsStaffPanel } from '@/components/shared/ShowOfficialsStaffP
 import { exportBudgetToExcel } from '@/lib/contractBudgetExport';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
 import { EmployeeCloseout } from '@/components/budgeting/EmployeeCloseout';
+import { summarizeTravel } from '@/lib/employeeCloseout';
 
 const currency = (val) => {
     const num = parseFloat(val);
@@ -187,6 +188,12 @@ const BudgetDashboard = ({ show, contractProject, readOnly }) => {
     }, [cpd, showPersonnel, usingContractFallback]);
 
     const employeeTotal = employeeCosts.totalCompensation;
+
+    // Travel actuals typed on the Travel Management tabs (the cards above are the contract budget).
+    const travelSummary = useMemo(
+        () => summarizeTravel(employeeCosts.personnel, pd.travelData || {}),
+        [employeeCosts.personnel, pd.travelData]
+    );
 
     const EXPENSE_LABELS = {
         airfare: 'Airline Tickets',
@@ -382,6 +389,21 @@ const BudgetDashboard = ({ show, contractProject, readOnly }) => {
                                 <span>Total</span>
                                 <span className="text-purple-600">{currency(employeeTotal)}</span>
                             </div>
+                            {travelSummary.actual !== null && (
+                                <div className="border-t pt-2 mt-2 space-y-1 text-sm">
+                                    <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Travel actual so far</span>
+                                        <span className="font-medium">{currency(travelSummary.actual)}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Travel budget (all lines)</span>
+                                        <span className="font-medium">{currency(travelSummary.budget)}</span>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        Actuals entered for {travelSummary.counted} of {travelSummary.total} travel lines, so the actual is not a saving yet. See Employee Closeout below for each person.
+                                    </p>
+                                </div>
+                            )}
                             {employeeTotal > 0 && (
                                 <div className="flex h-6 rounded-lg overflow-hidden border mt-3">
                                     <div className="bg-blue-500 flex items-center justify-center text-[10px] text-white font-medium" style={{ width: `${(employeeCosts.totalDayPay / employeeTotal * 100)}%` }}>

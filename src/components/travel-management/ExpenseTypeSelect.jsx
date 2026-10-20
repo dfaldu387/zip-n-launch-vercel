@@ -4,9 +4,19 @@ import { cn } from '@/lib/utils';
 
 // Same Expense Type choice as Officials & Staff (Direct Show Expense / Reimbursement).
 // It edits that shared value, so Staff, Contract, Budgeting and Travel always agree.
-// Hidden when the expense switch is off for this person.
+// When the expense switch is off for this person there is nothing to choose or save, so a small
+// tag explains why instead of leaving the spot empty.
 const ExpenseTypeSelect = ({ expense, onChange, disabled }) => {
-  if (!expense?.reimbursed) return null;
+  if (!expense?.reimbursed) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-md border border-dashed px-2 py-1 text-xs text-muted-foreground"
+        title="This item is switched off for this person in Officials & Staff. Switch it on there to choose who pays."
+      >
+        Not in contract <Info className="h-3 w-3" />
+      </span>
+    );
+  }
   const value = expense.expense_type === 'direct' ? 'direct' : 'reimbursement';
   return (
     <label className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -33,6 +33,15 @@ export function withQtyForDate(pos, date, qty) {
   return out;
 }
 
+/**
+ * A brand-new position. With a date it is needed on that day only (base qty 0, 1 person that day),
+ * without one it is needed every day (qty 1). Same shape the per-day editor already produces.
+ */
+export function newPosition(id, roleId, date = null) {
+  if (date) return { id, roleId, qty: 0, required: false, qtyByDate: { [date]: 1 } };
+  return { id, roleId, qty: 1, required: false };
+}
+
 /** True when at least one of the given dates differs from the base qty. */
 export function hasDayOverrides(pos, dates) {
   return (dates || []).some((d) => pos?.qtyByDate?.[d] !== undefined && pos.qtyByDate[d] !== (pos.qty || 0));
