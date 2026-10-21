@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeTravelDefaults, shiftDate, toDayString, applyExpenseType, hasEnteredTravel, clearTravelCard } from '@/lib/travelDefaults';
+import { mergeTravelDefaults, shiftDate, toDayString, applyExpenseType, hasEnteredTravel, clearTravelCard, staffBudgetFor } from '@/lib/travelDefaults';
 
 // The Staff page saves dates as full timestamps.
 const person = (over = {}) => ({
@@ -162,5 +162,26 @@ describe('clearTravelCard', () => {
   });
   it('handles a missing card', () => {
     expect(clearTravelCard(undefined, true)).toEqual({});
+  });
+});
+
+describe('staffBudgetFor', () => {
+  const m = {
+    reimbursable_expenses: {
+      airfare: { reimbursed: true, max_value: '300' },
+      hotel: { reimbursed: true, total: 600 },
+      rentalCar: { reimbursed: false, total: 79 },
+      mileage: { reimbursed: true, total: '154.8' },
+    },
+  };
+  it('reads the amount the Travel card is filled from', () => {
+    expect(staffBudgetFor(m, 'airfare')).toBe(300);
+    expect(staffBudgetFor(m, 'hotel')).toBe(600);
+    expect(staffBudgetFor(m, 'mileage')).toBe(154.8);
+  });
+  it('is 0 when the item is off or missing', () => {
+    expect(staffBudgetFor(m, 'rentalCar')).toBe(0);
+    expect(staffBudgetFor(m, 'tolls')).toBe(0);
+    expect(staffBudgetFor(undefined, 'hotel')).toBe(0);
   });
 });

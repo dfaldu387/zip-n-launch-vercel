@@ -98,6 +98,20 @@ export function hasEnteredTravel(entry, travelKey) {
 }
 
 /**
+ * What Officials & Staff says this person's expense costs: the same number the Travel card is filled
+ * from when it first opens. 0 when the item is switched off for them or has no amount.
+ * `expenseKey` is the key on reimbursable_expenses (airfare, hotel, rentalCar, mileage).
+ */
+export function staffBudgetFor(member, expenseKey) {
+  const expense = member?.reimbursable_expenses?.[expenseKey];
+  if (!expense?.reimbursed) return 0;
+  const num = (v) => parseFloat(v) || 0;
+  if (expenseKey === 'airfare') return num(expense.max_value);
+  if (expenseKey === 'mileage') return num(expense.total);
+  return num(expense.total) || num(expense.max_value);
+}
+
+/**
  * One travel card (flight, hotel, ...) with everything typed on it removed. When the budget is frozen
  * (locked from the contract) the Budget box is kept so the contract number is never lost.
  */

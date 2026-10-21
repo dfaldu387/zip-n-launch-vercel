@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight, Eraser, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { hasEnteredTravel, clearTravelCard } from '@/lib/travelDefaults';
+import { hasEnteredTravel, clearTravelCard, staffBudgetFor } from '@/lib/travelDefaults';
 
 // Shared by the Flights, Hotels, Rental Cars and Mileage tabs: each person's card can be
 // opened or closed, and the list can be searched and filtered by Booked / Not set.
@@ -114,6 +114,31 @@ export const ClearCardButton = ({ entry, memberId, travelKey, setTravelData, bud
       onClick={() => setAsking(true)}
     >
       <Eraser className="h-3.5 w-3.5 mr-1" /> Clear
+    </Button>
+  );
+};
+
+// Shown only when the card's Budget is empty (0) but Officials & Staff has an amount for it: one click
+// copies that amount into the Budget box so it is not typed twice. Hidden when the budget is locked.
+export const CopyFromStaffButton = ({ member, entry, travelKey, expenseKey, setTravelData, budgetFrozen }) => {
+  const staffAmount = staffBudgetFor(member, expenseKey);
+  const current = parseFloat(entry?.[travelKey]?.cost) || 0;
+  if (budgetFrozen || staffAmount <= 0 || current > 0) return null;
+  const copy = () =>
+    setTravelData((prev) => ({
+      ...prev,
+      [member.id]: { ...prev[member.id], [travelKey]: { ...(prev[member.id]?.[travelKey] || {}), cost: String(staffAmount) } },
+    }));
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="h-8 px-2 text-xs"
+      title="Fill the Budget box with the amount from Officials & Staff"
+      onClick={copy}
+    >
+      Use ${staffAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })} from Staff
     </Button>
   );
 };

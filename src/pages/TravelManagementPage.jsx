@@ -28,6 +28,7 @@ const TravelManagementPage = () => {
   const { toast } = useToast();
   const { user } = useAuth();
 
+  const [activeTab, setActiveTab] = useState('overview');
   const [contractProjects, setContractProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [personnel, setPersonnel] = useState([]);
@@ -412,7 +413,7 @@ const TravelManagementPage = () => {
           {hasSource && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
               {budgetFrozen && <div className="mb-4"><BudgetFrozenBanner /></div>}
-              <Tabs defaultValue="overview">
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList className="mb-4">
                   <TabsTrigger value="overview" className="gap-1.5">
                     <LayoutDashboard className="h-4 w-4" />
@@ -442,6 +443,7 @@ const TravelManagementPage = () => {
                     travelData={travelData}
                     setTravelData={setTravelData}
                     contractSettings={contractSettings}
+                    onGoToTab={setActiveTab}
                   />
                 </TabsContent>
 

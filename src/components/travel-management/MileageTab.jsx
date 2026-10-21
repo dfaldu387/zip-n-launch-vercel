@@ -7,7 +7,7 @@ import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import { mileageFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
-import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton } from './useTravelList';
+import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton, CopyFromStaffButton } from './useTravelList';
 
 const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
   const list = useTravelList(personnel, (m) => {
@@ -85,6 +85,7 @@ const MileageTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                   </div>
                   <div className="flex items-center gap-2">
                     <ExpenseTypeSelect expense={member.reimbursable_expenses?.mileage} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'mileage', v)} />
+                    <CopyFromStaffButton member={member} entry={travelData[member.id]} travelKey="mileage" expenseKey="mileage" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <ClearCardButton entry={travelData[member.id]} memberId={member.id} travelKey="mileage" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <DatesLockButton locked={!!mileage.datesLocked} onToggle={() => updateMileage(member.id, 'datesLocked', !mileage.datesLocked)} />
                     {hasMileage ? (

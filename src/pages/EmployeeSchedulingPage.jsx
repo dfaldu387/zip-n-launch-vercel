@@ -22,7 +22,7 @@ import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusSer
 import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { staffRoles } from '@/lib/staffingData';
-import { qtyForDate, requiredDates, totalSlots as slotsForDates, filledSlots as filledForDates } from '@/lib/staffQty';
+import { qtyForDate, requiredDates, totalSlots as slotsForDates, filledSlots as filledForDates, findOrphanedAssignments, ORPHAN_REASONS } from '@/lib/staffQty';
 import { flattenPersonnel } from '@/lib/contractUtils';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -779,6 +779,68 @@ const ScheduleReport = ({ assignments, arenas }) => {
     );
 };
 
+// ── Assignments that lost their slot ──
+
+const OrphanedAssignmentsCard = ({ orphaned, arenas, lockedArenas, onRemove }) => {
+    const arenaName = (id) => (id === '__shared__' ? 'Shared staff' : arenas.find(a => a.id === id)?.name || 'Removed arena');
+    const removable = orphaned.filter(({ assignment }) => !lockedArenas[assignment.arenaId]);
+    return (
+        <Card className="border-red-200 bg-red-50/50 dark:bg-red-950/10">
+            <CardContent className="py-4 space-y-3">
+                <div className="flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                        <p className="text-sm font-medium text-red-800 dark:text-red-300">
+                            {orphaned.length} assignment{orphaned.length !== 1 ? 's' : ''} no longer {orphaned.length !== 1 ? 'have' : 'has'} a slot
+                        </p>
+                        <p className="text-xs text-red-700 dark:text-red-400 mt-0.5">
+                            Setup changed after these people were assigned. They cannot be seen in the grid, and they are still counted as busy on that day.
+                        </p>
+                    </div>
+                </div>
+                <ul className="space-y-2">
+                    {orphaned.map(({ assignment, reason }) => (
+                        <li key={assignment.id} className="rounded-md border bg-background px-2.5 py-2 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                    <p className="font-medium truncate">{assignment.employeeName || 'Unnamed'}</p>
+                                    <p className="text-muted-foreground">
+                                        {formatDate(assignment.date)} · {arenaName(assignment.arenaId)} · {staffRoles[assignment.roleId]?.name || assignment.roleId || 'Position'}
+                                    </p>
+                                    <p className="text-red-700 dark:text-red-400">{ORPHAN_REASONS[reason]}</p>
+                                </div>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2 text-xs shrink-0"
+                                    disabled={!!lockedArenas[assignment.arenaId]}
+                                    title={lockedArenas[assignment.arenaId] ? 'Unlock this arena to remove' : 'Remove this assignment'}
+                                    onClick={() => onRemove(assignment.id)}
+                                >
+                                    Remove
+                                </Button>
+                            </div>
+                        </li>
+                    ))}
+                </ul>
+                {removable.length > 1 && (
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs w-full"
+                        onClick={() => removable.forEach(({ assignment }) => onRemove(assignment.id))}
+                    >
+                        Remove all {removable.length}
+                    </Button>
+                )}
+                <p className="text-[11px] text-muted-foreground">Click Save Schedule after removing.</p>
+            </CardContent>
+        </Card>
+    );
+};
+
 // ── Main Scheduling Dashboard ──
 
 const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, setAssignments, onSave, isSaving, lockedArenas = {}, onToggleLock }) => {
@@ -845,6 +907,13 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
     const handleSave = () => {
         onSave();
     };
+
+    // People still assigned to a slot that setup has since removed or shrunk. The grid cannot show
+    // them, so the sidebar lists them and lets a person remove each one.
+    const orphaned = useMemo(
+        () => findOrphanedAssignments(arenas, sharedStaff, dates, assignments),
+        [arenas, sharedStaff, dates, assignments]
+    );
 
     // Stats
     const arenaDatesOf = (arena) => ((arena.dates || []).length > 0 ? arena.dates : dates);
@@ -962,6 +1031,14 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                 {/* Sidebar: who works where & when — stays in view while scrolling the grids */}
                 <div className="space-y-4 lg:sticky lg:top-4 lg:self-start">
                     <ScheduleReport assignments={assignments} arenas={arenas} />
+                    {orphaned.length > 0 && (
+                        <OrphanedAssignmentsCard
+                            orphaned={orphaned}
+                            arenas={arenas}
+                            lockedArenas={lockedArenas}
+                            onRemove={removeAssignment}
+                        />
+                    )}
                     {/* Unfilled positions warning */}
                     {filledSlots < totalSlots && (
                         <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/10">
@@ -1028,6 +1105,8 @@ const EmployeeSchedulingPage = () => {
     const [lockedArenas, setLockedArenas] = useState({}); // arenaId (or '__shared__') → true
     const [liveOfficials, setLiveOfficials] = useState(null);
     const savedScheduleJsonRef = useRef('');
+    const failedScheduleJsonRef = useRef(null); // the edit that last failed to save, so it is not retried in a loop
+    const handleSaveRef = useRef(null);
 
     useEffect(() => {
         const sched = selectedShow?.project_data?.staffSchedule;
@@ -1039,6 +1118,7 @@ const EmployeeSchedulingPage = () => {
         setLockedArenas(l);
         setLiveOfficials(null);
         savedScheduleJsonRef.current = JSON.stringify({ a, r, l });
+        failedScheduleJsonRef.current = null;
         // Only when a different show is picked: a save must not reset what is on screen.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedShow?.id]);
@@ -1094,7 +1174,7 @@ const EmployeeSchedulingPage = () => {
         setAssignments(prev => prev.filter(a => a.employeeId !== id));
     };
 
-    const handleSave = async () => {
+    const handleSave = async ({ silent = false } = {}) => {
         if (!selectedShow || isReadOnly) return; // a locked section must never write back
         setIsSaving(true);
         try {
@@ -1116,16 +1196,29 @@ const EmployeeSchedulingPage = () => {
                 .eq('id', selectedShow.id);
             if (error) throw error;
             savedScheduleJsonRef.current = JSON.stringify({ a: assignments, r: roster, l: lockedArenas });
+            failedScheduleJsonRef.current = null;
             // keep the saved copy in step so reselecting the show shows the same lock
             setSelectedShow(prev => ({ ...prev, project_data: updatedData }));
             setShows(prev => prev.map(s => s.id === selectedShow.id ? { ...s, project_data: updatedData } : s));
-            toast({ title: 'Schedule Saved', description: 'Staff assignments have been saved successfully.' });
+            if (!silent) toast({ title: 'Schedule Saved', description: 'Staff assignments have been saved successfully.' });
         } catch (error) {
+            failedScheduleJsonRef.current = JSON.stringify({ a: assignments, r: roster, l: lockedArenas });
             toast({ title: 'Error saving', description: error.message, variant: 'destructive' });
         } finally {
             setIsSaving(false);
         }
     };
+    handleSaveRef.current = handleSave;
+
+    // Auto-save: one and a half seconds after the last edit, save quietly. Only real edits differ from the
+    // copy taken at load/save time, so just opening the page never writes anything.
+    const scheduleJson = JSON.stringify({ a: assignments, r: roster, l: lockedArenas });
+    useEffect(() => {
+        if (!selectedShow || isReadOnly || isSaving || isLoading) return;
+        if (scheduleJson === savedScheduleJsonRef.current || scheduleJson === failedScheduleJsonRef.current) return;
+        const t = setTimeout(() => { handleSaveRef.current?.({ silent: true }); }, 1500);
+        return () => clearTimeout(t);
+    }, [scheduleJson, selectedShow, isReadOnly, isSaving, isLoading]);
 
     if (isLoading) {
         return (
@@ -1195,7 +1288,7 @@ const EmployeeSchedulingPage = () => {
                                         onAddManual={addManual}
                                         onRenameManual={renameManual}
                                         onRemoveManual={removeManual}
-                                        onSave={handleSave}
+                                        onSave={() => handleSave()}
                                         isSaving={isSaving}
                                         hasUnsaved={hasUnsavedSchedule}
                                     />
@@ -1206,7 +1299,7 @@ const EmployeeSchedulingPage = () => {
                                         staffList={staffList}
                                         assignments={assignments}
                                         setAssignments={setAssignments}
-                                        onSave={handleSave}
+                                        onSave={() => handleSave()}
                                         isSaving={isSaving}
                                     />
                                 </div>

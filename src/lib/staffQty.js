@@ -100,6 +100,43 @@ export function totalSlots(positions, dates) {
   return n;
 }
 
+export const ORPHAN_REASONS = {
+  arena: 'This arena was removed',
+  position: 'This position was removed',
+  day: 'Not needed on this day any more',
+  extra: 'More people than the position needs',
+};
+
+/**
+ * Saved assignments that no longer have a slot to sit in, because setup changed after the person
+ * was assigned (arena or position removed, a day's need set to 0, or Qty lowered). The grid cannot
+ * show them, yet they still count as "busy" that day. Returns [{ assignment, reason }], reason is a key
+ * of ORPHAN_REASONS. Nothing is changed here; the page lists them so a person can decide.
+ */
+export function findOrphanedAssignments(arenas, sharedStaff, showDates, assignments) {
+  const scopes = new Map();
+  for (const a of arenas || []) {
+    scopes.set(a.id, { positions: a.staffPositions || [], dates: (a.dates || []).length > 0 ? a.dates : showDates || [] });
+  }
+  scopes.set('__shared__', { positions: sharedStaff || [], dates: showDates || [] });
+
+  const used = new Map();
+  const orphans = [];
+  for (const assignment of assignments || []) {
+    const scope = scopes.get(assignment.arenaId);
+    if (!scope) { orphans.push({ assignment, reason: 'arena' }); continue; }
+    const pos = scope.positions.find((p) => p.id === assignment.positionId);
+    if (!pos) { orphans.push({ assignment, reason: 'position' }); continue; }
+    if (!scope.dates.includes(assignment.date)) { orphans.push({ assignment, reason: 'day' }); continue; }
+    const need = qtyForDate(pos, assignment.date);
+    const key = `${assignment.arenaId}|${assignment.date}|${assignment.positionId}`;
+    const count = (used.get(key) || 0) + 1;
+    used.set(key, count);
+    if (count > need) orphans.push({ assignment, reason: need === 0 ? 'day' : 'extra' });
+  }
+  return orphans;
+}
+
 /** Assignments that sit inside a slot that still exists (a day's need may have shrunk). */
 export function filledSlots(positions, arenaId, dates, assignments) {
   let n = 0;

@@ -9,7 +9,7 @@ import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import { hotelFigures } from '@/lib/travelActuals';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
-import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton } from './useTravelList';
+import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton, CopyFromStaffButton } from './useTravelList';
 
 const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
   const list = useTravelList(personnel, (m) => {
@@ -78,6 +78,7 @@ const HotelsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMe
                   </div>
                   <div className="flex items-center gap-2">
                     <ExpenseTypeSelect expense={member.reimbursable_expenses?.hotel} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'hotel', v)} />
+                    <CopyFromStaffButton member={member} entry={travelData[member.id]} travelKey="hotel" expenseKey="hotel" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <ClearCardButton entry={travelData[member.id]} memberId={member.id} travelKey="hotel" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <DatesLockButton locked={!!hotel.datesLocked} onToggle={() => updateHotel(member.id, 'datesLocked', !hotel.datesLocked)} />
                     {hasHotel ? (

@@ -8,7 +8,7 @@ import { currency } from '@/lib/contractUtils';
 import DatesLockButton from './DatesLockButton';
 import ReceiptsField from './ReceiptsField';
 import ExpenseTypeSelect from './ExpenseTypeSelect';
-import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton } from './useTravelList';
+import { useTravelList, TravelListToolbar, CardToggle, NoMatches, ClearCardButton, CopyFromStaffButton } from './useTravelList';
 
 const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyMessage, storageKey, onExpenseTypeChange, expenseTypeLocked }) => {
   const list = useTravelList(personnel, (m) => {
@@ -61,6 +61,7 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                   </div>
                   <div className="flex items-center gap-2">
                     <ExpenseTypeSelect expense={member.reimbursable_expenses?.airfare} disabled={budgetFrozen || expenseTypeLocked} onChange={(v) => onExpenseTypeChange?.(member.id, 'airfare', v)} />
+                    <CopyFromStaffButton member={member} entry={travelData[member.id]} travelKey="flight" expenseKey="airfare" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <ClearCardButton entry={travelData[member.id]} memberId={member.id} travelKey="flight" setTravelData={setTravelData} budgetFrozen={budgetFrozen} />
                     <DatesLockButton locked={!!flight.datesLocked} onToggle={() => updateFlight(member.id, 'datesLocked', !flight.datesLocked)} />
                     {hasFlight ? (

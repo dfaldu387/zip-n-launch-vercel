@@ -1,6 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin } from 'lucide-react';
+import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin, CheckCircle2, Paperclip } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { stillToBook, missingReceipts } from '@/lib/travelBooking';
 import { currency, isDirectExpense } from '@/lib/contractUtils';
 import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines, travelSpan } from '@/lib/travelActuals';
 
@@ -58,7 +60,7 @@ const WhoPaysCard = ({ title, hint, accent, summary }) => (
   </Card>
 );
 
-const OverviewTab = ({ personnel, travelData, contractSettings }) => {
+const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => {
 
   const getPersonTravel = (memberId) => travelData[memberId] || {};
 
@@ -145,6 +147,9 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
   const paidByShow = summarizeLines(allLines.filter((l) => l.direct));
   const reimbursed = summarizeLines(allLines.filter((l) => !l.direct));
 
+  const toBook = stillToBook(personnel, travelData);
+  const noReceipt = missingReceipts(personnel, travelData);
+
   const completedCount = personnel.filter((m) => {
     const t = getPersonTravel(m.id);
     return t.flight?.airline || t.hotel?.hotelName || t.rentalCar?.company;
@@ -208,6 +213,88 @@ const OverviewTab = ({ personnel, travelData, contractSettings }) => {
           </span>
         )}
       </div>
+
+      {/* Who still needs booking */}
+      <Card className={toBook.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            {toBook.length > 0 ? <Calendar className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
+            Who still needs booking?
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            {toBook.length > 0
+              ? 'These people need the items below but nothing is booked yet. Click an item to open its tab.'
+              : 'Everything that is needed has been booked.'}
+          </p>
+        </CardHeader>
+        {toBook.length > 0 && (
+          <CardContent className="space-y-2">
+            {toBook.map(({ member, items }) => (
+              <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{member.name || 'Unnamed'}</p>
+                  <p className="text-xs text-muted-foreground">{member.roleName}</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {items.map((item) => (
+                    <Button
+                      key={item.type}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => onGoToTab?.(item.tab)}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        )}
+      </Card>
+
+      {/* Receipt checklist */}
+      <Card className={noReceipt.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            {noReceipt.length > 0 ? <Paperclip className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
+            Receipts to attach
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            {noReceipt.length > 0
+              ? 'These actual amounts have no receipt yet. Click an item to open its tab and use Add Receipt.'
+              : 'Every actual amount has a receipt attached (or no actual has been entered yet).'}
+          </p>
+        </CardHeader>
+        {noReceipt.length > 0 && (
+          <CardContent className="space-y-2">
+            {noReceipt.map(({ member, items }) => (
+              <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{member.name || 'Unnamed'}</p>
+                  <p className="text-xs text-muted-foreground">{member.roleName}</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {items.map((item) => (
+                    <Button
+                      key={item.type}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => onGoToTab?.(item.tab)}
+                    >
+                      {item.label} {currency(item.actual)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        )}
+      </Card>
 
       {/* Budget vs Actual */}
       <Card>
