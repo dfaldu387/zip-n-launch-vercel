@@ -10,6 +10,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -353,6 +357,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
     });
 
     const [sharedLocked, setSharedLocked] = useState(!!pd.sharedStaffLocked);
+    const [confirmAutoGenerate, setConfirmAutoGenerate] = useState(false);
 
     // A lock is saved the moment it is clicked, so it survives a refresh.
     const toggleArenaLock = async (arenaId) => {
@@ -395,6 +400,13 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
     const removeArena = (arenaId) => {
         setArenas(prev => prev.filter(a => a.id !== arenaId));
     };
+
+    // Saved schedule assignments that sit in an arena (or shared staff) this reset would replace.
+    const assignmentsAtRisk = (() => {
+        const resetIds = new Set(arenas.filter(a => !a.locked).map(a => a.id));
+        if (!sharedLocked) resetIds.add('__shared__');
+        return (pd.staffSchedule?.assignments || []).filter(a => resetIds.has(a.arenaId)).length;
+    })();
 
     const autoGenerateStaff = () => {
         // Locked arenas and locked shared staff are left exactly as they are.
@@ -493,12 +505,34 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
                 </div>
             </div>
 
+
+            {/* Auto-Generate Staff replaces every unlocked arena's positions, so ask first. */}
+            <AlertDialog open={confirmAutoGenerate} onOpenChange={setConfirmAutoGenerate}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Reset all staff positions?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This replaces the staff positions in every unlocked arena (and unlocked shared staff) with the default list.
+                            Your own positions, one-day settings and Required settings there will be removed.
+                            {assignmentsAtRisk > 0
+                                ? ` ${assignmentsAtRisk} ${assignmentsAtRisk === 1 ? 'person' : 'people'} already assigned in the schedule will lose their slot.`
+                                : ''}
+                            {' '}Locked arenas are not changed. Nothing is saved until you click Save Setup.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={autoGenerateStaff}>Yes, reset positions</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
             {/* Actions */}
             <div className="flex items-center gap-3">
                 <Button onClick={addArena} variant="outline">
                     <Plus className="h-4 w-4 mr-2" /> Add Arena
                 </Button>
-                <Button onClick={autoGenerateStaff} variant="outline">
+                <Button onClick={() => setConfirmAutoGenerate(true)} variant="outline">
                     <Wand2 className="h-4 w-4 mr-2" /> Auto-Generate Staff
                 </Button>
                 <div className="flex-1" />

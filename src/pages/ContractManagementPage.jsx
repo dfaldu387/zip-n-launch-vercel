@@ -13,7 +13,11 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import { BuilderSteps } from '@/components/pbb/BuilderSteps';
 import { applyLinkedProjectData, isBudgetFrozen, syncOfficialsFromShow } from '@/lib/contractUtils';
-import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
+import { stampModuleStatusOnSave, isWizardReadOnly, MODULE_STATUS } from '@/lib/moduleStatusService';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 
@@ -103,6 +107,9 @@ const ContractManagementPage = () => {
   const linkedShowId = showIdFromQuery || formData.linkedProjectId;
   const linkedShow = existingProjects.find((p) => p.id === linkedShowId);
   const isReadOnly = isWizardReadOnly(linkedShow?.project_data, 'contracts');
+
+  const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
 
   const skipReloadRef = useRef(false);
   const formDataRef = useRef(formData);
@@ -337,6 +344,21 @@ const ContractManagementPage = () => {
 
     setIsSaving(true);
     try {
+      // The lock above comes from what this page loaded. If the section was locked from
+      // another tab since then, read the show again and stop before writing anything.
+      if (latestFormData.linkedProjectId) {
+        const { data: freshShow, error: freshError } = await supabase
+          .from('projects')
+          .select('project_data')
+          .eq('id', latestFormData.linkedProjectId)
+          .maybeSingle();
+        if (freshError) throw freshError;
+        if (isWizardReadOnly(freshShow?.project_data, 'contracts')) {
+          if (!silent) toast({ title: 'Locked', description: 'This section is locked. Set Contract Management back to Draft on the show page to save changes.', variant: 'destructive' });
+          return null;
+        }
+      }
+
       const showNameTrimmed = latestFormData.showName.trim();
       let currentProjectId = sanitizedProjectId || latestFormData.id;
 
@@ -519,6 +541,51 @@ const ContractManagementPage = () => {
     }
   };
 
+  // Finalize: save the contract with a finalized date, then lock the show's Contract
+  // Management card. Unlocking is done on the show page (set it back to Draft).
+  const handleFinalize = async () => {
+    setConfirmFinalize(false);
+    if (isReadOnly || isFinalizing) return;
+    setIsFinalizing(true);
+    try {
+      const next = { ...formDataRef.current, finalizedAt: new Date().toISOString() };
+      formDataRef.current = next; // saveProject reads from the ref, so update it first
+      setFormData(next);
+      const savedId = await saveProject({ silent: true });
+      if (!savedId) {
+        toast({ title: 'Not finalized', description: 'The contracts could not be saved, so nothing was locked. Please try again.', variant: 'destructive' });
+        return;
+      }
+
+      const showId = next.linkedProjectId;
+      if (!showId) {
+        toast({ title: 'Contracts Finalized', description: 'Saved. This contract is not linked to a show, so there is no card to lock.' });
+        return;
+      }
+
+      const { data: showRow, error: readError } = await supabase
+        .from('projects')
+        .select('project_data')
+        .eq('id', showId)
+        .maybeSingle();
+      if (readError || !showRow?.project_data) throw readError || new Error('Show not found');
+      const lockedData = {
+        ...showRow.project_data,
+        moduleStatuses: { ...(showRow.project_data.moduleStatuses || {}), contracts: MODULE_STATUS.LOCKED },
+      };
+      const { error } = await supabase.from('projects').update({ project_data: lockedData }).eq('id', showId);
+      if (error) throw error;
+
+      // Flip this page to read-only right away (it reads the lock from the linked show).
+      setExistingProjects((prev) => prev.map((p) => (p.id === showId ? { ...p, project_data: lockedData } : p)));
+      toast({ title: 'Contracts Finalized', description: 'Contract Management is now locked. Set it back to Draft on the show page to make changes.' });
+    } catch (error) {
+      toast({ title: 'Saved, but not locked', description: `${error.message}. Lock Contract Management on the show page.`, variant: 'destructive' });
+    } finally {
+      setIsFinalizing(false);
+    }
+  };
+
   // Next with auto-save
   const handleNext = async () => {
     const nextStep = Math.min(currentStep + 1, 6);
@@ -647,8 +714,9 @@ const ContractManagementPage = () => {
                     </Button>
                   ) : (
                     <Button
-                      onClick={() => toast({ title: 'Contracts Finalized!', description: 'All contracts have been processed successfully.' })}
-                      disabled={formData.paymentStatus !== 'confirmed'}
+                      onClick={() => setConfirmFinalize(true)}
+                      disabled={formData.paymentStatus !== 'confirmed' || isReadOnly || isFinalizing}
+                      title={isReadOnly ? 'Already finalized — set it back to Draft on the show page to change it' : undefined}
                     >
                       <CheckCircle className="mr-2 h-4 w-4" />
                       Finalize Contracts
@@ -659,6 +727,21 @@ const ContractManagementPage = () => {
             </Card>
           </div>
         </main>
+
+        <AlertDialog open={confirmFinalize} onOpenChange={setConfirmFinalize}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Finalize contracts?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This saves the contracts and locks Contract Management. Nothing can be changed until you set it back to Draft on the show page.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Not yet</AlertDialogCancel>
+              <AlertDialogAction onClick={handleFinalize}>Yes, finalize</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </>
   );

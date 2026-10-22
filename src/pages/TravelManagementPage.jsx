@@ -190,11 +190,18 @@ const TravelManagementPage = () => {
 
     setIsSaving(true);
     try {
-      const project = contractProjects.find((p) => p.id === selectedProjectId);
-      if (!project) throw new Error('Project not found');
+      // Build on the newest saved copy of the contract project, not the one loaded
+      // with this page, so contract changes saved since then are not written back.
+      const { data: latestRow, error: readError } = await supabase
+        .from('projects')
+        .select('project_data')
+        .eq('id', selectedProjectId)
+        .maybeSingle();
+      if (readError) throw readError;
+      if (!latestRow?.project_data) throw new Error('Project not found');
 
       const updatedProjectData = {
-        ...project.project_data,
+        ...latestRow.project_data,
         travelData,
       };
 
@@ -269,8 +276,9 @@ const TravelManagementPage = () => {
         if (error) throw error;
         setShowProject((prev) => (prev ? { ...prev, project_data: updated } : prev));
       } else if (selectedProjectId) {
-        const project = contractProjects.find((p) => p.id === selectedProjectId);
-        const next = applyExpenseType(project?.project_data, memberId, expenseKey, value);
+        const { data: row, error: readError } = await supabase.from('projects').select('project_data').eq('id', selectedProjectId).maybeSingle();
+        if (readError) throw readError;
+        const next = applyExpenseType(row?.project_data, memberId, expenseKey, value);
         if (!next) return notFound();
         const updated = { ...next, travelData };
         const { error } = await supabase.from('projects').update({ project_data: updated }).eq('id', selectedProjectId);

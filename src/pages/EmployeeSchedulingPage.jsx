@@ -19,6 +19,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
 import { stampModuleStatusOnSave, isWizardReadOnly } from '@/lib/moduleStatusService';
+import { readLatestForSave } from '@/lib/latestShowGuard';
 import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { staffRoles } from '@/lib/staffingData';
@@ -1181,13 +1182,17 @@ const EmployeeSchedulingPage = () => {
             // Build on the newest saved copy, not the one loaded with this page: staff
             // saved from the Officials & Staff panel (or any other module) since then
             // would otherwise be written back to their old values.
-            const { data: latestRow } = await supabase
-                .from('projects')
-                .select('project_data')
-                .eq('id', selectedShow.id)
-                .maybeSingle();
+            const check = await readLatestForSave(selectedShow.id, 'employeeScheduling');
+            if (!check.ok) {
+                // Never fall back to the old copy: that could overwrite newer staff data.
+                failedScheduleJsonRef.current = JSON.stringify({ a: assignments, r: roster, l: lockedArenas });
+                if (!silent || check.reason === 'read-failed') {
+                    toast({ title: check.reason === 'locked' ? 'Locked' : 'Not saved', description: check.message, variant: 'destructive' });
+                }
+                return;
+            }
             const updatedData = stampModuleStatusOnSave({
-                ...(latestRow?.project_data || selectedShow.project_data),
+                ...check.latest,
                 staffSchedule: { assignments, roster, lockedArenas },
             }, 'employeeScheduling');
             const { error } = await supabase
