@@ -63,3 +63,19 @@ describe('findOrphanedAssignments', () => {
     expect(findOrphanedAssignments([], [], days, [as({ arenaId: '__shared__' })]).map((o) => o.reason)).toEqual(['position']);
   });
 });
+
+import { scheduleQtyForDate, totalSlots } from '@/lib/staffQty';
+
+describe('scheduleQtyForDate', () => {
+  const days = ['2026-11-06', '2026-11-07', '2026-11-08'];
+  const steward = { id: 's', roleId: 'steward', qty: 1, required: false, requiredByDate: { '2026-11-06': true, '2026-11-08': true } };
+
+  it('is not needed on a day a position is skipped while required on others', () => {
+    expect(days.map((d) => scheduleQtyForDate(steward, days, d))).toEqual([1, 0, 1]);
+    expect(totalSlots([steward], days)).toBe(2);
+  });
+
+  it('keeps every day for a position with no required days at all', () => {
+    expect(days.map((d) => scheduleQtyForDate({ qty: 1, required: false }, days, d))).toEqual([1, 1, 1]);
+  });
+});

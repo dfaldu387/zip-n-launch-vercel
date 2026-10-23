@@ -13,17 +13,24 @@ export const TRAVEL_ITEMS = [
   { type: 'mileage', label: 'Mileage', tab: 'mileage', expenseKey: 'mileage', booked: (e) => e.miles || e.origin },
 ];
 
-/** [{ member, items: [{ type, label, tab }] }] for people with at least one item still to book. */
+/**
+ * [{ member, items, booked }] for people with at least one item still to book. `items` are the ones
+ * still to book; `booked` are the needed ones already done (shown green beside them).
+ */
 export function stillToBook(personnel, travelData = {}) {
   const out = [];
   for (const member of personnel || []) {
     const entry = travelData[member.id] || {};
     const items = [];
+    const booked = [];
     for (const item of TRAVEL_ITEMS) {
       const needed = !!member.reimbursable_expenses?.[item.expenseKey]?.reimbursed || hasEnteredTravel(entry, item.type);
-      if (needed && !item.booked(entry[item.type] || {})) items.push({ type: item.type, label: item.label, tab: item.tab });
+      if (!needed) continue;
+      const row = { type: item.type, label: item.label, tab: item.tab };
+      if (item.booked(entry[item.type] || {})) booked.push(row);
+      else items.push(row);
     }
-    if (items.length > 0) out.push({ member, items });
+    if (items.length > 0) out.push({ member, items, booked });
   }
   return out;
 }

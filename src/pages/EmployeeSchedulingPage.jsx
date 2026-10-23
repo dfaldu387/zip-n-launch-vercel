@@ -23,7 +23,7 @@ import { readLatestForSave } from '@/lib/latestShowGuard';
 import { ModuleLockGuard } from '@/components/shared/ModuleLockGuard';
 import { v4 as uuidv4 } from 'uuid';
 import { staffRoles } from '@/lib/staffingData';
-import { qtyForDate, requiredDates, totalSlots as slotsForDates, filledSlots as filledForDates, findOrphanedAssignments, ORPHAN_REASONS } from '@/lib/staffQty';
+import { scheduleQtyForDate, requiredDates, totalSlots as slotsForDates, filledSlots as filledForDates, findOrphanedAssignments, ORPHAN_REASONS } from '@/lib/staffQty';
 import { flattenPersonnel } from '@/lib/contractUtils';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -87,6 +87,16 @@ const ShowPicker = ({ shows, onSelect }) => {
         </div>
     );
 };
+
+// A day this position is not needed: striped and crossed out so it never looks like an open slot.
+const NotNeededCell = () => (
+    <td
+        className="px-2 py-1.5 text-center text-xs text-muted-foreground/60 bg-muted/30 bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,hsl(var(--muted-foreground)/0.12)_6px,hsl(var(--muted-foreground)/0.12)_7px)]"
+        title="Not needed this day"
+    >
+        <span className="inline-flex items-center gap-1"><X className="h-3 w-3" />Not needed</span>
+    </td>
+);
 
 // ── Assignment Cell ──
 
@@ -254,7 +264,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                             {arena.name}
                         </CardTitle>
                         <CardDescription className="text-xs">
-                            {positions.filter(p => dates.some(d => qtyForDate(p, d) > 0)).length} positions x {dates.length} day{dates.length !== 1 ? 's' : ''} · {filled} of {totalSlots} filled
+                            {positions.filter(p => dates.some(d => scheduleQtyForDate(p, dates, d) > 0)).length} positions x {dates.length} day{dates.length !== 1 ? 's' : ''} · {filled} of {totalSlots} filled
                         </CardDescription>
                     </div>
                     <div className="flex items-center gap-2">
@@ -284,7 +294,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                 const role = staffRoles[pos.roleId];
                                 const Icon = role?.icon || Users;
                                 // Rows = the busiest day's need; quieter days show "—" in the extra rows.
-                                const qty = Math.max(0, ...dates.map(d => qtyForDate(pos, d)));
+                                const qty = Math.max(0, ...dates.map(d => scheduleQtyForDate(pos, dates, d)));
                                 return Array.from({ length: qty }, (_, slotIdx) => (
                                     <tr key={`${pos.id}-${slotIdx}`} className="border-b last:border-0">
                                         <td className="px-3 py-2">
@@ -298,10 +308,8 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                             </div>
                                         </td>
                                         {dates.map(dateStr => {
-                                            if (slotIdx >= qtyForDate(pos, dateStr)) {
-                                                return (
-                                                    <td key={dateStr} className="px-2 py-1.5 text-center text-muted-foreground/50 bg-muted/20" title="Not needed this day">—</td>
-                                                );
+                                            if (slotIdx >= scheduleQtyForDate(pos, dates, dateStr)) {
+                                                return <NotNeededCell key={dateStr} />;
                                             }
                                             const slotAssignments = assignments.filter(
                                                 a => a.arenaId === arena.id && a.date === dateStr && a.positionId === pos.id
@@ -384,7 +392,7 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                             {sharedStaff.map(pos => {
                                 const role = staffRoles[pos.roleId];
                                 const Icon = role?.icon || Users;
-                                const qty = Math.max(0, ...dates.map(d => qtyForDate(pos, d)));
+                                const qty = Math.max(0, ...dates.map(d => scheduleQtyForDate(pos, dates, d)));
                                 return Array.from({ length: qty }, (_, slotIdx) => (
                                     <tr key={`${pos.id}-${slotIdx}`} className="border-b last:border-0">
                                         <td className="px-3 py-2">
@@ -398,10 +406,8 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                                             </div>
                                         </td>
                                         {dates.map(dateStr => {
-                                            if (slotIdx >= qtyForDate(pos, dateStr)) {
-                                                return (
-                                                    <td key={dateStr} className="px-2 py-1.5 text-center text-muted-foreground/50 bg-muted/20" title="Not needed this day">—</td>
-                                                );
+                                            if (slotIdx >= scheduleQtyForDate(pos, dates, dateStr)) {
+                                                return <NotNeededCell key={dateStr} />;
                                             }
                                             const slotAssignments = assignments.filter(
                                                 a => a.arenaId === '__shared__' && a.date === dateStr && a.positionId === pos.id

@@ -91,11 +91,20 @@ export function peakRequiredQty(pos, dates) {
   return Math.max(...days.map((d) => setupQtyForDate(pos, d)));
 }
 
+/**
+ * What the schedule grid should offer on one date. Same as qtyForDate, except a position that is
+ * required on some of the dates but not this one (e.g. Show Steward: Fri + Sun) is not needed here.
+ */
+export function scheduleQtyForDate(pos, dates, date) {
+  if (requiredDates(pos, dates).length > 0 && !requiredForDate(pos, date)) return 0;
+  return qtyForDate(pos, date);
+}
+
 /** Total slots a list of positions needs across the dates. */
 export function totalSlots(positions, dates) {
   let n = 0;
   for (const pos of positions || []) {
-    for (const d of dates) n += qtyForDate(pos, d);
+    for (const d of dates) n += scheduleQtyForDate(pos, dates, d);
   }
   return n;
 }
@@ -128,7 +137,7 @@ export function findOrphanedAssignments(arenas, sharedStaff, showDates, assignme
     const pos = scope.positions.find((p) => p.id === assignment.positionId);
     if (!pos) { orphans.push({ assignment, reason: 'position' }); continue; }
     if (!scope.dates.includes(assignment.date)) { orphans.push({ assignment, reason: 'day' }); continue; }
-    const need = qtyForDate(pos, assignment.date);
+    const need = scheduleQtyForDate(pos, scope.dates, assignment.date);
     const key = `${assignment.arenaId}|${assignment.date}|${assignment.positionId}`;
     const count = (used.get(key) || 0) + 1;
     used.set(key, count);
@@ -145,7 +154,7 @@ export function filledSlots(positions, arenaId, dates, assignments) {
       const have = assignments.filter(
         (a) => a.arenaId === arenaId && a.date === d && a.positionId === pos.id
       ).length;
-      n += Math.min(have, qtyForDate(pos, d));
+      n += Math.min(have, scheduleQtyForDate(pos, dates, d));
     }
   }
   return n;

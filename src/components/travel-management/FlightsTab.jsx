@@ -68,7 +68,7 @@ const FlightsTab = ({ personnel, travelData, setTravelData, budgetFrozen, emptyM
                     <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>
 
                     ) : (
-                    <Badge variant="secondary">Not Set</Badge>
+                    <Badge variant="secondary">Booking needed</Badge>
 
                     )}
                   </div>

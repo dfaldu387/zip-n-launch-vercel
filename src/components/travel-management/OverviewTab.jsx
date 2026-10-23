@@ -229,13 +229,27 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
         </CardHeader>
         {toBook.length > 0 && (
           <CardContent className="space-y-2">
-            {toBook.map(({ member, items }) => (
+            {toBook.map(({ member, items, booked }) => (
               <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{member.name || 'Unnamed'}</p>
                   <p className="text-xs text-muted-foreground">{member.roleName}</p>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
+                  {booked.map((item) => (
+                    <Button
+                      key={item.type}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs border-green-500/50 bg-green-500/15 text-green-700 hover:bg-green-500/25 dark:text-green-400"
+                      title="Booked"
+                      onClick={() => onGoToTab?.(item.tab)}
+                    >
+                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                      {item.label}
+                    </Button>
+                  ))}
                   {items.map((item) => (
                     <Button
                       key={item.type}

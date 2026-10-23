@@ -34,7 +34,7 @@ export function useTravelList(personnel, isBooked) {
 export const TravelListToolbar = ({ list, total }) => {
   const { query, setQuery, status, setStatus, openAll, closeAll, filtered } = list;
   if (total === 0) return null;
-  const options = [['all', 'All'], ['booked', 'Booked'], ['notset', 'Not set']];
+  const options = [['all', 'All'], ['booked', 'Booked'], ['notset', 'Booking needed']];
   return (
     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
       <div className="relative flex-1 min-w-0">
