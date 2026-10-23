@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import { format, addDays, subDays, differenceInCalendarDays, isValid } from 'date-fns';
 import { supabase } from '@/lib/supabaseClient';
 import { useToast } from '@/components/ui/use-toast';
-import { isBudgetFrozen, isMemberFrozen } from '@/lib/contractUtils';
+import { isBudgetFrozen, isMemberFrozen, calculateStaffCost } from '@/lib/contractUtils';
 import { BudgetFrozenBanner } from '@/components/contract-management/BudgetFrozenBanner';
 
 const RoleIcon = ({ roleId }) => {
@@ -138,6 +138,9 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, assoc
         return totalCompensation + expensesTotal;
     }, [totalCompensation, member.reimbursable_expenses]);
 
+    // Expenses the show pays directly are not in the contract total, but still cost the show.
+    const directTotal = useMemo(() => calculateStaffCost(member).directExpenses, [member]);
+
     return (
         <Accordion type="single" collapsible className="w-full border rounded-md bg-background">
             <AccordionItem value={member.id}>
@@ -145,9 +148,10 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, onDuplicate, role, assoc
                     <div className="flex items-center justify-between w-full">
                         <div className="flex items-center gap-3">
                             <span className="font-medium text-sm">{member.name || 'New Staff Member'}</span>
-                            {totalCost > 0 && (
+                            {(totalCost + directTotal) > 0 && (
                                 <span className="text-xs font-semibold text-green-600 bg-green-100 dark:bg-green-900/50 dark:text-green-400 px-2 py-0.5 rounded-full">
-                                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalCost)}
+                                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalCost + directTotal)}
+                                    {directTotal > 0 && ` · incl. ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(directTotal)} paid by show`}
                                 </span>
                             )}
                         </div>
@@ -627,7 +631,7 @@ export const Step2_OfficialsStaff = ({ formData, setFormData }) => {
         let totalCost = 0;
         for (const roleId in associationStaff) {
             for (const member of associationStaff[roleId]) {
-                totalCost += calculateTotalCostForMember(member);
+                totalCost += calculateTotalCostForMember(member) + calculateStaffCost(member).directExpenses;
             }
         }
         return totalCost;

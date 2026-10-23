@@ -74,3 +74,19 @@ describe('hotel $1,798 ties from the staff page to Budgeting', () => {
     expect(c.totalShowCost).toBe(1798);
   });
 });
+
+describe('Rental Car: Direct vs Reimbursement', () => {
+  const rental = (type) => ({
+    day_fee: 100,
+    employment_start_date: '2026-11-04',
+    employment_end_date: '2026-11-08',
+    reimbursable_expenses: { rentalCar: { reimbursed: true, expense_type: type, total: 474 } },
+  });
+  it('costs the show the same either way; only the contract differs', () => {
+    const d = calculateStaffCost(rental('direct'));
+    const r = calculateStaffCost(rental('reimbursement'));
+    expect(d.totalShowCost).toBe(r.totalShowCost);
+    expect(d.totalCompensation).toBe(d.totalPay);
+    expect(r.totalCompensation).toBe(r.totalPay + 474);
+  });
+});
