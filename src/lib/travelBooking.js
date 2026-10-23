@@ -18,6 +18,11 @@ export const TRAVEL_ITEMS = [
  * still to book; `booked` are the needed ones already done (shown green beside them).
  */
 export function stillToBook(personnel, travelData = {}) {
+  return bookingBoard(personnel, travelData).filter((p) => p.items.length > 0);
+}
+
+/** Same shape as stillToBook, but also keeps people whose needed items are all booked (all green). */
+export function bookingBoard(personnel, travelData = {}) {
   const out = [];
   for (const member of personnel || []) {
     const entry = travelData[member.id] || {};
@@ -30,9 +35,16 @@ export function stillToBook(personnel, travelData = {}) {
       if (item.booked(entry[item.type] || {})) booked.push(row);
       else items.push(row);
     }
-    if (items.length > 0) out.push({ member, items, booked });
+    if (items.length > 0 || booked.length > 0) out.push({ member, items, booked });
   }
   return out;
+}
+
+/** Which of a person's travel types are booked, for the green cells in the Overview table. */
+export function bookedTypes(entry = {}) {
+  const set = new Set();
+  for (const item of TRAVEL_ITEMS) if (item.booked(entry[item.type] || {})) set.add(item.type);
+  return set;
 }
 
 // ── Receipt checklist ──

@@ -62,6 +62,7 @@ const ArchivePatternsPage = lazy(() => import('@/pages/ArchivePatternsPage'));
 const PatternUploadLandingPage = lazy(() => import('@/pages/PatternUploadLandingPage'));
 const PatternUploadRequestPage = lazy(() => import('@/pages/PatternUploadRequestPage'));
 const PatternJudgeRequestPage = lazy(() => import('@/pages/PatternJudgeRequestPage'));
+const TravelInfoRequestPage = lazy(() => import('@/pages/TravelInfoRequestPage'));
 const HorseShowManagerPage = lazy(() => import('@/pages/HorseShowManagerPage'));
 const CreateShowPage = lazy(() => import('@/pages/CreateShowPage'));
 const ShowStructurePage = lazy(() => import('@/pages/ShowStructurePage'));
@@ -184,6 +185,7 @@ function App() {
                   <Route path="/show/:showId" element={<PublicShowPage />} />
                   <Route path="/upload-request/:token" element={<PatternUploadRequestPage />} />
                   <Route path="/judge-request/:token" element={<PatternJudgeRequestPage />} />
+                  <Route path="/travel-info/:token" element={<TravelInfoRequestPage />} />
                   <Route path="/show/:showId/book" element={<PublicBookingPage />} />
                   <Route path="/show/:showId/stalling-chart" element={<PublicStallingChartPage />} />
                   <Route path="/show/:showId/order-supplies" element={<QuickSupplyOrderPage />} />

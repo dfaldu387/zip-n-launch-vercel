@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stillToBook, missingReceipts } from '@/lib/travelBooking';
+import { stillToBook, bookingBoard, missingReceipts } from '@/lib/travelBooking';
 
 const on = { reimbursed: true };
 const person = (id, expenses = {}) => ({ id, name: id, reimbursable_expenses: expenses });
@@ -57,5 +57,14 @@ describe('missingReceipts', () => {
       a: { flight: { actualCost: '10' }, rentalCar: { actualCost: '20' }, mileage: { actualCost: '30' } },
     });
     expect(out[0].items.map((i) => i.type)).toEqual(['flight', 'rentalCar', 'mileage']);
+  });
+});
+
+describe('bookingBoard', () => {
+  it('keeps a fully booked person so every chip can show green', () => {
+    const out = bookingBoard([person('a', { hotel: on })], { a: { hotel: { hotelName: 'Hilton' } } });
+    expect(out).toHaveLength(1);
+    expect(out[0].items).toEqual([]);
+    expect(out[0].booked.map((i) => i.type)).toEqual(['hotel']);
   });
 });

@@ -1,8 +1,12 @@
+import { useState } from 'react';
+import { Mail } from 'lucide-react';
+import RequestInfoDialog from './RequestInfoDialog';
+import { requestableItems, requestState } from '@/lib/travelRequests';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin, CheckCircle2, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { stillToBook, missingReceipts } from '@/lib/travelBooking';
+import { stillToBook, bookingBoard, bookedTypes, TRAVEL_ITEMS, missingReceipts } from '@/lib/travelBooking';
 import { currency, isDirectExpense } from '@/lib/contractUtils';
 import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines, travelSpan } from '@/lib/travelActuals';
 
@@ -60,7 +64,13 @@ const WhoPaysCard = ({ title, hint, accent, summary }) => (
   </Card>
 );
 
-const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => {
+const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showId, travelRequests, travelSubmissions }) => {
+  const [requestRows, setRequestRows] = useState(null); // rows for the open "Request info" dialog
+  const [justSent, setJustSent] = useState({}); // memberId -> sentAt, for requests sent in this visit
+
+  const stateOf = (memberId) =>
+    requestState(justSent[memberId] ? { sentAt: justSent[memberId] } : travelRequests?.[memberId], travelSubmissions?.[memberId]);
+  const requestRowFor = ({ member, items }) => ({ member, options: requestableItems(member, items) });
 
   const getPersonTravel = (memberId) => travelData[memberId] || {};
 
@@ -80,11 +90,12 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
     return isDirectExpense(expense) ? 'Show buys' : 'Staff buys, reimbursed';
   };
 
-  const CostCell = ({ member, cost, expenseKey }) => {
+  const CostCell = ({ member, cost, expenseKey, booked }) => {
     const buyer = buyerLabel(member, expenseKey);
     return (
-      <td className="px-4 py-3 text-right">
-        {cost ? currency(cost) : '—'}
+      <td className={`px-4 py-3 text-right ${booked ? 'bg-green-500/10 text-green-700 dark:text-green-400' : ''}`}>
+        {booked && <CheckCircle2 className="inline h-3 w-3 mr-1 align-[-1px]" />}
+        {cost ? currency(cost) : booked ? 'Booked' : '—'}
         {buyer && (
           <span className={`block text-[10px] ${buyer === 'Show buys' ? 'text-sky-600' : 'text-muted-foreground'}`}>{buyer}</span>
         )}
@@ -148,6 +159,12 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
   const reimbursed = summarizeLines(allLines.filter((l) => !l.direct));
 
   const toBook = stillToBook(personnel, travelData);
+  // Everyone with a needed item, booked or not, so the booked ones can show green beside the rest.
+  const board = bookingBoard(personnel, travelData);
+  const itemOrder = TRAVEL_ITEMS.map((i) => i.type);
+  const chipsFor = ({ items, booked }) =>
+    [...items.map((i) => ({ ...i, done: false })), ...booked.map((i) => ({ ...i, done: true }))]
+      .sort((a, b) => itemOrder.indexOf(a.type) - itemOrder.indexOf(b.type));
   const noReceipt = missingReceipts(personnel, travelData);
 
   const completedCount = personnel.filter((m) => {
@@ -220,45 +237,50 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
           <CardTitle className="text-base flex items-center gap-2">
             {toBook.length > 0 ? <Calendar className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
             Who still needs booking?
+            {showId && toBook.length > 0 && (
+              <Button type="button" size="sm" variant="outline" className="ml-auto h-7 px-2 text-xs" onClick={() => setRequestRows(toBook.map(requestRowFor))}>
+                <Mail className="h-3 w-3 mr-1" />
+                Request all
+              </Button>
+            )}
           </CardTitle>
           <p className="text-xs text-muted-foreground">
             {toBook.length > 0
-              ? 'These people need the items below but nothing is booked yet. Click an item to open its tab.'
+              ? 'Everything each person needs is listed. Green means it is booked; the others still need booking. Click an item to open its tab.'
               : 'Everything that is needed has been booked.'}
           </p>
         </CardHeader>
-        {toBook.length > 0 && (
+        {board.length > 0 && (
           <CardContent className="space-y-2">
-            {toBook.map(({ member, items, booked }) => (
-              <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
+            {board.map((row) => (
+              <div key={row.member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{member.name || 'Unnamed'}</p>
-                  <p className="text-xs text-muted-foreground">{member.roleName}</p>
+                  <p className="text-sm font-medium truncate">{row.member.name || 'Unnamed'}</p>
+                  <p className="text-xs text-muted-foreground">{row.member.roleName}</p>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {booked.map((item) => (
-                    <Button
-                      key={item.type}
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs border-green-500/50 bg-green-500/15 text-green-700 hover:bg-green-500/25 dark:text-green-400"
-                      title="Booked"
-                      onClick={() => onGoToTab?.(item.tab)}
-                    >
-                      <CheckCircle2 className="h-3 w-3 mr-1" />
-                      {item.label}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {stateOf(row.member.id) && (
+                    <span className={`text-[11px] mr-1 ${stateOf(row.member.id) === 'submitted' ? 'text-green-600' : 'text-muted-foreground'}`}>
+                      {stateOf(row.member.id) === 'submitted' ? 'Details received' : 'Requested'}
+                    </span>
+                  )}
+                  {showId && row.items.length > 0 && (
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-600" onClick={() => setRequestRows([requestRowFor(row)])}>
+                      <Mail className="h-3 w-3 mr-1" />
+                      Request info
                     </Button>
-                  ))}
-                  {items.map((item) => (
+                  )}
+                  {chipsFor(row).map((item) => (
                     <Button
                       key={item.type}
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-7 px-2 text-xs"
+                      className={`h-7 px-2 text-xs ${item.done ? 'border-green-500/50 bg-green-500/15 text-green-700 hover:bg-green-500/25 dark:text-green-400' : ''}`}
+                      title={item.done ? 'Booked' : 'Not booked yet'}
                       onClick={() => onGoToTab?.(item.tab)}
                     >
+                      {item.done && <CheckCircle2 className="h-3 w-3 mr-1" />}
                       {item.label}
                     </Button>
                   ))}
@@ -268,6 +290,14 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
           </CardContent>
         )}
       </Card>
+
+      <RequestInfoDialog
+        open={!!requestRows}
+        onOpenChange={(v) => { if (!v) setRequestRows(null); }}
+        rows={requestRows || []}
+        showId={showId}
+        onSent={(memberId, sentAt) => setJustSent((s) => ({ ...s, [memberId]: sentAt }))}
+      />
 
       {/* Receipt checklist */}
       <Card className={noReceipt.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}>
@@ -404,6 +434,7 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
                     const travelStart = span?.start || travel.travelStart || '';
                     const travelEnd = span?.end || travel.travelEnd || '';
                     const hasBooking = travel.flight?.airline || travel.hotel?.hotelName || travel.rentalCar?.company;
+                    const doneTypes = bookedTypes(travel);
                     const hasExpenses = getTotalCost(member) > 0;
                     const total = getTotalCost(member);
 
@@ -413,10 +444,10 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab }) => 
                         <td className="px-4 py-3 text-muted-foreground">{member.roleName}</td>
                         <td className="px-4 py-3">{travelStart || '—'}</td>
                         <td className="px-4 py-3">{travelEnd || '—'}</td>
-                        <CostCell member={member} cost={getFlightCost(member)} expenseKey="airfare" />
-                        <CostCell member={member} cost={getHotelCost(member)} expenseKey="hotel" />
-                        <CostCell member={member} cost={getRentalCost(member)} expenseKey="rentalCar" />
-                        <CostCell member={member} cost={getMileageCost(member)} expenseKey="mileage" />
+                        <CostCell member={member} cost={getFlightCost(member)} expenseKey="airfare" booked={doneTypes.has('flight')} />
+                        <CostCell member={member} cost={getHotelCost(member)} expenseKey="hotel" booked={doneTypes.has('hotel')} />
+                        <CostCell member={member} cost={getRentalCost(member)} expenseKey="rentalCar" booked={doneTypes.has('rentalCar')} />
+                        <CostCell member={member} cost={getMileageCost(member)} expenseKey="mileage" booked={doneTypes.has('mileage')} />
                         <td className="px-4 py-3 text-right font-medium">{total ? currency(total) : '—'}</td>
                         <td className="px-4 py-3 text-center">
                           {hasBooking ? (

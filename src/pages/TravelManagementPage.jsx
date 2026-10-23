@@ -15,6 +15,7 @@ import { flattenPersonnel, isBudgetFrozen } from '@/lib/contractUtils';
 import { mergeTravelDefaults, applyExpenseType, hasEnteredTravel } from '@/lib/travelDefaults';
 import { BudgetFrozenBanner } from '@/components/contract-management/BudgetFrozenBanner';
 import { exportTravelToExcel } from '@/lib/travelExport';
+import { applySubmissions } from '@/lib/travelRequests';
 
 import OverviewTab from '@/components/travel-management/OverviewTab';
 import FlightsTab from '@/components/travel-management/FlightsTab';
@@ -139,7 +140,9 @@ const TravelManagementPage = () => {
     const merged = mergeTravelDefaults(people, pd.travelData || {}, settings.effectiveDate, settings.expirationDate);
     // Only the first load sets the baseline; a re-render after our own save must not reset it.
     if (savedSnapshotRef.current === null) savedSnapshotRef.current = JSON.stringify(merged);
-    setTravelData(merged);
+    // Answers staff sent through the emailed link are folded in here; being different from the
+    // baseline, they get saved by the normal auto-save.
+    setTravelData(applySubmissions(merged, pd.travelSubmissions));
   }, [showId, showProject]);
 
   // Save travel data back into the contract project
@@ -452,6 +455,9 @@ const TravelManagementPage = () => {
                     setTravelData={setTravelData}
                     contractSettings={contractSettings}
                     onGoToTab={setActiveTab}
+                    showId={showId}
+                    travelRequests={showProject?.project_data?.travelRequests}
+                    travelSubmissions={showProject?.project_data?.travelSubmissions}
                   />
                 </TabsContent>
 
