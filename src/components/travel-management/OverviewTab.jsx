@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Mail } from 'lucide-react';
+import { Mail, Inbox, History } from 'lucide-react';
+import { buildActivity, formatActivityTime } from '@/lib/travelActivity';
 import RequestInfoDialog from './RequestInfoDialog';
 import { requestableItems, requestState } from '@/lib/travelRequests';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin, CheckCircle2, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { CollapsibleCard } from '@/components/shared/CollapsibleCard';
 import { stillToBook, bookingBoard, bookedTypes, TRAVEL_ITEMS, missingReceipts } from '@/lib/travelBooking';
 import { currency, isDirectExpense } from '@/lib/contractUtils';
 import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines, travelSpan } from '@/lib/travelActuals';
@@ -64,7 +66,7 @@ const WhoPaysCard = ({ title, hint, accent, summary }) => (
   </Card>
 );
 
-const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showId, travelRequests, travelSubmissions }) => {
+const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showId, travelRequests, travelSubmissions, travelActivity }) => {
   const [requestRows, setRequestRows] = useState(null); // rows for the open "Request info" dialog
   const [justSent, setJustSent] = useState({}); // memberId -> sentAt, for requests sent in this visit
 
@@ -166,6 +168,12 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
     [...items.map((i) => ({ ...i, done: false })), ...booked.map((i) => ({ ...i, done: true }))]
       .sort((a, b) => itemOrder.indexOf(a.type) - itemOrder.indexOf(b.type));
   const noReceipt = missingReceipts(personnel, travelData);
+  const activity = buildActivity({
+    log: travelActivity,
+    requests: travelRequests,
+    submissions: travelSubmissions,
+    nameOf: (id) => personnel.find((m) => m.id === id)?.name,
+  });
 
   const completedCount = personnel.filter((m) => {
     const t = getPersonTravel(m.id);
@@ -232,26 +240,24 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
       </div>
 
       {/* Who still needs booking */}
-      <Card className={toBook.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            {toBook.length > 0 ? <Calendar className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
-            Who still needs booking?
-            {showId && toBook.length > 0 && (
-              <Button type="button" size="sm" variant="outline" className="ml-auto h-7 px-2 text-xs" onClick={() => setRequestRows(toBook.map(requestRowFor))}>
-                <Mail className="h-3 w-3 mr-1" />
-                Request all
-              </Button>
-            )}
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
-            {toBook.length > 0
-              ? 'Everything each person needs is listed. Green means it is booked; the others still need booking. Click an item to open its tab.'
-              : 'Everything that is needed has been booked.'}
-          </p>
-        </CardHeader>
+      <CollapsibleCard
+        className={toBook.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}
+        title="Who still needs booking?"
+        icon={toBook.length > 0 ? <Calendar className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
+        description={toBook.length > 0
+          ? 'Everything each person needs is listed. Green means it is booked; the others still need booking. Click an item to open its tab.'
+          : 'Everything that is needed has been booked.'}
+        summary={toBook.length > 0 ? `${toBook.length} to book` : 'All booked'}
+        action={showId && toBook.length > 0 && (
+          <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setRequestRows(toBook.map(requestRowFor))}>
+            <Mail className="h-3 w-3 mr-1" />
+            Request all
+          </Button>
+        )}
+        contentClassName="space-y-2"
+      >
         {board.length > 0 && (
-          <CardContent className="space-y-2">
+          <>
             {board.map((row) => (
               <div key={row.member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
                 <div className="min-w-0">
@@ -287,9 +293,9 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
                 </div>
               </div>
             ))}
-          </CardContent>
+          </>
         )}
-      </Card>
+      </CollapsibleCard>
 
       <RequestInfoDialog
         open={!!requestRows}
@@ -300,20 +306,19 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
       />
 
       {/* Receipt checklist */}
-      <Card className={noReceipt.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            {noReceipt.length > 0 ? <Paperclip className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
-            Receipts to attach
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
-            {noReceipt.length > 0
-              ? 'These actual amounts have no receipt yet. Click an item to open its tab and use Add Receipt.'
-              : 'Every actual amount has a receipt attached (or no actual has been entered yet).'}
-          </p>
-        </CardHeader>
+      <CollapsibleCard
+        className={noReceipt.length > 0 ? 'border-amber-500/40' : 'border-green-500/40'}
+        title="Receipts to attach"
+        icon={noReceipt.length > 0 ? <Paperclip className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
+        description={noReceipt.length > 0
+          ? 'These actual amounts have no receipt yet. Click an item to open its tab and use Add Receipt.'
+          : 'Every actual amount has a receipt attached (or no actual has been entered yet).'}
+        summary={noReceipt.length > 0 ? `${noReceipt.length} to attach` : 'All attached'}
+        defaultOpen={false}
+        contentClassName="space-y-2"
+      >
         {noReceipt.length > 0 && (
-          <CardContent className="space-y-2">
+          <>
             {noReceipt.map(({ member, items }) => (
               <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
                 <div className="min-w-0">
@@ -336,19 +341,18 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
                 </div>
               </div>
             ))}
-          </CardContent>
+          </>
         )}
-      </Card>
+      </CollapsibleCard>
 
       {/* Budget vs Actual */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Budget vs Actual</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            The budget stays fixed and matches the contracts. Actuals are typed on the Flights, Hotels, Rental Cars and Mileage tabs.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
+      <CollapsibleCard
+        title="Budget vs Actual"
+        description="The budget stays fixed and matches the contracts. Actuals are typed on the Flights, Hotels, Rental Cars and Mileage tabs."
+        summary={currency(comparisonTotal.budget)}
+        defaultOpen={false}
+        contentClassName="p-0"
+      >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -387,8 +391,7 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
           <p className="px-4 py-3 text-xs text-muted-foreground border-t">
             Variance compares each actual with its own budget, so a line with no actual yet is never counted as a saving.
           </p>
-        </CardContent>
-      </Card>
+      </CollapsibleCard>
 
       {/* Who pays: Direct Show Expense vs Reimbursement */}
       <div className="grid gap-4 md:grid-cols-2">
@@ -397,11 +400,12 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
       </div>
 
       {/* Employee Travel Overview Table */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Employee Travel Overview</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
+      <CollapsibleCard
+        title="Employee Travel Overview"
+        summary={`${personnel.length} staff`}
+        defaultOpen={false}
+        contentClassName="p-0"
+      >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -478,8 +482,38 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
               )}
             </table>
           </div>
-        </CardContent>
-      </Card>
+      </CollapsibleCard>
+
+      {/* Activity log: emails sent and details received */}
+      <CollapsibleCard
+        title="Activity Log"
+        icon={<History className="h-4 w-4 text-muted-foreground" />}
+        description="Emails sent to staff and details they sent back, newest first. New events appear when you reopen this page."
+        summary={`${activity.length} ${activity.length === 1 ? 'event' : 'events'}`}
+        defaultOpen={false}
+        contentClassName="space-y-2"
+      >
+        {activity.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing yet. Use Request info above to email a staff member.</p>
+        ) : (
+          activity.map((e) => (
+            <div key={e.key} className="flex flex-wrap items-start gap-3 rounded-md border px-3 py-2">
+              {e.kind === 'email_sent'
+                ? <Mail className="h-4 w-4 mt-0.5 text-blue-600 shrink-0" />
+                : <Inbox className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm">
+                  {e.kind === 'email_sent'
+                    ? <>Email sent to <span className="font-medium">{e.name}</span>{e.by ? <span className="text-muted-foreground"> by {e.by}</span> : null}</>
+                    : <><span className="font-medium">{e.name}</span> sent details</>}
+                </p>
+                {e.detail && <p className="text-xs text-muted-foreground">{e.detail}</p>}
+              </div>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">{formatActivityTime(e.at)}</span>
+            </div>
+          ))
+        )}
+      </CollapsibleCard>
     </div>
   );
 };

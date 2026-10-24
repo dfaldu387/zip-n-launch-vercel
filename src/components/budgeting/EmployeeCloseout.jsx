@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { ClipboardCheck, Info } from 'lucide-react';
+import { ChevronDown, ClipboardCheck, Info } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/lib/supabaseClient';
@@ -44,6 +44,16 @@ export const EmployeeCloseout = ({ show, personnel, readOnly }) => {
   const typedRef = useRef(typed);
   const [status, setStatus] = useState('idle'); // idle | saving | saved
   const travelData = show.project_data?.travelData || {};
+  // Each person's table is closed until opened, so the page doesn't list every name's numbers at once.
+  const [openIds, setOpenIds] = useState(() => new Set());
+  const toggleOpen = (id) =>
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const [cardOpen, setCardOpen] = useState(true);
 
   const { perPerson, total } = useMemo(
     () => summarizeCloseout(personnel, travelData, typed),
@@ -84,23 +94,31 @@ export const EmployeeCloseout = ({ show, personnel, readOnly }) => {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          aria-expanded={cardOpen}
+          onClick={() => setCardOpen((o) => !o)}
+          className="flex w-full flex-wrap items-center justify-between gap-2 text-left"
+        >
           <CardTitle className="text-base flex items-center gap-2">
             <ClipboardCheck className="h-4 w-4 text-emerald-600" /> Employee Closeout
           </CardTitle>
-          <span className="text-xs text-muted-foreground">
-            {status === 'saving' ? 'Saving…' : status === 'saved' ? 'All changes saved' : ''}
+          <span className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">
+              {status === 'saving' ? 'Saving…' : status === 'saved' ? 'All changes saved' : ''}
+            </span>
+            <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', cardOpen && 'rotate-180')} />
           </span>
-        </div>
-        <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+        </button>
+        {cardOpen && <p className="text-xs text-muted-foreground flex items-start gap-1.5">
           <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
             Use this when the show is over. The budget stays as planned. Flight, Hotel, Rental Car and Mileage actuals come from
             Travel Management. Type the real Day Pay, Overtime and Other below.
           </span>
-        </p>
+        </p>}
       </CardHeader>
-      <CardContent className="space-y-5">
+      {cardOpen && <CardContent className="space-y-5">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Tile label="Budget">{money(total.budget)}</Tile>
           <Tile label="Actual so far" hint={total.actual === null ? 'Nothing entered yet' : undefined}>{money(total.actual)}</Tile>
@@ -112,19 +130,33 @@ export const EmployeeCloseout = ({ show, personnel, readOnly }) => {
           </Tile>
         </div>
 
-        {perPerson.map(({ member, cells, total: personTotal }) => (
+        {perPerson.map(({ member, cells, total: personTotal }) => {
+          const isOpen = openIds.has(member.id);
+          return (
           <div key={member.id} className="rounded-xl border">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-3">
-              <div>
-                <p className="font-semibold">{member.name || 'Unnamed'}</p>
-                <p className="text-xs text-muted-foreground">{member.roleName}</p>
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => toggleOpen(member.id)}
+              className={cn('flex w-full flex-wrap items-center justify-between gap-2 bg-muted/30 px-4 py-3 text-left', isOpen && 'border-b')}
+            >
+              <div className="flex items-center gap-2">
+                <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-180')} />
+                <div>
+                  <p className="font-semibold">{member.name || 'Unnamed'}</p>
+                  <p className="text-xs text-muted-foreground">{member.roleName}</p>
+                </div>
               </div>
-              <div className="text-right text-sm">
-                <span className="text-muted-foreground">Difference </span>
-                <Difference value={personTotal.variance} pill />
+              <div className="flex items-center gap-4 text-right text-sm">
+                <span className="text-muted-foreground">Budget {money(personTotal.budget)}</span>
+                <span className="text-muted-foreground">Actual {money(personTotal.actual)}</span>
+                <span>
+                  <span className="text-muted-foreground">Difference </span>
+                  <Difference value={personTotal.variance} pill />
+                </span>
               </div>
-            </div>
-            <div className="overflow-x-auto">
+            </button>
+            {isOpen && <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-xs uppercase text-muted-foreground">
@@ -178,10 +210,11 @@ export const EmployeeCloseout = ({ show, personnel, readOnly }) => {
                   </tr>
                 </tbody>
               </table>
-            </div>
+            </div>}
           </div>
-        ))}
-      </CardContent>
+          );
+        })}
+      </CardContent>}
     </Card>
   );
 };

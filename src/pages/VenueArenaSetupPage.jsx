@@ -28,6 +28,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { staffRoles, roleGroups } from '@/lib/staffingData';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { CollapsibleCard } from '@/components/shared/CollapsibleCard';
 import { setupQtyForDate, withQtyForDate, hasDayOverrides, peakQty, requiredForDate, withRequiredForDate, hasRequiredOverrides, peakRequiredQty, newPosition } from '@/lib/staffQty';
 
 // ── Day selector: "All days" edits the base Qty, a single day edits only that day ──
@@ -467,11 +468,11 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
     return (
         <div className="space-y-6">
             {/* Venue Info */}
-            <Card>
-                <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2"><MapPin className="h-4 w-4 text-primary" /> Venue Information</CardTitle>
-                </CardHeader>
-                <CardContent>
+            <CollapsibleCard
+                title="Venue Information"
+                icon={<MapPin className="h-4 w-4 text-primary" />}
+                summary={venueName}
+            >
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-1.5">
                             <Label>Venue Name</Label>
@@ -482,8 +483,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
                             <Input value={venueAddress} onChange={e => setVenueAddress(e.target.value)} placeholder="e.g., 123 Main St, City, State" />
                         </div>
                     </div>
-                </CardContent>
-            </Card>
+            </CollapsibleCard>
 
             {/* Summary KPIs */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -571,17 +571,14 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
             </div>
 
             {/* Shared Staff */}
-            <Card>
-                <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-3">
-                        <div>
-                            <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4 text-emerald-600" /> Shared / Show-Level Staff</CardTitle>
-                            <CardDescription className="text-xs">Staff not assigned to a specific arena (management, office, photography, etc.)</CardDescription>
-                        </div>
-                        <SetupLockToggle locked={sharedLocked} onToggle={toggleSharedLock} />
-                    </div>
-                </CardHeader>
-                <CardContent className="space-y-1.5">
+            <CollapsibleCard
+                title="Shared / Show-Level Staff"
+                description="Staff not assigned to a specific arena (management, office, photography, etc.)"
+                icon={<Users className="h-4 w-4 text-emerald-600" />}
+                summary={`${totalSharedStaff} staff`}
+                action={<SetupLockToggle locked={sharedLocked} onToggle={toggleSharedLock} />}
+                contentClassName="space-y-1.5"
+            >
                     <DaySelector dates={showDates} value={sharedDaySafe} onChange={setSharedDay} />
                     {sharedLocked && (
                         <p className="text-xs text-amber-600 flex items-center gap-1"><Lock className="h-3 w-3" /> Locked. Unlock to change shared staff.</p>
@@ -614,17 +611,16 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
                         </SelectContent>
                     </Select>
                     </fieldset>
-                </CardContent>
-            </Card>
+            </CollapsibleCard>
 
             {/* Staff Summary Table */}
             {staffSummary.length > 0 && (
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-base">Staff Requirements Summary</CardTitle>
-                        <CardDescription className="text-xs">Overview of all staff needed across arenas.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
+                <CollapsibleCard
+                    title="Staff Requirements Summary"
+                    description="Overview of all staff needed across arenas."
+                    summary={`${totalStaff} total`}
+                    defaultOpen={false}
+                >
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead>
@@ -664,8 +660,7 @@ const VenueArenaSetup = ({ show, onSave, isSaving, onPersistLocks }) => {
                                 </tfoot>
                             </table>
                         </div>
-                    </CardContent>
-                </Card>
+                </CollapsibleCard>
             )}
         </div>
     );

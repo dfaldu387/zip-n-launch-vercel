@@ -22,6 +22,7 @@ import { flattenPersonnel, calculateStaffCost } from '@/lib/contractUtils';
 import { ShowOfficialsStaffPanel } from '@/components/shared/ShowOfficialsStaffPanel';
 import { exportBudgetToExcel } from '@/lib/contractBudgetExport';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { CollapsibleCard } from '@/components/shared/CollapsibleCard';
 import { EmployeeCloseout } from '@/components/budgeting/EmployeeCloseout';
 import { summarizeTravel } from '@/lib/employeeCloseout';
 
@@ -255,11 +256,11 @@ const BudgetDashboard = ({ show, contractProject, readOnly }) => {
                 {/* Left column: Staff Cost Breakdown */}
                 <div className="lg:col-span-2 space-y-6">
                     {/* Cost Breakdown by Role */}
-                    <Card>
-                        <CardHeader className="pb-3">
-                            <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4 text-purple-600" /> Staff Costs by Role</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
+                    <CollapsibleCard
+                        title="Staff Costs by Role"
+                        icon={<Users className="h-4 w-4 text-purple-600" />}
+                        summary={currency(employeeTotal)}
+                    >
                             {employeeCosts.personnelCount > 0 ? (
                                 <>
                                     <div className="space-y-3">
@@ -285,16 +286,16 @@ const BudgetDashboard = ({ show, contractProject, readOnly }) => {
                             ) : (
                                 <p className="text-sm text-muted-foreground text-center py-4">No staff yet. Add people and day rates in Officials &amp; Staff above to see employee costs.</p>
                             )}
-                        </CardContent>
-                    </Card>
+                    </CollapsibleCard>
 
                     {/* Expense Type Breakdown */}
                     {(Object.keys(employeeCosts.byExpenseType).length > 0 || Object.keys(employeeCosts.byDirectType).length > 0) && (
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base flex items-center gap-2"><Receipt className="h-4 w-4 text-amber-600" /> Travel & Expense Breakdown</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
+                        <CollapsibleCard
+                            title="Travel & Expense Breakdown"
+                            icon={<Receipt className="h-4 w-4 text-amber-600" />}
+                            summary={currency(employeeCosts.totalExpenses + employeeCosts.directExpenses)}
+                            defaultOpen={false}
+                        >
                                 {Object.keys(employeeCosts.byExpenseType).length > 0 && (
                                     <>
                                         <p className="text-xs font-semibold text-muted-foreground uppercase">Reimbursed to staff</p>
@@ -313,17 +314,17 @@ const BudgetDashboard = ({ show, contractProject, readOnly }) => {
                                         <BudgetLine label="TOTAL PAID DIRECTLY BY SHOW" amount={employeeCosts.directExpenses} bold color="text-sky-600" />
                                     </>
                                 )}
-                            </CardContent>
-                        </Card>
+                        </CollapsibleCard>
                     )}
 
                     {/* Staff Summary Table */}
                     {employeeCosts.personnel.length > 0 && (
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base flex items-center gap-2"><Briefcase className="h-4 w-4 text-blue-600" /> Staff Summary</CardTitle>
-                            </CardHeader>
-                            <CardContent>
+                        <CollapsibleCard
+                            title="Staff Summary"
+                            icon={<Briefcase className="h-4 w-4 text-blue-600" />}
+                            summary={`${employeeCosts.personnel.length} staff`}
+                            defaultOpen={false}
+                        >
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-sm">
                                         <thead>
@@ -360,8 +361,7 @@ const BudgetDashboard = ({ show, contractProject, readOnly }) => {
                                         </tbody>
                                     </table>
                                 </div>
-                            </CardContent>
-                        </Card>
+                        </CollapsibleCard>
                     )}
                 </div>
 

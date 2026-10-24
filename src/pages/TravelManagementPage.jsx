@@ -458,6 +458,7 @@ const TravelManagementPage = () => {
                     showId={showId}
                     travelRequests={showProject?.project_data?.travelRequests}
                     travelSubmissions={showProject?.project_data?.travelSubmissions}
+                    travelActivity={showProject?.project_data?.travelActivity}
                   />
                 </TabsContent>
 

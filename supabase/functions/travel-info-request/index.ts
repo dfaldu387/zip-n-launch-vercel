@@ -107,6 +107,12 @@ function findMember(pd: any, memberId: string): { name: string; email: string; r
   return null;
 }
 
+// Activity log kept on the show (project_data.travelActivity): one line per email sent and per answer received.
+const MAX_ACTIVITY = 200;
+function addActivity(pd: any, entry: Record<string, unknown>) {
+  pd.travelActivity = [...(pd.travelActivity || []), entry].slice(-MAX_ACTIVITY);
+}
+
 function adminClient() {
   return createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -204,6 +210,16 @@ async function handleSend(req: Request, body: any) {
   const latest = fresh?.project_data || pd;
   const sentAt = new Date().toISOString();
   latest.travelRequests = { ...(latest.travelRequests || {}), [memberId]: { secret, email: member.email, items: types, sentAt } };
+  const { data: sender } = await asUser.auth.getUser();
+  addActivity(latest, {
+    type: "email_sent",
+    at: sentAt,
+    memberId,
+    name: member.name,
+    email: member.email,
+    items: types.map((t: string) => ITEMS[t].label),
+    by: sender?.user?.email || "",
+  });
   const { error } = await supabase.from("projects").update({ project_data: latest }).eq("id", projectId);
   if (error) {
     console.error("travel-info-request save error:", error);
@@ -294,6 +310,14 @@ async function handleSubmit(body: any) {
     submittedAt: new Date().toISOString(),
   };
   pd.travelSubmissions = { ...(pd.travelSubmissions || {}), [parsed.memberId]: mine };
+  addActivity(pd, {
+    type: "details_submitted",
+    at: mine[type].submittedAt,
+    memberId: parsed.memberId,
+    name: findMember(pd, parsed.memberId)?.name || "",
+    item: spec.label,
+    receipts: newReceipts.length,
+  });
 
   const { error } = await supabase.from("projects").update({ project_data: pd }).eq("id", parsed.projectId);
   if (error) {

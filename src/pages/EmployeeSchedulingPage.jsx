@@ -1293,16 +1293,7 @@ const EmployeeSchedulingPage = () => {
                         <div className="mt-6">
                             <ModuleLockGuard isLocked={isReadOnly} moduleName="Employee / Arena Scheduling">
                                 <div className="space-y-6">
-                                    <StaffMasterList
-                                        staffList={staffList}
-                                        assignments={assignments}
-                                        onAddManual={addManual}
-                                        onRenameManual={renameManual}
-                                        onRemoveManual={removeManual}
-                                        onSave={() => handleSave()}
-                                        isSaving={isSaving}
-                                        hasUnsaved={hasUnsavedSchedule}
-                                    />
+                                    {/* The scheduling grids come first so the work area is not buried under the staff list. */}
                                     <SchedulingDashboard
                                         show={selectedShow}
                                         lockedArenas={lockedArenas}
@@ -1312,6 +1303,16 @@ const EmployeeSchedulingPage = () => {
                                         setAssignments={setAssignments}
                                         onSave={() => handleSave()}
                                         isSaving={isSaving}
+                                    />
+                                    <StaffMasterList
+                                        staffList={staffList}
+                                        assignments={assignments}
+                                        onAddManual={addManual}
+                                        onRenameManual={renameManual}
+                                        onRemoveManual={removeManual}
+                                        onSave={() => handleSave()}
+                                        isSaving={isSaving}
+                                        hasUnsaved={hasUnsavedSchedule}
                                     />
                                 </div>
                             </ModuleLockGuard>
