@@ -9,6 +9,9 @@ import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin, CheckCircle2, P
 import { Button } from '@/components/ui/button';
 import { CollapsibleCard } from '@/components/shared/CollapsibleCard';
 import { stillToBook, bookingBoard, bookedTypes, TRAVEL_ITEMS, missingReceipts } from '@/lib/travelBooking';
+import { buildTravelEvents, findConflicts, assignmentsInShow, eventsInWindow, groupByDay, formatDay } from '@/lib/travelCalendar';
+import { StatusMark, TYPE_STYLE } from './TravelCalendarTab';
+import { toDayString } from '@/lib/travelDefaults';
 import { currency, isDirectExpense } from '@/lib/contractUtils';
 import { flightFigures, hotelFigures, rentalFigures, mileageFigures, summarizeLines, travelSpan } from '@/lib/travelActuals';
 
@@ -66,7 +69,7 @@ const WhoPaysCard = ({ title, hint, accent, summary }) => (
   </Card>
 );
 
-const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showId, travelRequests, travelSubmissions, travelActivity }) => {
+const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showId, travelRequests, travelSubmissions, travelActivity, assignments }) => {
   const [requestRows, setRequestRows] = useState(null); // rows for the open "Request info" dialog
   const [justSent, setJustSent] = useState({}); // memberId -> sentAt, for requests sent in this visit
 
@@ -175,6 +178,13 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
     nameOf: (id) => personnel.find((m) => m.id === id)?.name,
   });
 
+  // Compact "Next 14 Days" preview; the full calendar is its own tab.
+  const today = toDayString(new Date());
+  const allEvents = buildTravelEvents(personnel, travelData);
+  const upcoming = eventsInWindow(allEvents, today, 14);
+  const conflictCount = findConflicts(personnel, allEvents, assignmentsInShow(assignments, toDayString(contractSettings?.effectiveDate), toDayString(contractSettings?.expirationDate))).length;
+  const nextLater = allEvents.find((e) => e.startDay > today);
+
   const completedCount = personnel.filter((m) => {
     const t = getPersonTravel(m.id);
     return t.flight?.airline || t.hotel?.hotelName || t.rentalCar?.company;
@@ -238,6 +248,46 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
           </span>
         )}
       </div>
+
+      {/* Upcoming travel: next 14 days */}
+      <CollapsibleCard
+        title="Upcoming Travel — Next 14 Days"
+        icon={<Calendar className="h-4 w-4 text-blue-600" />}
+        summary={`${upcoming.length} ${upcoming.length === 1 ? 'event' : 'events'}${conflictCount ? ` · ${conflictCount} ${conflictCount === 1 ? 'conflict' : 'conflicts'}` : ''}`}
+        action={
+          <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onGoToTab?.('calendar')}>
+            View Full Calendar
+          </Button>
+        }
+        contentClassName="space-y-3"
+      >
+        {upcoming.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {nextLater
+              ? `Nothing in the next 14 days. Next travel: ${nextLater.name}, ${nextLater.label.toLowerCase()} on ${formatDay(nextLater.startDay, { month: 'short', day: 'numeric' })}.`
+              : allEvents.length > 0 ? 'All travel dates have passed.' : 'No dated travel yet.'}
+          </p>
+        ) : (
+          groupByDay(upcoming).map(({ day, events }) => (
+            <div key={day}>
+              <p className="mb-1 text-xs font-semibold text-muted-foreground">{formatDay(day, { weekday: 'short', month: 'short', day: 'numeric' })}</p>
+              <div className="space-y-1">
+                {events.map((e) => {
+                  const { Icon, icon } = TYPE_STYLE[e.type];
+                  return (
+                    <button key={e.key} type="button" onClick={() => onGoToTab?.(e.tab)} className="flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-sm hover:bg-muted/40">
+                      <Icon className={`h-4 w-4 shrink-0 ${icon}`} />
+                      <span className="w-20 shrink-0 text-xs text-muted-foreground">{e.startTime || '—'}</span>
+                      <span className="min-w-0 flex-1 truncate"><span className="font-medium">{e.name}</span> <span className="text-muted-foreground">{e.label}{e.detail ? ` · ${e.detail}` : ''}</span></span>
+                      <StatusMark status={e.status} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        )}
+      </CollapsibleCard>
 
       {/* Who still needs booking */}
       <CollapsibleCard

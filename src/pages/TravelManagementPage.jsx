@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowLeft, Plane, Hotel, Car, MapPin, LayoutDashboard, Save, Loader2, Download, CheckCircle2, CircleDashed, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Plane, Hotel, Car, MapPin, LayoutDashboard, CalendarDays, Save, Loader2, Download, CheckCircle2, CircleDashed, AlertCircle } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -22,6 +22,7 @@ import FlightsTab from '@/components/travel-management/FlightsTab';
 import HotelsTab from '@/components/travel-management/HotelsTab';
 import RentalCarsTab from '@/components/travel-management/RentalCarsTab';
 import MileageTab from '@/components/travel-management/MileageTab';
+import TravelCalendarTab from '@/components/travel-management/TravelCalendarTab';
 
 const TravelManagementPage = () => {
   const navigate = useNavigate();
@@ -446,6 +447,10 @@ const TravelManagementPage = () => {
                     <MapPin className="h-4 w-4" />
                     Mileage
                   </TabsTrigger>
+                  <TabsTrigger value="calendar" className="gap-1.5">
+                    <CalendarDays className="h-4 w-4" />
+                    Calendar
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="overview">
@@ -459,6 +464,17 @@ const TravelManagementPage = () => {
                     travelRequests={showProject?.project_data?.travelRequests}
                     travelSubmissions={showProject?.project_data?.travelSubmissions}
                     travelActivity={showProject?.project_data?.travelActivity}
+                    assignments={showProject?.project_data?.staffSchedule?.assignments}
+                  />
+                </TabsContent>
+
+                <TabsContent value="calendar">
+                  <TravelCalendarTab
+                    personnel={personnel}
+                    travelData={travelData}
+                    contractSettings={contractSettings}
+                    assignments={showProject?.project_data?.staffSchedule?.assignments}
+                    onGoToTab={setActiveTab}
                   />
                 </TabsContent>
 
