@@ -199,6 +199,17 @@ const StaffMemberInput = ({ member, onUpdate, onRemove, role, associationId, mem
                             <Label htmlFor={`phone-${member.id}`}>Phone</Label>
                             <Input id={`phone-${member.id}`} disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} type="tel" value={member.phone || ''} onChange={(e) => onUpdate(member.id, 'phone', e.target.value)} placeholder="e.g., (123) 456-7890" />
                         </div>
+                        <div className="space-y-1">
+                            <Label htmlFor={`subcat-${member.id}`}>Subcategory</Label>
+                            <Input id={`subcat-${member.id}`} list="staff-subcategory-options" disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} value={member.subcategory || ''} onChange={(e) => onUpdate(member.id, 'subcategory', e.target.value)} placeholder="e.g., Office Staff, Arena Crew" />
+                            <datalist id="staff-subcategory-options">
+                                {['Office Staff', 'Judging Staff', 'Arena Crew', 'Contract Labor', 'Volunteer Labor'].map(o => <option key={o} value={o} />)}
+                            </datalist>
+                        </div>
+                        <div className="space-y-1">
+                            <Label htmlFor={`acct-${member.id}`}>Accounting Code</Label>
+                            <Input id={`acct-${member.id}`} disabled={memberFrozen} className={cn(memberFrozen && "bg-muted")} value={member.accounting_code || ''} onChange={(e) => onUpdate(member.id, 'accounting_code', e.target.value)} placeholder="e.g., 0001" />
+                        </div>
                         {role.hasCards && (
                             <div className="space-y-1">
                                 <Label htmlFor={`cards-${member.id}`}>Cards/License Held</Label>

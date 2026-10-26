@@ -8,6 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -27,6 +29,7 @@ import { scheduleQtyForDate, requiredDates, totalSlots as slotsForDates, filledS
 import { flattenPersonnel } from '@/lib/contractUtils';
 import { useToast } from '@/components/ui/use-toast';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
+import { CalendarWeekView } from '@/components/scheduling/CalendarWeekView';
 import { ShowOfficialsStaffPanel } from '@/components/shared/ShowOfficialsStaffPanel';
 
 // ── Show Picker (reusable pattern) ──
@@ -98,10 +101,71 @@ const NotNeededCell = () => (
     </td>
 );
 
+// Short "7:30 AM" style label for an <input type="time"> value ("07:30").
+const fmtTime = (t) => {
+    if (!t) return '';
+    const [h, m] = t.split(':').map(Number);
+    return `${h % 12 || 12}:${String(m).padStart(2, '0')}${h >= 12 ? ' PM' : ''}`;
+};
+
+// Pop-up for one assignment: report time, start time and notes. Read-only while the arena is locked.
+const AssignmentDetailsDialog = ({ assignment, positionName, open, onClose, onSave, locked }) => {
+    const [form, setForm] = useState({ reportTime: '', startTime: '', notes: '', employeeNotes: '' });
+
+    useEffect(() => {
+        if (open) {
+            setForm({
+                reportTime: assignment.reportTime || '',
+                startTime: assignment.startTime || '',
+                notes: assignment.notes || '',
+                employeeNotes: assignment.employeeNotes || '',
+            });
+        }
+    }, [open, assignment]);
+
+    const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+
+    return (
+        <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+            <DialogContent className="max-w-md">
+                <DialogHeader>
+                    <DialogTitle>{assignment.employeeName}</DialogTitle>
+                    <DialogDescription>{positionName} · {formatDate(assignment.date)}</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                            <Label>Report time</Label>
+                            <Input type="time" value={form.reportTime} onChange={set('reportTime')} disabled={locked} />
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label>Start time</Label>
+                            <Input type="time" value={form.startTime} onChange={set('startTime')} disabled={locked} />
+                        </div>
+                    </div>
+                    <div className="space-y-1.5">
+                        <Label>Assignment notes (duties)</Label>
+                        <Textarea rows={3} maxLength={250} value={form.notes} onChange={set('notes')} disabled={locked} />
+                    </div>
+                    <div className="space-y-1.5">
+                        <Label>Notes for the employee</Label>
+                        <Textarea rows={2} maxLength={250} value={form.employeeNotes} onChange={set('employeeNotes')} disabled={locked} />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose}>{locked ? 'Close' : 'Cancel'}</Button>
+                    {!locked && <Button onClick={() => { onSave(assignment.id, form); onClose(); }}>Save</Button>}
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
 // ── Assignment Cell ──
 
-const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, allDates = [], onAssign, onRemove, employeeRoster, busyOnDate = {}, locked = false }) => {
+const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, allDates = [], onAssign, onRemove, onUpdate, employeeRoster, busyOnDate = {}, locked = false }) => {
     const [isEditing, setIsEditing] = useState(false);
+    const [detailsOpen, setDetailsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const [applyAll, setApplyAll] = useState(false);
 
@@ -114,9 +178,32 @@ const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, a
 
     if (assignment) {
         return (
-            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-primary/10 border border-primary/20 text-xs group">
-                <Users className="h-3 w-3 text-primary flex-shrink-0" />
-                <span className="font-medium truncate flex-1">{assignment.employeeName}</span>
+            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-violet-200/70 dark:bg-violet-950/40 border border-transparent text-xs group">
+                <Users className="h-3.5 w-3.5 text-violet-600 flex-shrink-0" />
+                <button
+                    type="button"
+                    className="flex-1 min-w-0 text-left"
+                    title="Click to set report time, start time and notes"
+                    onClick={() => setDetailsOpen(true)}
+                >
+                    <span className="font-medium truncate block">{assignment.employeeName}</span>
+                    {(assignment.reportTime || assignment.startTime) && (
+                        <span className="block text-[10px] text-violet-700/80 dark:text-violet-300 truncate">
+                            {assignment.reportTime && `Rpt ${fmtTime(assignment.reportTime)}`}
+                            {assignment.reportTime && assignment.startTime && ' | '}
+                            {assignment.startTime && `Start ${fmtTime(assignment.startTime)}`}
+                        </span>
+                    )}
+                </button>
+                {assignment.notes && <span className="text-primary" title={assignment.notes}>•</span>}
+                <AssignmentDetailsDialog
+                    assignment={assignment}
+                    positionName={staffRoles[position.roleId]?.name || position.roleId}
+                    open={detailsOpen}
+                    onClose={() => setDetailsOpen(false)}
+                    onSave={onUpdate}
+                    locked={locked}
+                />
                 {!locked && (
                     <button
                         type="button"
@@ -207,11 +294,10 @@ const AssignmentCell = ({ assignment, position, arenaId, dateStr, slotIdx = 0, a
     return (
         <button
             type="button"
-            className="w-full flex items-center gap-1 px-2 py-1.5 rounded-md border border-dashed border-muted-foreground/30 text-xs text-muted-foreground hover:border-primary/50 hover:bg-primary/5 transition-colors"
+            className="w-full flex items-center justify-center gap-1 px-2 py-2.5 rounded-md border border-dashed border-muted-foreground/40 text-xs text-muted-foreground hover:border-violet-400 hover:bg-violet-50 transition-colors"
             onClick={() => setIsEditing(true)}
         >
-            <UserPlus className="h-3 w-3" />
-            <span>Assign</span>
+            <span>+ Assign</span>
         </button>
     );
 };
@@ -234,7 +320,7 @@ const LockToggle = ({ locked, onToggle }) => (
 
 // ── Scheduling Grid for one Arena ──
 
-const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onRemove, employeeRoster, busyByDate, locked = false, onToggleLock }) => {
+const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onRemove, onUpdate, employeeRoster, busyByDate, locked = false, onToggleLock }) => {
     // Starts folded: the header already shows "N positions x D days · X of Y filled".
     const [open, setOpen] = useState(false);
     const positions = arena.staffPositions || [];
@@ -327,6 +413,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
                                                         allDates={dates}
                                                         onAssign={onAssign}
                                                         onRemove={onRemove}
+                                                        onUpdate={onUpdate}
                                                         employeeRoster={employeeRoster}
                                                         busyOnDate={busyByDate[dateStr]}
                                                     />
@@ -346,7 +433,7 @@ const ArenaScheduleGrid = ({ arena, dates: showDates, assignments, onAssign, onR
 
 // ── Shared Staff Schedule ──
 
-const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, employeeRoster, busyByDate, locked = false, onToggleLock }) => {
+const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, onUpdate, employeeRoster, busyByDate, locked = false, onToggleLock }) => {
     const [open, setOpen] = useState(false);
     if (!sharedStaff || sharedStaff.length === 0) return null;
 
@@ -425,6 +512,7 @@ const SharedStaffGrid = ({ sharedStaff, dates, assignments, onAssign, onRemove, 
                                                         allDates={dates}
                                                         onAssign={onAssign}
                                                         onRemove={onRemove}
+                                                        onUpdate={onUpdate}
                                                         employeeRoster={employeeRoster}
                                                         busyOnDate={busyByDate[dateStr]}
                                                     />
@@ -857,6 +945,7 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
     const dates = useMemo(() => getShowDates(pd), [pd]);
     const navigate = useNavigate();
     const { toast } = useToast();
+    const [view, setView] = useState('calendar');
 
     // Show each person's CURRENT name: a rename in Officials & Staff must reach
     // the grid, not the name stored when they were assigned.
@@ -909,6 +998,10 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
 
     const removeAssignment = useCallback((assignmentId) => {
         setAssignments(prev => prev.filter(a => a.id !== assignmentId));
+    }, [setAssignments]);
+
+    const updateAssignment = useCallback((assignmentId, patch) => {
+        setAssignments(prev => prev.map(a => (a.id === assignmentId ? { ...a, ...patch } : a)));
     }, [setAssignments]);
 
     const handleSave = () => {
@@ -1000,13 +1093,49 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                 {/* Scheduling grids (min-w-0 lets a wide table scroll inside its card instead of pushing the sidebar off the page) */}
                 <div className="space-y-4 min-w-0">
                     <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-semibold">Schedule by Arena</h3>
-                        <Button onClick={handleSave} disabled={isSaving}>
+                        <div className="flex items-center gap-3">
+                            <h3 className="text-lg font-semibold">Schedule by Arena</h3>
+                            <div className="inline-flex rounded-md border p-0.5 text-xs">
+                                {[['calendar', 'Calendar'], ['arenas', 'Arena grids']].map(([k, label]) => (
+                                    <button
+                                        key={k}
+                                        type="button"
+                                        onClick={() => setView(k)}
+                                        className={cn('px-2.5 py-1 rounded', view === k ? 'bg-violet-600 text-white' : 'text-muted-foreground hover:bg-accent')}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <Button className="bg-violet-600 hover:bg-violet-700 text-white" onClick={handleSave} disabled={isSaving}>
                             {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
                             {isSaving ? 'Saving...' : 'Save Schedule'}
                         </Button>
                     </div>
 
+                    {view === 'calendar' ? (
+                        <CalendarWeekView
+                            arenas={arenas}
+                            sharedStaff={sharedStaff}
+                            showName={show.project_name}
+                            showDates={dates}
+                            rangeStart={pd.startDate}
+                            rangeEnd={pd.endDate}
+                            assignments={assignments}
+                            onAssign={addAssignment}
+                            onRemove={removeAssignment}
+                            onUpdate={updateAssignment}
+                            employeeRoster={staffList}
+                            busyByDate={busyByDate}
+                            lockedArenas={lockedArenas}
+                            onToggleLock={onToggleLock}
+                            AssignmentCell={AssignmentCell}
+                            NotNeededCell={NotNeededCell}
+                            LockToggle={LockToggle}
+                        />
+                    ) : (
+                        <>
                     {arenas.map(arena => (
                         <ArenaScheduleGrid
                             key={arena.id}
@@ -1017,6 +1146,7 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                             assignments={assignments}
                             onAssign={addAssignment}
                             onRemove={removeAssignment}
+                            onUpdate={updateAssignment}
                             employeeRoster={staffList}
                             busyByDate={busyByDate}
                         />
@@ -1030,9 +1160,12 @@ const SchedulingDashboard = ({ show, staffList, assignments: savedAssignments, s
                         assignments={assignments}
                         onAssign={addAssignment}
                         onRemove={removeAssignment}
+                        onUpdate={updateAssignment}
                         employeeRoster={staffList}
                         busyByDate={busyByDate}
                     />
+                        </>
+                    )}
                 </div>
 
                 {/* Sidebar: who works where & when — stays in view while scrolling the grids */}
