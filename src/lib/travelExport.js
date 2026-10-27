@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { bookingStatus, BOOKING_STATUS_LABELS } from '@/lib/travelBooking';
 
 /**
  * Export Travel Management overview as an Excel (.xlsx) file.
@@ -29,8 +30,7 @@ export const exportTravelToExcel = ({ personnel, travelData, showName }) => {
     const mileage = getMileageCost(member, travel);
     const total = flight + hotel + rental + mileage;
 
-    const hasBooking = travel.flight?.airline || travel.hotel?.hotelName || travel.rentalCar?.company;
-    const status = hasBooking ? 'Booked' : total > 0 ? 'Budgeted' : 'Pending';
+    const status = BOOKING_STATUS_LABELS[bookingStatus(member, travel, total > 0)];
 
     return {
       Employee: member.name || 'Unnamed',

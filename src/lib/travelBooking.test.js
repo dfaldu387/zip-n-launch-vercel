@@ -1,8 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { stillToBook, bookingBoard, missingReceipts } from '@/lib/travelBooking';
+import { stillToBook, bookingBoard, bookingStatus, missingReceipts } from '@/lib/travelBooking';
 
 const on = { reimbursed: true };
 const person = (id, expenses = {}) => ({ id, name: id, reimbursable_expenses: expenses });
+
+describe('bookingStatus', () => {
+  const needs = person('a', { airfare: on, hotel: on, rentalCar: on });
+
+  it('is booked only when everything the person needs is booked', () => {
+    const entry = { flight: { airline: 'Delta' }, hotel: { hotelName: 'Hilton' }, rentalCar: { company: 'Hertz' } };
+    expect(bookingStatus(needs, entry, true)).toBe('booked');
+  });
+
+  it('is partial when some needed items are booked and others are not', () => {
+    expect(bookingStatus(needs, { flight: { airline: 'Delta' } }, true)).toBe('partial');
+  });
+
+  it('is budgeted when money is set aside but nothing is booked', () => {
+    expect(bookingStatus(needs, {}, true)).toBe('budgeted');
+  });
+
+  it('is pending with nothing booked and nothing budgeted', () => {
+    expect(bookingStatus(person('b'), {}, false)).toBe('pending');
+  });
+
+  it('counts a mileage claim as booked, so a flight plus mileage person is fully booked', () => {
+    const p = person('c', { airfare: on, mileage: on });
+    expect(bookingStatus(p, { flight: { airline: 'Delta' }, mileage: { miles: '120' } }, true)).toBe('booked');
+  });
+});
 
 describe('stillToBook', () => {
   it('lists an item that is switched on but has nothing booked', () => {

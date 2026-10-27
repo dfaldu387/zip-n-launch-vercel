@@ -13,11 +13,16 @@ import { TRAVEL_ITEMS } from '@/lib/travelBooking';
  */
 export function requestableItems(member, items) {
   const keyOf = Object.fromEntries(TRAVEL_ITEMS.map((i) => [i.type, i.expenseKey]));
-  return (items || []).map((item) => ({
+  const options = (items || []).map((item) => ({
     type: item.type,
     label: item.label,
     checked: !isDirectExpense(member?.reimbursable_expenses?.[keyOf[item.type]]),
   }));
+  // The show can only book in someone's name with their ID details, so the Traveler Profile is
+  // ticked by default for anyone with a Direct expense, and offered (unticked) to everyone else.
+  const hasDirect = TRAVEL_ITEMS.some((i) => isDirectExpense(member?.reimbursable_expenses?.[i.expenseKey]));
+  options.push({ type: 'profile', label: 'Traveler Profile', checked: hasDirect });
+  return options;
 }
 
 /** Request state for one person: 'submitted' (answered since it was sent), 'sent', or null. */

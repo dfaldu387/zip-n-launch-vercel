@@ -3,7 +3,17 @@
 // Requests and answers from before the log existed still carry their own timestamps
 // (travelRequests[].sentAt, travelSubmissions[][].submittedAt), so they are listed too.
 
-const TYPE_LABELS = { flight: 'Flight', hotel: 'Hotel', rentalCar: 'Rental Car', mileage: 'Mileage' };
+const TYPE_LABELS = { flight: 'Flight', hotel: 'Hotel', rentalCar: 'Rental Car', mileage: 'Mileage', profile: 'Traveler Profile' };
+
+/** "2 receipts" for travel items; the attachment on a Traveler Profile is the driver license photo. */
+const filesText = (label, n) => {
+  if (n <= 0) return '';
+  const noun = label === TYPE_LABELS.profile ? 'license photo' : 'receipt';
+  return `, ${n} ${noun}${n === 1 ? '' : 's'}`;
+};
+
+/** ", added phone to staff card" for a profile whose email / phone filled empty fields on the staff card. */
+const staffCardText = (fields) => (fields?.length > 0 ? `, added ${fields.join(' and ')} to staff card` : '');
 
 /**
  * Returns [{ key, kind: 'email_sent' | 'details_submitted', at, name, detail, by }], newest first.
@@ -27,7 +37,7 @@ export function buildActivity({ log, requests, submissions, nameOf }) {
       const n = (sub.receipts || []).length;
       events.set(`details_submitted|${memberId}|${sub.submittedAt}`, {
         kind: 'details_submitted', at: sub.submittedAt, name: nameFor(memberId),
-        detail: `${TYPE_LABELS[type] || type}${n > 0 ? `, ${n} receipt${n === 1 ? '' : 's'}` : ''}`, by: '',
+        detail: `${TYPE_LABELS[type] || type}${filesText(TYPE_LABELS[type], n)}`, by: '',
       });
     }
   }
@@ -41,7 +51,7 @@ export function buildActivity({ log, requests, submissions, nameOf }) {
       name: e.name || nameFor(e.memberId),
       detail: isEmail
         ? `${(e.items || []).join(', ')}${e.email ? ` to ${e.email}` : ''}`
-        : `${e.item || ''}${n > 0 ? `, ${n} receipt${n === 1 ? '' : 's'}` : ''}`,
+        : `${e.item || ''}${filesText(e.item, n)}${staffCardText(e.addedToStaffCard)}`,
       by: e.by || '',
     });
   }

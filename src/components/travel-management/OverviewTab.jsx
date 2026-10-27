@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plane, Hotel, Car, DollarSign, Users, Calendar, MapPin, CheckCircle2, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CollapsibleCard } from '@/components/shared/CollapsibleCard';
-import { stillToBook, bookingBoard, bookedTypes, TRAVEL_ITEMS, missingReceipts } from '@/lib/travelBooking';
+import { stillToBook, bookingBoard, bookedTypes, bookingStatus, BOOKING_STATUS_LABELS, TRAVEL_ITEMS, missingReceipts } from '@/lib/travelBooking';
 import { buildTravelEvents, findConflicts, assignmentsInShow, eventsInWindow, groupByDay, formatDay } from '@/lib/travelCalendar';
 import { StatusMark, TYPE_STYLE } from './TravelCalendarTab';
 import { toDayString } from '@/lib/travelDefaults';
@@ -487,7 +487,6 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
                     const span = travelSpan(travel);
                     const travelStart = span?.start || travel.travelStart || '';
                     const travelEnd = span?.end || travel.travelEnd || '';
-                    const hasBooking = travel.flight?.airline || travel.hotel?.hotelName || travel.rentalCar?.company;
                     const doneTypes = bookedTypes(travel);
                     const hasExpenses = getTotalCost(member) > 0;
                     const total = getTotalCost(member);
@@ -504,13 +503,14 @@ const OverviewTab = ({ personnel, travelData, contractSettings, onGoToTab, showI
                         <CostCell member={member} cost={getMileageCost(member)} expenseKey="mileage" booked={doneTypes.has('mileage')} />
                         <td className="px-4 py-3 text-right font-medium">{total ? currency(total) : '—'}</td>
                         <td className="px-4 py-3 text-center">
-                          {hasBooking ? (
-                            <Badge className="bg-green-500/10 text-green-600 border-green-500/30">Booked</Badge>
-                          ) : hasExpenses ? (
-                            <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">Budgeted</Badge>
-                          ) : (
-                            <Badge variant="secondary">Pending</Badge>
-                          )}
+                          {(() => {
+                            const status = bookingStatus(member, travel, hasExpenses);
+                            const label = BOOKING_STATUS_LABELS[status];
+                            if (status === 'booked') return <Badge className="bg-green-500/10 text-green-600 border-green-500/30">{label}</Badge>;
+                            if (status === 'partial') return <Badge className="bg-sky-500/10 text-sky-600 border-sky-500/30">{label}</Badge>;
+                            if (status === 'budgeted') return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">{label}</Badge>;
+                            return <Badge variant="secondary">{label}</Badge>;
+                          })()}
                         </td>
                       </tr>
                     );

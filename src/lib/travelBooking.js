@@ -40,6 +40,22 @@ export function bookingBoard(personnel, travelData = {}) {
   return out;
 }
 
+export const BOOKING_STATUS_LABELS = { booked: 'Booked', partial: 'Partially booked', budgeted: 'Budgeted', pending: 'Pending' };
+
+/**
+ * One status per person, from the same "needed" and "booked" rules as the booking board:
+ *   booked   - everything the person needs is booked
+ *   partial  - some of it is booked, some is still to book
+ *   budgeted - nothing booked yet, but money is budgeted
+ *   pending  - nothing booked and nothing budgeted
+ * hasBudget is whether the person has any travel cost (budgeted or entered).
+ */
+export function bookingStatus(member, entry = {}, hasBudget = false) {
+  const [row] = bookingBoard([member], { [member.id]: entry });
+  if (row && row.booked.length > 0) return row.items.length === 0 ? 'booked' : 'partial';
+  return hasBudget ? 'budgeted' : 'pending';
+}
+
 /** Which of a person's travel types are booked, for the green cells in the Overview table. */
 export function bookedTypes(entry = {}) {
   const set = new Set();

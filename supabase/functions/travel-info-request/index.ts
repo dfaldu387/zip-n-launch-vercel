@@ -49,7 +49,18 @@ const ITEMS: Record<string, { label: string; fields: string[]; dateFields: strin
     dateFields: ["startDate", "endDate"],
     moneyFields: ["miles"],
   },
+  // Personal details the show needs to book travel in the person's name. The attached files are the
+  // driver license photo (stored under licenses/, same private bucket).
+  profile: {
+    label: "Traveler Profile",
+    fields: ["legalName", "email", "mobile", "homeAirport", "knownTravelerNumber", "frequentFlyers"],
+    dateFields: [],
+    moneyFields: [],
+  },
 };
+
+// Longer free-text fields (frequent flyer list is one "Airline: number" per line).
+const LONG_FIELDS = ["frequentFlyers"];
 
 const ALLOWED_FILES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -91,20 +102,43 @@ function makeSecret(): string {
 const esc = (s: unknown) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-function findMember(pd: any, memberId: string): { name: string; email: string; role: string } | null {
+// "SHOW_MANAGER" -> "Show Manager". Custom role names the manager typed are left alone.
+const prettyRole = (role: string) =>
+  /^[A-Z0-9_]+$/.test(role) ? role.toLowerCase().split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : role;
+
+function findMember(pd: any, memberId: string): { name: string; email: string; role: string; phone: string } | null {
   const officials = pd?.showDetails?.officials || {};
   for (const roles of Object.values<any>(officials)) {
     for (const [roleId, members] of Object.entries<any>(roles || {})) {
       for (const m of members || []) {
         if (m?.id === memberId) {
-          return { name: m.name || "", email: (m.email || "").trim(), role: m.custom_role_name || roleId };
+          return { name: m.name || "", email: (m.email || "").trim(), role: m.custom_role_name || roleId, phone: (m.phone || "").trim() };
         }
       }
     }
   }
   const rostered = (pd?.staffSchedule?.roster || []).find((e: any) => e?.id === memberId);
-  if (rostered) return { name: rostered.name || "", email: (rostered.email || "").trim(), role: "Staff" };
+  if (rostered) return { name: rostered.name || "", email: (rostered.email || "").trim(), role: "Staff", phone: (rostered.phone || "").trim() };
   return null;
+}
+
+// Copies a submitted profile's email / mobile onto the person's staff card (Officials & Staff list, or the
+// hand-added roster), but only into fields that are still empty: what the manager typed is never replaced.
+// Returns the names of the fields that were filled.
+function fillStaffContact(pd: any, memberId: string, email: string, mobile: string): string[] {
+  const filled: string[] = [];
+  const fill = (m: any) => {
+    if (email && !String(m.email || "").trim()) { m.email = email; filled.push("email"); }
+    if (mobile && !String(m.phone || "").trim()) { m.phone = mobile; filled.push("phone"); }
+  };
+  const officials = pd?.showDetails?.officials || {};
+  for (const roles of Object.values<any>(officials)) {
+    for (const members of Object.values<any>(roles || {})) {
+      for (const m of members || []) if (m?.id === memberId) fill(m);
+    }
+  }
+  for (const e of pd?.staffSchedule?.roster || []) if (e?.id === memberId) fill(e);
+  return Array.from(new Set(filled));
 }
 
 // Activity log kept on the show (project_data.travelActivity): one line per email sent and per answer received.
@@ -172,6 +206,12 @@ async function handleSend(req: Request, body: any) {
   const secret = makeSecret();
   const link = `${origin}/travel-info/${makeToken(projectId, memberId, secret)}`;
   const showName = project.project_name || pd.showName || "the show";
+  // A Traveler Profile request is the show asking for the details it needs to book travel in their name.
+  const askingProfile = types.includes("profile");
+  const heading = askingProfile ? "Travel Information Needed" : "Travel Details Needed";
+  const intro = askingProfile
+    ? `We need your travel information for <strong>${esc(showName)}</strong>, so the show can book your travel in your name. We are asking for:`
+    : `Please send us your travel details for <strong>${esc(showName)}</strong>, so we can plan the show and match your receipts. We are asking for:`;
   const itemList = types.map((t: string) => `<li style="margin: 4px 0;">${esc(ITEMS[t].label)}</li>`).join("");
 
   const res = await fetch("https://api.postmarkapp.com/email", {
@@ -180,16 +220,16 @@ async function handleSend(req: Request, body: any) {
     body: JSON.stringify({
       From: "EquiPatterns <Info@equipatterns.com>",
       To: member.email,
-      Subject: `Travel details needed — ${showName}`,
+      Subject: `${heading} — ${showName}`,
       HtmlBody: `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
 <body style="margin:0;padding:0;background:#f6f9fc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f9fc;padding:40px 20px;"><tr><td align="center">
 <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;">
 <tr><td style="background:linear-gradient(135deg,#2563eb,#3b82f6);color:#fff;padding:30px;text-align:center;border-radius:8px 8px 0 0;">
-<h1 style="margin:0;font-size:24px;font-weight:700;">Travel Details Needed</h1><p style="margin:8px 0 0;opacity:.9;font-size:14px;">${esc(showName)}</p></td></tr>
+<h1 style="margin:0;font-size:24px;font-weight:700;">${heading}</h1><p style="margin:8px 0 0;opacity:.9;font-size:14px;">${esc(showName)}</p></td></tr>
 <tr><td style="background:#fff;padding:30px;border:1px solid #e5e7eb;border-top:none;">
 <p style="color:#333;font-size:16px;line-height:26px;margin:0 0 16px;">Hello ${esc(member.name || "there")},</p>
-<p style="color:#333;font-size:16px;line-height:26px;margin:0 0 8px;">Please send us your travel details for <strong>${esc(showName)}</strong>, so we can plan the show and match your receipts. We are asking for:</p>
+<p style="color:#333;font-size:16px;line-height:26px;margin:0 0 8px;">${intro}</p>
 <ul style="color:#333;font-size:16px;line-height:24px;margin:0 0 16px;padding-left:22px;">${itemList}</ul>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:24px 0;"><tr><td align="center">
 <a href="${link}" style="background:#2563eb;border-radius:8px;color:#fff;display:inline-block;font-size:16px;font-weight:600;padding:14px 32px;text-decoration:none;">Enter Travel Details</a></td></tr></table>
@@ -242,14 +282,18 @@ async function handleGet(body: any) {
     label: ITEMS[t].label,
     submittedAt: submitted[t]?.submittedAt || null,
     // What is already on file (or sent earlier), so the person corrects it instead of retyping.
-    values: { ...pick(entry[t], ITEMS[t].fields), ...(submitted[t]?.values || {}) },
+    values: {
+      ...(t === "profile" ? { legalName: member?.name || "", email: member?.email || "", mobile: member?.phone || "" } : {}),
+      ...pick(entry[t], ITEMS[t].fields),
+      ...(submitted[t]?.values || {}),
+    },
     datesLocked: !!entry[t]?.datesLocked,
     receipts: (submitted[t]?.receipts || []).map((r: any) => ({ id: r.id, name: r.name })),
   }));
   return json({
     showName: project.project_name || pd.showName || "",
     memberName: member?.name || "",
-    role: member?.role || "",
+    role: prettyRole(member?.role || ""),
     items,
   });
 }
@@ -267,8 +311,9 @@ async function handleSubmit(body: any) {
   for (const f of spec.fields) {
     const raw = body.values?.[f];
     if (raw === undefined || raw === null) continue;
-    const v = String(raw).trim().slice(0, 200);
+    const v = String(raw).trim().slice(0, LONG_FIELDS.includes(f) ? 800 : 200);
     if (!v) continue;
+    if (f === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return json({ error: "The email address is not valid." }, 400);
     if (spec.dateFields.includes(f) && !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(v)) return json({ error: "A date was not in the right format." }, 400);
     if (spec.moneyFields.includes(f) && !/^\d{1,7}(\.\d{1,2})?$/.test(v)) return json({ error: "An amount was not in the right format." }, 400);
     values[f] = v;
@@ -292,7 +337,8 @@ async function handleSubmit(body: any) {
     const ext = (String(f.name || "").split(".").pop() || "pdf").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "pdf";
     const id = crypto.randomUUID();
     // Same folder layout the manager's page uses: <owner id>/<show id>/receipts/<uuid>.<ext>
-    const path = `${project.user_id}/${parsed.projectId}/receipts/${id}.${ext}`;
+    // (driver license photos go in licenses/ instead)
+    const path = `${project.user_id}/${parsed.projectId}/${type === "profile" ? "licenses" : "receipts"}/${id}.${ext}`;
     const { error: upErr } = await supabase.storage.from("travel-receipts").upload(path, bytes, { contentType: f.type, upsert: false });
     if (upErr) {
       console.error("receipt upload error:", upErr);
@@ -310,6 +356,7 @@ async function handleSubmit(body: any) {
     submittedAt: new Date().toISOString(),
   };
   pd.travelSubmissions = { ...(pd.travelSubmissions || {}), [parsed.memberId]: mine };
+  const syncedFields = type === "profile" ? fillStaffContact(pd, parsed.memberId, values.email || "", values.mobile || "") : [];
   addActivity(pd, {
     type: "details_submitted",
     at: mine[type].submittedAt,
@@ -317,6 +364,7 @@ async function handleSubmit(body: any) {
     name: findMember(pd, parsed.memberId)?.name || "",
     item: spec.label,
     receipts: newReceipts.length,
+    ...(syncedFields.length > 0 ? { addedToStaffCard: syncedFields } : {}),
   });
 
   const { error } = await supabase.from("projects").update({ project_data: pd }).eq("id", parsed.projectId);

@@ -33,7 +33,15 @@ describe('requestableItems', () => {
   it('unticks items the show buys directly', () => {
     const member = { reimbursable_expenses: { hotel: { reimbursed: true, expense_type: 'direct' }, airfare: { reimbursed: true } } };
     const out = requestableItems(member, [{ type: 'flight', label: 'Flight' }, { type: 'hotel', label: 'Hotel' }]);
-    expect(out.map((i) => i.checked)).toEqual([true, false]);
+    expect(out.slice(0, 2).map((i) => i.checked)).toEqual([true, false]);
+  });
+
+  it('ticks the Traveler Profile only for people with a direct expense', () => {
+    const direct = { reimbursable_expenses: { hotel: { reimbursed: true, expense_type: 'direct' } } };
+    const none = { reimbursable_expenses: { airfare: { reimbursed: true } } };
+    const profileOf = (m) => requestableItems(m, [{ type: 'flight', label: 'Flight' }]).find((i) => i.type === 'profile');
+    expect(profileOf(direct).checked).toBe(true);
+    expect(profileOf(none).checked).toBe(false);
   });
 });
 

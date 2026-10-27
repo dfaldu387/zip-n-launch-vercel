@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
-import { Loader2, CheckCircle2, AlertCircle, Paperclip, Plane, Hotel, Car, MapPin } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertCircle, Paperclip, Plane, Hotel, Car, MapPin, User } from 'lucide-react';
 
 // Fields each item asks for; the names match what the Travel Management tabs save.
 const FIELDS = {
@@ -47,8 +47,16 @@ const FIELDS = {
     ['miles', 'Miles (round trip)', 'number', '0'],
     ['purpose', 'Purpose', 'text'],
   ],
+  profile: [
+    ['legalName', 'Legal name (as on your ID)', 'text', 'e.g. Jane Marie Smith'],
+    ['email', 'Email', 'email', 'name@example.com'],
+    ['mobile', 'Mobile number', 'tel', 'e.g. 555-123-4567'],
+    ['homeAirport', 'Home airport', 'text', 'e.g. DEN'],
+    ['knownTravelerNumber', 'Known Traveler Number (TSA PreCheck / Global Entry)', 'text'],
+    ['frequentFlyers', 'Frequent flyer numbers', 'textarea', 'One per line, e.g.\nDelta: 1234567890\nSouthwest: 9876543'],
+  ],
 };
-const ICONS = { flight: Plane, hotel: Hotel, rentalCar: Car, mileage: MapPin };
+const ICONS = { flight: Plane, hotel: Hotel, rentalCar: Car, mileage: MapPin, profile: User };
 const ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 const MAX_MB = 10;
 
@@ -112,25 +120,35 @@ const ItemForm = ({ item, token, onSaved }) => {
           {FIELDS[item.type].map(([name, label, kind, placeholder]) => {
             const dateLocked = item.datesLocked && (kind === 'date' || kind === 'datetime-local');
             return (
-              <div key={name} className="space-y-1.5">
+              <div key={name} className={`space-y-1.5 ${kind === 'textarea' ? 'sm:col-span-2' : ''}`}>
                 <Label className="text-xs">{label}</Label>
-                <Input
-                  type={kind}
-                  min={kind === 'number' ? '0' : undefined}
-                  step={kind === 'number' ? '0.01' : undefined}
-                  placeholder={placeholder}
-                  value={values[name] || ''}
-                  disabled={dateLocked}
-                  onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
-                />
+                {kind === 'textarea' ? (
+                  <textarea
+                    rows={3}
+                    placeholder={placeholder}
+                    value={values[name] || ''}
+                    onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                ) : (
+                  <Input
+                    type={kind}
+                    min={kind === 'number' ? '0' : undefined}
+                    step={kind === 'number' ? '0.01' : undefined}
+                    placeholder={placeholder}
+                    value={values[name] || ''}
+                    disabled={dateLocked}
+                    onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+                  />
+                )}
               </div>
             );
           })}
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Receipts (optional)</Label>
+          <Label className="text-xs">{item.type === 'profile' ? 'Driver license photo (for airline or rental car)' : 'Receipts (optional)'}</Label>
           <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm text-blue-600 hover:bg-muted">
-            <Paperclip className="h-4 w-4" /> Add receipt
+            <Paperclip className="h-4 w-4" /> {item.type === 'profile' ? 'Attach photo' : 'Add receipt'}
             <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
           </label>
           <ul className="space-y-1 text-sm">
@@ -147,6 +165,7 @@ const ItemForm = ({ item, token, onSaved }) => {
           {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {item.submittedAt ? `Update ${item.label}` : `Send ${item.label}`}
         </Button>
+        {item.type === 'profile' && <p className="text-xs text-muted-foreground">Your ID details are used only to book your travel and are visible only to the show office.</p>}
       </CardContent>
     </Card>
   );

@@ -16,6 +16,22 @@ describe('buildActivity', () => {
     expect(out[1].name).toBe('Anna');
   });
 
+  it('words a Traveler Profile answer with its license photo and staff card fill', () => {
+    const at = '2026-10-02T09:00:00Z';
+    const out = buildActivity({
+      log: [{ type: 'details_submitted', at, memberId: 'a', name: 'Anna', item: 'Traveler Profile', receipts: 1, addedToStaffCard: ['phone'] }],
+      submissions: { a: { profile: { submittedAt: at, receipts: [{ id: 1 }] } } },
+      nameOf,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].detail).toBe('Traveler Profile, 1 license photo, added phone to staff card');
+  });
+
+  it('names a Traveler Profile answer that only exists in the submissions', () => {
+    const out = buildActivity({ submissions: { a: { profile: { submittedAt: '2026-10-02T09:00:00Z' } } }, nameOf });
+    expect(out[0].detail).toBe('Traveler Profile');
+  });
+
   it('lets a log entry replace the same event and adds who sent it', () => {
     const at = '2026-10-01T10:00:00Z';
     const out = buildActivity({

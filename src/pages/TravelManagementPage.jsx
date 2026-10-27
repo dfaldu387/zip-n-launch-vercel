@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowLeft, Plane, Hotel, Car, MapPin, LayoutDashboard, CalendarDays, Save, Loader2, Download, CheckCircle2, CircleDashed, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Plane, Hotel, Car, MapPin, LayoutDashboard, CalendarDays, User, Save, Loader2, Download, CheckCircle2, CircleDashed, AlertCircle } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -23,6 +23,7 @@ import HotelsTab from '@/components/travel-management/HotelsTab';
 import RentalCarsTab from '@/components/travel-management/RentalCarsTab';
 import MileageTab from '@/components/travel-management/MileageTab';
 import TravelCalendarTab from '@/components/travel-management/TravelCalendarTab';
+import ProfilesTab from '@/components/travel-management/ProfilesTab';
 
 const TravelManagementPage = () => {
   const navigate = useNavigate();
@@ -451,6 +452,10 @@ const TravelManagementPage = () => {
                     <CalendarDays className="h-4 w-4" />
                     Calendar
                   </TabsTrigger>
+                  <TabsTrigger value="profiles" className="gap-1.5">
+                    <User className="h-4 w-4" />
+                    Profiles
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="overview">
@@ -476,6 +481,10 @@ const TravelManagementPage = () => {
                     assignments={showProject?.project_data?.staffSchedule?.assignments}
                     onGoToTab={setActiveTab}
                   />
+                </TabsContent>
+
+                <TabsContent value="profiles">
+                  <ProfilesTab personnel={personnel} travelData={travelData} />
                 </TabsContent>
 
                 <TabsContent value="flights">
