@@ -146,7 +146,7 @@ export const REPORTS = [
       { key: 'role', label: 'Role', type: 'text' },
       { key: 'budget', label: 'Budget', type: 'money', sum: true },
       { key: 'actual', label: 'Actual', type: 'money', sum: true },
-      { key: 'variance', label: 'Over / (Under)', type: 'money', sum: true },
+      { key: 'variance', label: 'Over / (Under)', type: 'money', sum: true, tone: 'variance' },
       { key: 'lines', label: 'Actuals entered', type: 'text' },
     ],
     // Actual stays empty until a real number exists, so a missing actual never looks like a saving.
@@ -198,7 +198,7 @@ export const REPORTS = [
       { key: 'mileage', label: 'Mileage', type: 'money', sum: true },
       { key: 'budget', label: 'Travel budget', type: 'money', sum: true },
       { key: 'actual', label: 'Travel actual', type: 'money', sum: true },
-      { key: 'variance', label: 'Over / (Under)', type: 'money', sum: true },
+      { key: 'variance', label: 'Over / (Under)', type: 'money', sum: true, tone: 'variance' },
     ],
     // Budget columns come from the Travel cards; actuals are only the lines that have one entered.
     rows: (entries) => entries
@@ -231,9 +231,9 @@ export const REPORTS = [
       { key: 'name', label: 'Employee', type: 'text' },
       { key: 'role', label: 'Role', type: 'text' },
       { key: 'expense', label: 'Expense', type: 'text' },
-      { key: 'paidBy', label: 'Paid by', type: 'text' },
+      { key: 'paidBy', label: 'Paid by', type: 'status' },
       { key: 'amount', label: 'Amount', type: 'money', sum: true },
-      { key: 'contract', label: 'Contract', type: 'text' },
+      { key: 'contract', label: 'Contract', type: 'status' },
     ],
     // One row per switched-on expense. "Direct" is paid by the show; everything else is reimbursed.
     rows: (entries) => entries
@@ -297,7 +297,7 @@ export const REPORTS = [
       { key: 'rate', label: 'Rate / night', type: 'money' },
       { key: 'budget', label: 'Budget', type: 'money', sum: true },
       { key: 'actual', label: 'Actual', type: 'money', sum: true },
-      { key: 'status', label: 'Status', type: 'text' },
+      { key: 'status', label: 'Status', type: 'status' },
     ],
     rows: (entries) => entries
       .filter((e) => needs(e, 'hotel'))
@@ -336,7 +336,7 @@ export const REPORTS = [
       { key: 'confirmation', label: 'Confirmation', type: 'text' },
       { key: 'budget', label: 'Budget', type: 'money', sum: true },
       { key: 'actual', label: 'Actual', type: 'money', sum: true },
-      { key: 'status', label: 'Status', type: 'text' },
+      { key: 'status', label: 'Status', type: 'status' },
     ],
     rows: (entries) => entries
       .filter((e) => needs(e, 'flight'))
@@ -376,7 +376,7 @@ export const REPORTS = [
       { key: 'rate', label: 'Rate / day', type: 'money' },
       { key: 'budget', label: 'Budget', type: 'money', sum: true },
       { key: 'actual', label: 'Actual', type: 'money', sum: true },
-      { key: 'status', label: 'Status', type: 'text' },
+      { key: 'status', label: 'Status', type: 'status' },
     ],
     rows: (entries) => entries
       .filter((e) => needs(e, 'rentalCar'))
@@ -412,7 +412,7 @@ export const REPORTS = [
       { key: 'hotel', label: 'Hotel', type: 'text' },
       { key: 'car', label: 'Rental car', type: 'text' },
       { key: 'miles', label: 'Miles', type: 'count', sum: true },
-      { key: 'status', label: 'Status', type: 'text' },
+      { key: 'status', label: 'Status', type: 'status' },
       { key: 'toBook', label: 'Still to book', type: 'text' },
     ],
     // One row per person who needs any travel item.
@@ -447,7 +447,7 @@ export const REPORTS = [
       { key: 'item', label: 'Item', type: 'text' },
       { key: 'actual', label: 'Actual', type: 'money', sum: true },
       { key: 'receipts', label: 'Receipts', type: 'count', sum: true },
-      { key: 'status', label: 'Status', type: 'text' },
+      { key: 'status', label: 'Status', type: 'status' },
     ],
     // Submitted = a receipt is attached. Missing = an actual amount but no receipt.
     // Pending = needed, but no actual amount entered yet.
@@ -523,3 +523,34 @@ export const removeSavedReport = (list = [], id) => list.filter((r) => r.id !== 
 
 /** Saved reports whose report still exists (a removed report never breaks the list). */
 export const usableSavedReports = (list = []) => list.filter((r) => findReport(r.reportId));
+
+// ── Display helpers for the page ──
+// Colour of a status pill. Unknown words stay neutral, so a new status never breaks the page.
+const STATUS_TONES = {
+  good: ['Booked', 'Submitted', 'Approved', 'Signed'],
+  warn: ['Partially booked', 'Budgeted', 'Pending', 'Sent', 'Viewed'],
+  bad: ['Missing', 'Not booked', 'Declined'],
+  info: ['Show pays directly'],
+  violet: ['Reimbursed to person'],
+};
+
+export function statusTone(value) {
+  return Object.keys(STATUS_TONES).find((tone) => STATUS_TONES[tone].includes(value)) || 'neutral';
+}
+
+/**
+ * The tiles above a report: how many rows, then the last three summed columns (for example Budget,
+ * Actual, Over / (Under)). An over-budget variance is tinted bad and an under-budget one good.
+ */
+export function summaryTiles(report, result) {
+  const many = (report.rowNoun || ['person', 'people'])[1];
+  const tiles = [{ label: many.charAt(0).toUpperCase() + many.slice(1), value: String(result.count) }];
+  if (result.totals) {
+    for (const col of report.columns.filter((c) => c.sum).slice(-3)) {
+      const total = result.totals[col.key];
+      const tone = col.tone === 'variance' && typeof total === 'number' && total !== 0 ? (total > 0 ? 'bad' : 'good') : undefined;
+      tiles.push({ label: col.label, value: formatCell(total, col.type), tone });
+    }
+  }
+  return tiles;
+}

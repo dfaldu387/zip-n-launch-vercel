@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildReportContext, applyFilters, runReport, findReport, formatCell, addSavedReport, removeSavedReport, usableSavedReports } from '@/lib/employeeReports';
+import { buildReportContext, applyFilters, runReport, findReport, formatCell, addSavedReport, removeSavedReport, usableSavedReports, statusTone, summaryTiles } from '@/lib/employeeReports';
 
 const show = {
   showDetails: {
@@ -282,5 +282,31 @@ describe('money reports', () => {
     const rows = run('receipts').rows;
     expect(rows.find((r) => r.item === 'Flight')).toMatchObject({ receipts: 1, status: 'Submitted' });
     expect(rows.find((r) => r.item === 'Hotel')).toMatchObject({ actual: 310, receipts: null, status: 'Missing' });
+  });
+});
+
+describe('display helpers', () => {
+  it('picks a status colour and keeps unknown words neutral', () => {
+    expect(statusTone('Booked')).toBe('good');
+    expect(statusTone('Missing')).toBe('bad');
+    expect(statusTone('Pending')).toBe('warn');
+    expect(statusTone('Show pays directly')).toBe('info');
+    expect(statusTone('Something new')).toBe('neutral');
+  });
+
+  it('builds tiles: the row count, then the last three summed columns', () => {
+    const ctx = buildReportContext(show, contract);
+    const report = findReport('budget-vs-actual');
+    const tiles = summaryTiles(report, runReport(report, ctx, {}));
+    expect(tiles.map((t) => t.label)).toEqual(['People', 'Budget', 'Actual', 'Over / (Under)']);
+    expect(tiles[0].value).toBe('3');
+  });
+
+  it('tints an over-budget variance bad and an under-budget one good', () => {
+    const report = findReport('budget-vs-actual');
+    const make = (variance) => summaryTiles(report, { count: 1, totals: { budget: 10, actual: 10, variance } }).pop().tone;
+    expect(make(5)).toBe('bad');
+    expect(make(-5)).toBe('good');
+    expect(make(0)).toBeUndefined();
   });
 });
