@@ -258,6 +258,7 @@ const SHOW_SECTIONS = [
   { key: 'budgeting', title: 'Employee Budgeting Tool' },
   { key: 'employeeScheduling', title: 'Employee / Arena Scheduling' },
   { key: 'contracts', title: 'Contract Management' },
+  { key: 'employeeReports', title: 'Reports Center' },
   { key: 'patternsScoresheets', title: 'Patterns & Scoresheets' },
   { key: 'results', title: 'Results Entry' },
   { key: 'awards', title: 'Awards Management' },

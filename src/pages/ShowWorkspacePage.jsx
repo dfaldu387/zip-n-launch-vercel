@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   ArrowLeft, Loader2, Calendar, MapPin,
-  CalendarDays, FileText, DollarSign, LayoutGrid, Building2,
+  CalendarDays, FileText, FileBarChart, DollarSign, LayoutGrid, Building2,
   Radio, Award, Edit, ChevronRight, Users, ClipboardList,
   BarChart3, Warehouse, Check, Lock, Circle, ChevronDown, BookOpen,
   Download, Unlock, ShieldAlert, Link2, Plus,
@@ -40,7 +40,7 @@ import {
 
 /* ── Module card ── */
 
-const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, statusReadOnlyReason, moduleKey, onStatusChange, comingSoon, isShowLocked, isSectionLocked }) => {
+const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue', status, statusReadOnly, statusReadOnlyReason, moduleKey, onStatusChange, comingSoon, isShowLocked, isSectionLocked, noStatus }) => {
   const { toast } = useToast();
   const colorMap = {
     blue: 'bg-blue-100 dark:bg-blue-950/40 text-blue-600',
@@ -107,7 +107,7 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <h3 className="font-semibold text-sm text-foreground">{title}</h3>
-                  {!comingSoon && (
+                  {!comingSoon && !noStatus && (
                     <ModuleStatusBadge
                       status={status}
                       moduleKey={moduleKey}
@@ -132,7 +132,8 @@ const ModuleCard = ({ icon: Icon, title, description, to, onClick, color = 'blue
 /* ── Overall progress bar ── */
 
 const OverallProgress = ({ modules }) => {
-  const allItems = modules.flatMap(s => s.items);
+  // Read-only tools such as Reports have no status, so they are not counted as unfinished work.
+  const allItems = modules.flatMap(s => s.items).filter(m => !m.noStatus);
   const total = allItems.length;
   const published = allItems.filter(m => m.status === MODULE_STATUS.PUBLISHED).length;
   const locked = allItems.filter(m => m.status === MODULE_STATUS.LOCKED).length;
@@ -440,6 +441,8 @@ const ShowWorkspacePage = () => {
         { key: 'budgeting', icon: DollarSign, title: 'Employee Budgeting Tool', description: 'Plan and track employee budgets and compensation.', to: `/horse-show-manager/employee-budgeting/${showId}`, color: 'emerald' },
         { key: 'employeeScheduling', icon: LayoutGrid, title: 'Employee / Arena Scheduling', description: 'Assign employees to arenas and time slots.', to: `/horse-show-manager/employee-scheduling/${showId}`, color: 'emerald' },
         { key: 'contracts', icon: FileText, title: 'Contract Management', description: 'Create and manage employee contracts for this show.', to: `/horse-show-manager/employee-management/contracts?showId=${showId}`, color: 'emerald' },
+        // Reports only read the show, so no status badge, and a locked show does not block it.
+        { key: 'employeeReports', icon: FileBarChart, title: 'Reports Center', description: 'Budget, staffing, travel and contract reports to preview, print or export.', to: `/horse-show-manager/employee-reports/${showId}`, color: 'emerald', noStatus: true },
       ],
     },
     {
@@ -733,7 +736,7 @@ const ShowWorkspacePage = () => {
                     {...mod}
                     moduleKey={mod.key}
                     onStatusChange={changeModuleStatus}
-                    isShowLocked={isShowLocked}
+                    isShowLocked={isShowLocked && !mod.noStatus}
                     isSectionLocked={isSectionOnlyAdmin && !mySections.includes(mod.key)}
                   />
                 ))}
