@@ -649,9 +649,9 @@ const ContractManagementPage = () => {
       case 3:
         return <Step3_ContractTemplate formData={formData} setFormData={setFormData} />;
       case 4:
-        return <Step4_GenerateContracts formData={formData} setFormData={setFormData} onSave={saveProject} isSaving={isSaving} />;
+        return <Step4_GenerateContracts formData={formData} setFormData={setFormData} onSave={saveProject} isSaving={isSaving} showId={linkedShowId} />;
       case 5:
-        return <Step5_PreviewReview formData={formData} setFormData={setFormData} />;
+        return <Step5_PreviewReview formData={formData} setFormData={setFormData} showId={linkedShowId} onSave={saveProject} />;
       case 6:
         return <Step6_CloseOut formData={formData} setFormData={setFormData} onSave={saveProject} isSaving={isSaving} />;
       default:

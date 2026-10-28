@@ -186,6 +186,9 @@ const handler = async (req: Request): Promise<Response> => {
               ${deadlineHtml}
 
               <p style="color: #6b7280; font-size: 13px; text-align: center; margin: 24px 0 0;">Please review the contract details and respond to this email with your signed contract and any required documents (W-9, association membership ID, emergency contact information).</p>
+
+              <p style="color: #6b7280; font-size: 13px; text-align: center; margin: 16px 0 0;">Have an EquiPatterns account with this email? You can also view this show in your Staff Portal.</p>
+              <p style="text-align: center; margin: 12px 0 0;"><a href="https://equipatterns.com/staff-portal" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 600; padding: 10px 22px; border-radius: 6px;">Open Staff Portal</a></p>
             </td>
           </tr>
           <!-- Footer -->

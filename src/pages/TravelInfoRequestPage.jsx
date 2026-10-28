@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
+import { invokeAsUser } from '@/lib/edgeFunctions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -67,7 +68,8 @@ const fileToBase64 = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-const ItemForm = ({ item, token, onSaved }) => {
+// Used by the emailed link (token) and by the Staff Portal (projectId, signed in).
+export const ItemForm = ({ item, token, projectId, onSaved }) => {
   const { toast } = useToast();
   const [values, setValues] = useState(item.values || {});
   const [files, setFiles] = useState([]);
@@ -88,9 +90,11 @@ const ItemForm = ({ item, token, onSaved }) => {
     setSaving(true);
     try {
       const encoded = await Promise.all(files.map(async (f) => ({ name: f.name, type: f.type, base64: await fileToBase64(f) })));
-      const { data, error } = await supabase.functions.invoke('travel-info-request', {
-        body: { action: 'submit', token, type: item.type, values, files: encoded },
-      });
+      const { data, error } = projectId
+        ? await invokeAsUser('travel-info-request', { action: 'portal_submit', projectId, type: item.type, values, files: encoded })
+        : await supabase.functions.invoke('travel-info-request', {
+          body: { action: 'submit', token, type: item.type, values, files: encoded },
+        });
       if (error || data?.error) throw new Error(data?.error || 'Could not save. Please try again.');
       setFiles([]);
       onSaved(item.type, data);

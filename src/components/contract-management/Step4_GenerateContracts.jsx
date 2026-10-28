@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { sendContractEmail } from '@/lib/contractEmailService';
+import { notifyContractSent, syncStaffContractStatus } from '@/lib/notifications';
 import {
   DEFAULT_CONTRACT_TEMPLATE,
   PlaceholderToolbar,
@@ -73,7 +74,7 @@ const SignatureBadge = ({ status }) => {
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 
-export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSaving }) => {
+export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSaving, showId }) => {
   const { toast } = useToast();
   const fullScreenTextareaRef = useRef(null);
   const [fullScreenMemberId, setFullScreenMemberId] = useState(null);
@@ -223,6 +224,24 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
 
       const includeW9 = (formData.deliverySettings?.includeW9Request ?? true);
 
+      // Show the linked show in this person's Staff Portal (never blocks the send).
+      const linkedShowId = showId || formData.linkedProjectId;
+      if (linkedShowId) {
+        notifyContractSent({
+          email: member.email,
+          name: member.name,
+          showId: linkedShowId,
+          showName: formData.showName,
+        });
+        syncStaffContractStatus({
+          email: member.email,
+          name: member.name,
+          showId: linkedShowId,
+          showName: formData.showName,
+          status: 'sent',
+        });
+      }
+
       setFormData(prev => {
         const existingFolder = prev.employeeFolders[memberId];
         const updatedFolder = {
@@ -257,6 +276,9 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
         };
       });
 
+      // Save now so a reload can't lose the Sent status (wait one tick for the state above to commit).
+      if (onSave) setTimeout(() => onSave({ silent: true }), 300);
+
       const w9Note = includeW9 ? ' W-9 request included.' : '';
       toast({
         title: 'Contract Sent',
@@ -273,6 +295,19 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
     }
   };
 
+  // Staff Portal copy of the status + bell alert (only for people who were emailed a contract).
+  const syncMemberStatus = (member, status) => {
+    const linkedShowId = showId || formData.linkedProjectId;
+    if (!member?.email || !linkedShowId) return;
+    syncStaffContractStatus({
+      email: member.email,
+      name: member.name,
+      showId: linkedShowId,
+      showName: formData.showName,
+      status,
+    });
+  };
+
   const handleMarkSigned = (memberId) => {
     setFormData(prev => ({
       ...prev,
@@ -286,6 +321,7 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
       },
     }));
     const member = personnel.find(m => m.id === memberId);
+    syncMemberStatus(member, 'signed');
     toast({
       title: 'Contract Signed',
       description: `${member?.name || 'Employee'} contract marked as signed.`,
@@ -305,6 +341,7 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
       },
     }));
     const member = personnel.find(m => m.id === memberId);
+    syncMemberStatus(member, 'approved');
     toast({
       title: 'Contract Approved',
       description: `${member?.name || 'Employee'} contract approved. Collect remaining documents in Step 5.`,

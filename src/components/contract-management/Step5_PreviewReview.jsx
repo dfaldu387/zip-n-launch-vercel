@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { motion } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -23,6 +24,7 @@ import {
   formatDate,
 } from '@/lib/contractUtils';
 import { sendContractEmail } from '@/lib/contractEmailService';
+import { notifyContractSent, syncStaffContractStatus } from '@/lib/notifications';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -67,6 +69,19 @@ const DocUploadZone = ({ file, onDrop, onRemove, accept }) => {
           <p className="text-sm font-medium truncate">{file.name}</p>
           <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
         </div>
+        {file.path && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={async () => {
+              const { data } = await supabase.storage.from('contract-documents').createSignedUrl(file.path, 3600);
+              if (data?.signedUrl) window.open(data.signedUrl, '_blank', 'noopener');
+            }}
+          >
+            Open
+          </Button>
+        )}
         <Button variant="ghost" size="sm" onClick={onRemove} className="shrink-0 text-destructive hover:text-destructive">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
@@ -101,10 +116,58 @@ const SIGNATURE_LABELS = {
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 
-export const Step5_PreviewReview = ({ formData, setFormData }) => {
+export const Step5_PreviewReview = ({ formData, setFormData, showId, onSave }) => {
   const { toast } = useToast();
   const [isBulkSending, setIsBulkSending] = useState(false);
   const personnel = useMemo(() => flattenPersonnel(formData), [formData.showDetails?.officials]);
+
+  // Files staff uploaded from their Staff Portal fill the matching document slot.
+  const linkedShowId = showId || formData.linkedProjectId;
+  useEffect(() => {
+    if (!linkedShowId || personnel.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('staff_contract_documents')
+        .select('doc_id, member_email, file_name, file_size, storage_path, created_at')
+        .eq('show_id', linkedShowId)
+        .order('created_at', { ascending: false });
+      if (error || cancelled || !data?.length) return;
+      setFormData(prev => {
+        let next = prev;
+        const seen = new Set();
+        for (const row of data) {
+          const key = `${row.member_email.toLowerCase()}|${row.doc_id}`;
+          if (seen.has(key)) continue; // newest upload wins
+          seen.add(key);
+          const member = personnel.find(m => m.email?.toLowerCase() === row.member_email.toLowerCase());
+          const folder = next.employeeFolders?.[member?.id];
+          if (!folder) continue;
+          const current = folder.documents?.[row.doc_id];
+          if (current?.file?.path === row.storage_path) continue;
+          next = {
+            ...next,
+            employeeFolders: {
+              ...next.employeeFolders,
+              [member.id]: {
+                ...folder,
+                documents: {
+                  ...folder.documents,
+                  [row.doc_id]: {
+                    ...current,
+                    status: 'complete',
+                    file: { name: row.file_name, size: row.file_size || 0, path: row.storage_path, source: 'staff' },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [linkedShowId, personnel.length]);
   const employeeFolders = formData.employeeFolders || {};
   const contractSettings = formData.contractSettings || {};
 
@@ -245,6 +308,10 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
       const result = await sendContractEmail({ member, formData });
       if (result.success) {
         sentCount++;
+        if (linkedShowId) {
+          notifyContractSent({ email: member.email, name: member.name, showId: linkedShowId, showName: formData.showName });
+          syncStaffContractStatus({ email: member.email, name: member.name, showId: linkedShowId, showName: formData.showName, status: 'sent' });
+        }
         activityEntries.push({ memberId: member.id, memberName: member.name, email: member.email, timestamp: now, status: 'sent' });
         setFormData(prev => ({
           ...prev,
@@ -270,6 +337,7 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
     }));
 
     setIsBulkSending(false);
+    if (sentCount > 0 && onSave) setTimeout(() => onSave({ silent: true }), 300);
 
     if (failedCount > 0) {
       toast({
@@ -683,6 +751,23 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
                               {folder.documents?.w9_form?.requestedAt ? 'Resend Request' : 'Request W-9 via Email'}
                             </Button>
                           </div>
+                          {folder.documents?.w9_form?.file?.path && (
+                            <div className="flex items-center gap-3 p-3 bg-muted/30 border rounded-lg">
+                              <File className="h-4 w-4 text-primary shrink-0" />
+                              <p className="flex-1 min-w-0 text-sm font-medium truncate">{folder.documents.w9_form.file.name}</p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="shrink-0"
+                                onClick={async () => {
+                                  const { data } = await supabase.storage.from('contract-documents').createSignedUrl(folder.documents.w9_form.file.path, 3600);
+                                  if (data?.signedUrl) window.open(data.signedUrl, '_blank', 'noopener');
+                                }}
+                              >
+                                Open
+                              </Button>
+                            </div>
+                          )}
                           {folder.documents?.w9_form?.requestedAt && (
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="text-xs text-muted-foreground">
@@ -704,7 +789,7 @@ export const Step5_PreviewReview = ({ formData, setFormData }) => {
                         </div>
                         <p className="text-xs text-muted-foreground mt-2 ml-9 flex items-center gap-1">
                           <Shield className="h-3 w-3" />
-                          W-9 forms are handled via email and not stored on this platform.
+                          W-9 forms uploaded in the Staff Portal are stored privately and are visible only to the show office.
                         </p>
                       </div>
 

@@ -302,10 +302,20 @@ async function handleSubmit(body: any) {
   const link = await openLink(body.token);
   if (!link) return json({ error: "This link is invalid or has expired. Please ask the show office to resend it." }, 403);
   const { supabase, project, parsed, request } = link;
+  return processSubmit(body, { supabase, project, parsed, allowedTypes: request.items || [] });
+}
+
+// Shared by the email link (handleSubmit) and the Staff Portal (handlePortalSubmit): validate one item,
+// store its receipts, and save the answer to project_data.travelSubmissions.
+async function processSubmit(
+  body: any,
+  ctx: { supabase: any; project: any; parsed: { projectId: string; memberId: string }; allowedTypes: string[] },
+) {
+  const { supabase, project, parsed, allowedTypes } = ctx;
 
   const type = String(body.type || "");
   const spec = ITEMS[type];
-  if (!spec || !(request.items || []).includes(type)) return json({ error: "That item was not requested." }, 400);
+  if (!spec || !allowedTypes.includes(type)) return json({ error: "That item was not requested." }, 400);
 
   const values: Record<string, string> = {};
   for (const f of spec.fields) {
@@ -375,6 +385,93 @@ async function handleSubmit(body: any) {
   return json({ success: true, submittedAt: mine[type].submittedAt, receipts: mine[type].receipts.map((r: any) => ({ id: r.id, name: r.name })) });
 }
 
+// ── Staff Portal (signed in, no emailed link) ─────────────────────────────────────────────────────────
+// A signed-in person may answer for a show only when a contract was sent to their email
+// (the judge_notifications row of type 'contract_sent'), and only for the staff card with their email.
+const PORTAL_TYPES = ["flight", "hotel", "rentalCar", "mileage"];
+
+function findMemberByEmail(pd: any, email: string): { id: string; name: string; email: string; role: string; phone: string } | null {
+  const want = email.trim().toLowerCase();
+  if (!want) return null;
+  const officials = pd?.showDetails?.officials || {};
+  for (const roles of Object.values<any>(officials)) {
+    for (const [roleId, members] of Object.entries<any>(roles || {})) {
+      for (const m of members || []) {
+        if (m?.id && String(m.email || "").trim().toLowerCase() === want) {
+          return { id: m.id, name: m.name || "", email: String(m.email).trim(), role: m.custom_role_name || roleId, phone: (m.phone || "").trim() };
+        }
+      }
+    }
+  }
+  const rostered = (pd?.staffSchedule?.roster || []).find((e: any) => e?.id && String(e.email || "").trim().toLowerCase() === want);
+  if (rostered) return { id: rostered.id, name: rostered.name || "", email: String(rostered.email).trim(), role: "Staff", phone: (rostered.phone || "").trim() };
+  return null;
+}
+
+async function portalContext(req: Request, body: any) {
+  const authHeader = req.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ")) return { error: json({ error: "Please sign in and try again." }, 401) };
+  const asUser = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_ANON_KEY") ?? "", {
+    global: { headers: { Authorization: authHeader } },
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: who } = await asUser.auth.getUser();
+  const email = (who?.user?.email || "").trim().toLowerCase();
+  if (!email) return { error: json({ error: "Please sign in and try again." }, 401) };
+
+  const projectId = String(body.projectId || "");
+  if (!projectId) return { error: json({ error: "Missing show." }, 400) };
+
+  const supabase = adminClient();
+  const { data: project } = await supabase.from("projects").select("id, user_id, project_name, project_data").eq("id", projectId).maybeSingle();
+  if (!project) return { error: json({ error: "Show not found." }, 404) };
+
+  const { data: sent } = await supabase
+    .from("judge_notifications")
+    .select("id")
+    .eq("project_id", projectId)
+    .eq("notification_type", "contract_sent")
+    .eq("judge_email", email)
+    .limit(1);
+  if (!sent || sent.length === 0) return { error: json({ error: "No contract has been sent to you for this show." }, 403) };
+
+  const member = findMemberByEmail(project.project_data, email);
+  if (!member) return { error: json({ error: "Your email is not on this show's staff list." }, 404) };
+
+  return { supabase, project, member, projectId };
+}
+
+async function handlePortalGet(req: Request, body: any) {
+  const ctx = await portalContext(req, body);
+  if (ctx.error) return ctx.error;
+  const { project, member } = ctx as any;
+  const pd = project.project_data || {};
+  const entry = pd.travelData?.[member.id] || {};
+  const submitted = pd.travelSubmissions?.[member.id] || {};
+
+  const items = PORTAL_TYPES.map((t) => ({
+    type: t,
+    label: ITEMS[t].label,
+    submittedAt: submitted[t]?.submittedAt || null,
+    values: { ...pick(entry[t], ITEMS[t].fields), ...(submitted[t]?.values || {}) },
+    datesLocked: !!entry[t]?.datesLocked,
+    receipts: (submitted[t]?.receipts || []).map((r: any) => ({ id: r.id, name: r.name })),
+  }));
+  return json({
+    showName: project.project_name || pd.showName || "",
+    memberName: member.name || "",
+    role: prettyRole(member.role || ""),
+    items,
+  });
+}
+
+async function handlePortalSubmit(req: Request, body: any) {
+  const ctx = await portalContext(req, body);
+  if (ctx.error) return ctx.error;
+  const { supabase, project, member, projectId } = ctx as any;
+  return processSubmit(body, { supabase, project, parsed: { projectId, memberId: member.id }, allowedTypes: PORTAL_TYPES });
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
@@ -382,6 +479,8 @@ serve(async (req: Request) => {
     if (body.action === "send") return await handleSend(req, body);
     if (body.action === "get") return await handleGet(body);
     if (body.action === "submit") return await handleSubmit(body);
+    if (body.action === "portal_get") return await handlePortalGet(req, body);
+    if (body.action === "portal_submit") return await handlePortalSubmit(req, body);
     return json({ error: "Unknown action." }, 400);
   } catch (e: any) {
     console.error("travel-info-request error:", e);

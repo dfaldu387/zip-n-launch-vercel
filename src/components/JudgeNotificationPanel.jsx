@@ -40,6 +40,10 @@ const JudgeNotificationPanel = ({ userEmail }) => {
         const type = notification.notification_type;
         if (type === 'pattern_approved' || type === 'pattern_rejected' || type === 'pattern_published') {
             navigate('/contributor-portal');
+        } else if (type?.startsWith('contract_')) {
+            navigate('/staff-portal');
+        } else if (type === 'staff_activity') {
+            navigate(`/horse-show-manager/employee-management/contracts?showId=${notification.project_id}`);
         } else {
             navigate('/judges-portal');
         }
@@ -160,6 +164,11 @@ const JudgeNotificationPanel = ({ userEmail }) => {
             case 'pattern_approved':   return <CheckCircle2 className="h-4 w-4 text-green-600" />;
             case 'pattern_rejected':   return <XCircle className="h-4 w-4 text-red-600" />;
             case 'pattern_published':  return <Globe className="h-4 w-4 text-blue-600" />;
+            case 'contract_approved':  return <CheckCircle2 className="h-4 w-4 text-green-600" />;
+            case 'contract_declined':  return <XCircle className="h-4 w-4 text-red-600" />;
+            case 'contract_sent':
+            case 'contract_signed':
+            case 'staff_activity':     return <FileText className="h-4 w-4 text-primary" />;
             default:                   return <Bell className="h-4 w-4 text-primary" />;
         }
     };

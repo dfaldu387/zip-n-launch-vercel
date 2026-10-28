@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { routeForShowAccess, SHOW_SECTION_TITLES } from '@/lib/showSections';
 import ProjectDetailModal from '@/components/ProjectDetailModal';
+import StaffShowDialog from '@/components/StaffShowDialog';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { withoutArchived } from '@/lib/archivedProjects';
@@ -43,6 +44,7 @@ const StaffPortalPage = () => {
     
     // Project Detail Modal State
     const [selectedProject, setSelectedProject] = useState(null);
+    const [staffShow, setStaffShow] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     
     // Check if user email appears in a project's staff/officials/judges
@@ -101,7 +103,7 @@ const StaffPortalPage = () => {
                 // Step 1: Get all notifications for this user's email (judges + staff assignments)
                 const { data: notifications, error: notifError } = await supabase
                     .from('judge_notifications')
-                    .select('project_id, project_name')
+                    .select('project_id, project_name, notification_type')
                     .eq('judge_email', user.email.toLowerCase());
 
                 if (notifError) {
@@ -135,11 +137,19 @@ const StaffPortalPage = () => {
 
                 // Split by type
                 const patternBooks = allProjects.filter(p => p.project_type === 'pattern_book');
-                const horseShows = allProjects.filter(p =>
-                    p.project_type !== 'pattern_book' &&
-                    p.project_type !== 'pattern_folder' &&
-                    p.status?.toLowerCase() !== 'in progress'
+                // A show with a sent contract stays visible even while "In Progress".
+                const contractedIds = new Set(
+                    (notifications || [])
+                        .filter(n => n.notification_type === 'contract_sent')
+                        .map(n => String(n.project_id))
                 );
+                const horseShows = allProjects
+                    .filter(p =>
+                        p.project_type !== 'pattern_book' &&
+                        p.project_type !== 'pattern_folder' &&
+                        (p.status?.toLowerCase() !== 'in progress' || contractedIds.has(String(p.id)))
+                    )
+                    .map(p => ({ ...p, _contracted: contractedIds.has(String(p.id)) }));
 
                 setPatternBookProjects(patternBooks);
                 setHorseShowProjects(horseShows);
@@ -188,6 +198,11 @@ const StaffPortalPage = () => {
 
     // Handle View Project
     const handleViewProject = (project) => {
+        // A show with a sent contract opens the staff page, not the manager dialog.
+        if (project._contracted) {
+            setStaffShow(project);
+            return;
+        }
         setSelectedProject(project);
         setIsModalOpen(true);
     };
@@ -602,7 +617,7 @@ const StaffPortalPage = () => {
                                                 </TableHeader>
                                                 <TableBody>
                                                     {horseShowProjects
-                                                        .filter(project => (project.status || '').toLowerCase() !== 'in progress')
+                                                        .filter(project => project._contracted || (project.status || '').toLowerCase() !== 'in progress')
                                                         .map((project) => {
                                                         const details = getProjectDetails(project);
                                                         const peopleData = getPeopleData(project);
@@ -794,6 +809,13 @@ const StaffPortalPage = () => {
                     </Tabs>
                 </main>
             </div>
+
+            <StaffShowDialog
+                open={!!staffShow}
+                onClose={() => setStaffShow(null)}
+                project={staffShow}
+                userEmail={user?.email}
+            />
 
             {/* Project Detail Modal */}
             {selectedProject && (
