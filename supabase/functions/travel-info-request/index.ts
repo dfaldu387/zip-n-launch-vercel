@@ -390,7 +390,24 @@ async function processSubmit(
 // (the judge_notifications row of type 'contract_sent'), and only for the staff card with their email.
 const PORTAL_TYPES = ["flight", "hotel", "rentalCar", "mileage"];
 
-function findMemberByEmail(pd: any, email: string): { id: string; name: string; email: string; role: string; phone: string } | null {
+// Which expense in the person's contract (Officials & Staff > reimbursable_expenses) each travel item belongs to.
+const EXPENSE_KEY: Record<string, string> = { flight: "airfare", hotel: "hotel", rentalCar: "rentalCar", mileage: "mileage" };
+
+// What the Staff Portal shows one person: only the items that are in THEIR contract, each marked
+//   "reimbursement" (they pay, then enter the details and receipts) or
+//   "direct" (the show books it; they only see what was booked).
+// The Traveler Profile (legal name, ID) is offered only when at least one item is direct.
+function portalPlan(expenses: any): { modes: Record<string, "reimbursement" | "direct">; wantsProfile: boolean } {
+  const modes: Record<string, "reimbursement" | "direct"> = {};
+  for (const t of PORTAL_TYPES) {
+    const exp = expenses?.[EXPENSE_KEY[t]];
+    if (!exp?.reimbursed) continue;
+    modes[t] = exp.expense_type === "direct" ? "direct" : "reimbursement";
+  }
+  return { modes, wantsProfile: Object.values(modes).includes("direct") };
+}
+
+function findMemberByEmail(pd: any, email: string): { id: string; name: string; email: string; role: string; phone: string; expenses: any } | null {
   const want = email.trim().toLowerCase();
   if (!want) return null;
   const officials = pd?.showDetails?.officials || {};
@@ -398,13 +415,13 @@ function findMemberByEmail(pd: any, email: string): { id: string; name: string; 
     for (const [roleId, members] of Object.entries<any>(roles || {})) {
       for (const m of members || []) {
         if (m?.id && String(m.email || "").trim().toLowerCase() === want) {
-          return { id: m.id, name: m.name || "", email: String(m.email).trim(), role: m.custom_role_name || roleId, phone: (m.phone || "").trim() };
+          return { id: m.id, name: m.name || "", email: String(m.email).trim(), role: m.custom_role_name || roleId, phone: (m.phone || "").trim(), expenses: m.reimbursable_expenses || {} };
         }
       }
     }
   }
   const rostered = (pd?.staffSchedule?.roster || []).find((e: any) => e?.id && String(e.email || "").trim().toLowerCase() === want);
-  if (rostered) return { id: rostered.id, name: rostered.name || "", email: String(rostered.email).trim(), role: "Staff", phone: (rostered.phone || "").trim() };
+  if (rostered) return { id: rostered.id, name: rostered.name || "", email: String(rostered.email).trim(), role: "Staff", phone: (rostered.phone || "").trim(), expenses: {} };
   return null;
 }
 
@@ -449,14 +466,36 @@ async function handlePortalGet(req: Request, body: any) {
   const entry = pd.travelData?.[member.id] || {};
   const submitted = pd.travelSubmissions?.[member.id] || {};
 
-  const items = PORTAL_TYPES.map((t) => ({
+  const { modes, wantsProfile } = portalPlan(member.expenses);
+  const items: any[] = Object.keys(modes).map((t) => ({
     type: t,
+    mode: modes[t],
     label: ITEMS[t].label,
     submittedAt: submitted[t]?.submittedAt || null,
-    values: { ...pick(entry[t], ITEMS[t].fields), ...(submitted[t]?.values || {}) },
+    // Direct: what the show booked (read-only for the person). Reimbursement: what they sent before.
+    values: modes[t] === "direct"
+      ? pick(entry[t], ITEMS[t].fields.filter((f) => f !== "actualCost"))
+      : { ...pick(entry[t], ITEMS[t].fields), ...(submitted[t]?.values || {}) },
     datesLocked: !!entry[t]?.datesLocked,
     receipts: (submitted[t]?.receipts || []).map((r: any) => ({ id: r.id, name: r.name })),
   }));
+  if (wantsProfile) {
+    items.push({
+      type: "profile",
+      mode: "profile",
+      label: ITEMS.profile.label,
+      submittedAt: submitted.profile?.submittedAt || null,
+      values: {
+        legalName: member.name || "",
+        email: member.email || "",
+        mobile: member.phone || "",
+        ...pick(entry.profile, ITEMS.profile.fields),
+        ...(submitted.profile?.values || {}),
+      },
+      datesLocked: false,
+      receipts: (submitted.profile?.receipts || []).map((r: any) => ({ id: r.id, name: r.name })),
+    });
+  }
   return json({
     showName: project.project_name || pd.showName || "",
     memberName: member.name || "",
@@ -469,7 +508,11 @@ async function handlePortalSubmit(req: Request, body: any) {
   const ctx = await portalContext(req, body);
   if (ctx.error) return ctx.error;
   const { supabase, project, member, projectId } = ctx as any;
-  return processSubmit(body, { supabase, project, parsed: { projectId, memberId: member.id }, allowedTypes: PORTAL_TYPES });
+  // Only reimbursement items can be answered by the person; direct items are the show's to fill in.
+  const { modes, wantsProfile } = portalPlan(member.expenses);
+  const allowedTypes = Object.keys(modes).filter((t) => modes[t] === "reimbursement");
+  if (wantsProfile) allowedTypes.push("profile");
+  return processSubmit(body, { supabase, project, parsed: { projectId, memberId: member.id }, allowedTypes });
 }
 
 serve(async (req: Request) => {

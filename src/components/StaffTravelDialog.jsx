@@ -3,7 +3,47 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Loader2, AlertCircle } from 'lucide-react';
 import { invokeAsUser } from '@/lib/edgeFunctions';
 import { notifyShowOwner } from '@/lib/notifications';
-import { ItemForm } from '@/pages/TravelInfoRequestPage';
+import { ItemForm, FIELDS, ICONS } from '@/pages/TravelInfoRequestPage';
+
+const MODE_TAGS = {
+    reimbursement: { text: 'Reimbursable — you pay, then enter the details and add your receipt.', className: 'bg-amber-500/10 text-amber-700 border-amber-600/30' },
+    direct: { text: 'Direct show expense — the show books this for you. You do not need to enter anything.', className: 'bg-blue-500/10 text-blue-700 border-blue-600/30' },
+    profile: { text: 'Direct show expense — please send your official information so the show can book your travel.', className: 'bg-blue-500/10 text-blue-700 border-blue-600/30' },
+};
+
+const ModeTag = ({ mode }) => {
+    const tag = MODE_TAGS[mode];
+    return tag ? <p className={`rounded-md border px-3 py-2 text-xs font-medium ${tag.className}`}>{tag.text}</p> : null;
+};
+
+// Direct items are filled in by the show; the person only sees what was booked.
+const BookedView = ({ item }) => {
+    const Icon = ICONS[item.type];
+    const rows = (FIELDS[item.type] || [])
+        .map(([name, label]) => [label, item.values?.[name]])
+        .filter(([, value]) => value);
+    return (
+        <div className="space-y-3 rounded-lg border p-4">
+            <div className="flex items-center gap-2 text-base font-semibold">
+                {Icon && <Icon className="h-4 w-4 text-blue-500" />}
+                {item.label}
+            </div>
+            <ModeTag mode="direct" />
+            {rows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">The show has not entered this yet. It will appear here once it is booked.</p>
+            ) : (
+                <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+                    {rows.map(([label, value]) => (
+                        <div key={label}>
+                            <dt className="text-xs text-muted-foreground">{label}</dt>
+                            <dd className="font-medium">{String(value).replace('T', ' ')}</dd>
+                        </div>
+                    ))}
+                </dl>
+            )}
+        </div>
+    );
+};
 
 /**
  * Travel details for a signed-in staff member, entered in the Staff Portal. It saves through the same
@@ -69,10 +109,22 @@ export const StaffTravelDialog = ({ open, onClose, project }) => {
                 {!loading && info && (
                     <div className="space-y-4">
                         <p className="text-sm text-muted-foreground">
-                            {info.memberName}{info.role ? ` (${info.role})` : ''}. Fill in what applies to you and send each section. You can come back to change it.
+                            {info.memberName}{info.role ? ` (${info.role})` : ''}. Only the items in your contract are listed.
+                            <strong> Reimbursable:</strong> you enter the details and add receipts.
+                            <strong> Direct show expense:</strong> the show books it and you see it here.
                         </p>
+                        {info.items.length === 0 && (
+                            <p className="rounded-lg border p-4 text-sm">Your contract has no travel items, so there is nothing to send here.</p>
+                        )}
                         {info.items.map((item) => (
-                            <ItemForm key={item.type} item={item} projectId={projectId} onSaved={onSaved} />
+                            item.mode === 'direct' ? (
+                                <BookedView key={item.type} item={item} />
+                            ) : (
+                                <div key={item.type} className="space-y-2">
+                                    <ModeTag mode={item.mode} />
+                                    <ItemForm item={item} projectId={projectId} onSaved={onSaved} />
+                                </div>
+                            )
                         ))}
                     </div>
                 )}

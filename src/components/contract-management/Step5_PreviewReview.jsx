@@ -25,6 +25,7 @@ import {
 } from '@/lib/contractUtils';
 import { sendContractEmail } from '@/lib/contractEmailService';
 import { notifyContractSent, syncStaffContractStatus } from '@/lib/notifications';
+import { contractTextToPdfBase64, saveStaffContractCopy } from '@/lib/contractCopies';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -311,6 +312,15 @@ export const Step5_PreviewReview = ({ formData, setFormData, showId, onSave }) =
         if (linkedShowId) {
           notifyContractSent({ email: member.email, name: member.name, showId: linkedShowId, showName: formData.showName });
           syncStaffContractStatus({ email: member.email, name: member.name, showId: linkedShowId, showName: formData.showName, status: 'sent' });
+          const folder = formData.employeeFolders?.[member.id];
+          contractTextToPdfBase64(folder?.editedContract || folder?.resolvedContract || '').then(pdfBase64 =>
+            saveStaffContractCopy({
+              showId: linkedShowId,
+              email: member.email,
+              pdfBase64,
+              fileName: `Contract_${(member.name || 'Employee').replace(/\s+/g, '_')}.pdf`,
+            })
+          );
         }
         activityEntries.push({ memberId: member.id, memberName: member.name, email: member.email, timestamp: now, status: 'sent' });
         setFormData(prev => ({

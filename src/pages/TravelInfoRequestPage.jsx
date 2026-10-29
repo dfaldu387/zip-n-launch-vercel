@@ -10,7 +10,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Loader2, CheckCircle2, AlertCircle, Paperclip, Plane, Hotel, Car, MapPin, User } from 'lucide-react';
 
 // Fields each item asks for; the names match what the Travel Management tabs save.
-const FIELDS = {
+export const FIELDS = {
   flight: [
     ['airline', 'Airline', 'text', 'e.g. Delta'],
     ['flightNumber', 'Flight number', 'text', 'e.g. DL1234'],
@@ -57,7 +57,7 @@ const FIELDS = {
     ['frequentFlyers', 'Frequent flyer numbers', 'textarea', 'One per line, e.g.\nDelta: 1234567890\nSouthwest: 9876543'],
   ],
 };
-const ICONS = { flight: Plane, hotel: Hotel, rentalCar: Car, mileage: MapPin, profile: User };
+export const ICONS = { flight: Plane, hotel: Hotel, rentalCar: Car, mileage: MapPin, profile: User };
 const ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 const MAX_MB = 10;
 

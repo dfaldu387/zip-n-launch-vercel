@@ -22,6 +22,14 @@ import { withoutArchived } from '@/lib/archivedProjects';
 import { format } from 'date-fns';
 import { cn, parseLocalDate } from '@/lib/utils';
 
+// Step 8 saves { adminName, adminEmail, ownerName, ownerEmail, secondAdminName, secondAdminEmail, ... };
+// older books stored a plain string. Missing values mean the creator is both Admin and Owner.
+const readAdminOwner = (project) => {
+    const raw = project.project_data?.adminOwner;
+    return raw && typeof raw === 'object' ? raw : {};
+};
+const sameEmail = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
+
 const StaffPortalPage = () => {
     const { user, profile } = useAuth();
     const { toast } = useToast();
@@ -92,6 +100,51 @@ const StaffPortalPage = () => {
         return false;
     };
 
+    // Pattern books I own are always mine (the owner may not have a notification row).
+    const [ownPatternBooks, setOwnPatternBooks] = useState([]);
+    useEffect(() => {
+        if (!user?.id) return;
+        supabase
+            .from('projects')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('project_type', 'pattern_book')
+            .then(({ data }) => setOwnPatternBooks(data || []));
+    }, [user?.id]);
+
+    // Owner names for shows made by someone else (the creator is the Owner unless Step 8 says otherwise).
+    // A database function returns the name only for shows where a contract was sent to me; keyed by show id.
+    const [ownerNames, setOwnerNames] = useState({});
+    useEffect(() => {
+        const shows = horseShowProjects.filter(p => p.user_id !== user?.id);
+        if (shows.length === 0) return;
+        Promise.all(shows.map(async (p) => {
+            const { data } = await supabase.rpc('get_show_owner_name', { p_show_id: p.id });
+            return [p.id, data];
+        })).then((rows) => {
+            const map = {};
+            rows.forEach(([id, name]) => { if (name) map[id] = name; });
+            setOwnerNames(map);
+        });
+    }, [horseShowProjects, user?.id]);
+
+    // Active Pattern Books: only the main Owner and main Admin chosen in Step 8.
+    // A Second Admin belongs in Show Manager Access instead.
+    const { mainPatternBooks, secondAdminBooks } = useMemo(() => {
+        const me = user?.email;
+        const byId = new Map();
+        [...patternBookProjects, ...ownPatternBooks].forEach(p => byId.set(p.id, p));
+        const main = [];
+        const second = [];
+        byId.forEach(p => {
+            const ao = readAdminOwner(p);
+            const isMain = p.user_id === user?.id || sameEmail(ao.adminEmail, me) || sameEmail(ao.ownerEmail, me);
+            if (isMain) main.push(p);
+            else if (sameEmail(ao.secondAdminEmail, me)) second.push(p);
+        });
+        return { mainPatternBooks: main, secondAdminBooks: second };
+    }, [patternBookProjects, ownPatternBooks, user?.id, user?.email]);
+
     // Fetch assigned projects via judge_notifications (same approach as Judges Portal)
     useEffect(() => {
         const fetchAssignedProjects = async () => {
@@ -143,11 +196,12 @@ const StaffPortalPage = () => {
                         .filter(n => n.notification_type === 'contract_sent')
                         .map(n => String(n.project_id))
                 );
+                // Horse Show Staff lists a show only once a contract has been sent to this person.
                 const horseShows = allProjects
                     .filter(p =>
                         p.project_type !== 'pattern_book' &&
                         p.project_type !== 'pattern_folder' &&
-                        (p.status?.toLowerCase() !== 'in progress' || contractedIds.has(String(p.id)))
+                        contractedIds.has(String(p.id))
                     )
                     .map(p => ({ ...p, _contracted: contractedIds.has(String(p.id)) }));
 
@@ -290,13 +344,18 @@ const StaffPortalPage = () => {
     // Get people data for a project (like Customer Portal)
     const getPeopleData = (project) => {
         const projectData = project.project_data || {};
-        const owner = projectData.adminOwner || profile?.full_name || user?.email || 'Not set';
-        
-        // Get admin - check secondAdmin or officials with admin role
-        let admin = projectData.secondAdmin || 'Not set';
+        const ao = readAdminOwner(project);
+        const owner = ao.ownerName
+            || (typeof projectData.adminOwner === 'string' ? projectData.adminOwner : '')
+            || (project.user_id === user?.id ? (profile?.full_name || user?.email) : ownerNames[project.id])
+            || 'Not set';
+
+        // Admin from Step 8; otherwise an official with the admin role; otherwise the creator,
+        // because Step 8 makes the creator both Admin and Owner until someone else is chosen.
+        let admin = ao.adminName || 'Not set';
         if (admin === 'Not set') {
             const adminOfficial = (projectData.officials || []).find(o => o.role === 'admin');
-            admin = adminOfficial?.name || 'Not set';
+            admin = adminOfficial?.name || owner;
         }
         
         // Collect judges from associationJudges
@@ -392,7 +451,7 @@ const StaffPortalPage = () => {
                             </TabsTrigger>
                             <TabsTrigger value="horse-shows" className="flex items-center gap-2">
                                 <Building className="h-4 w-4" />
-                                Horse Shows
+                                Horse Show Staff
                             </TabsTrigger>
                             <TabsTrigger value="admin-access" className="flex items-center gap-2">
                                 <Shield className="h-4 w-4" />
@@ -418,11 +477,11 @@ const StaffPortalPage = () => {
                                             <Loader2 className="h-6 w-6 animate-spin text-primary" />
                                             <span className="ml-2 text-muted-foreground">Loading pattern books...</span>
                                         </div>
-                                    ) : patternBookProjects.length === 0 ? (
+                                    ) : mainPatternBooks.length === 0 ? (
                                         <div className="text-center py-12 text-muted-foreground">
                                             <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-50" />
-                                            <p>No pattern books assigned yet.</p>
-                                            <p className="text-sm">You'll see pattern books here when you're added as staff.</p>
+                                            <p>No pattern books yet.</p>
+                                            <p className="text-sm">Pattern books where you are the Owner or Admin appear here.</p>
                                         </div>
                                     ) : (
                                         <div className="overflow-x-auto">
@@ -432,8 +491,6 @@ const StaffPortalPage = () => {
                                                         <TableHead className="font-semibold text-sm h-14">Show Name</TableHead>
                                                         <TableHead className="font-semibold text-sm">Owner</TableHead>
                                                         <TableHead className="font-semibold text-sm">Admin</TableHead>
-                                                        <TableHead className="font-semibold text-sm">Judges</TableHead>
-                                                        <TableHead className="font-semibold text-sm">Staff</TableHead>
                                                         <TableHead className="font-semibold text-sm">Associations</TableHead>
                                                         <TableHead className="font-semibold text-sm">Start Date</TableHead>
                                                         <TableHead className="font-semibold text-sm">Status</TableHead>
@@ -441,7 +498,7 @@ const StaffPortalPage = () => {
                                                     </TableRow>
                                                 </TableHeader>
                                                 <TableBody>
-                                                    {patternBookProjects
+                                                    {mainPatternBooks
                                                         .filter(project => (project.status || '').toLowerCase() !== 'in progress')
                                                         .map((project) => {
                                                         const details = getProjectDetails(project);
@@ -472,36 +529,6 @@ const StaffPortalPage = () => {
                                                                         <Users className="h-4 w-4 text-primary shrink-0" />
                                                                         <span className="truncate max-w-[120px]">{peopleData.admin}</span>
                                                                     </div>
-                                                                </TableCell>
-                                                                <TableCell className="py-4">
-                                                                    <Badge 
-                                                                        variant="outline"
-                                                                        className="text-xs px-3 py-1.5 bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-700 rounded-full"
-                                                                    >
-                                                                        {peopleData.judgesCount} Assigned
-                                                                    </Badge>
-                                                                </TableCell>
-                                                                <TableCell className="py-4">
-                                                                    {peopleData.staffList.length > 0 ? (
-                                                                        <div className="flex flex-wrap gap-1">
-                                                                            {peopleData.staffList.slice(0, 2).map((staff, idx) => (
-                                                                                <Badge 
-                                                                                    key={idx}
-                                                                                    variant="outline"
-                                                                                    className="text-xs px-2 py-1 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-700 rounded-full"
-                                                                                >
-                                                                                    {staff.name} - {staff.role}
-                                                                                </Badge>
-                                                                            ))}
-                                                                            {peopleData.staffList.length > 2 && (
-                                                                                <Badge variant="outline" className="text-xs px-2 py-1 rounded-full">
-                                                                                    +{peopleData.staffList.length - 2}
-                                                                                </Badge>
-                                                                            )}
-                                                                        </div>
-                                                                    ) : (
-                                                                        <span className="text-muted-foreground text-sm">—</span>
-                                                                    )}
                                                                 </TableCell>
                                                                 <TableCell className="py-4">
                                                                     {selectedAssocKeys.length > 0 ? (
@@ -581,10 +608,10 @@ const StaffPortalPage = () => {
                                 <CardHeader className="bg-gradient-to-r from-primary/5 to-primary/10 border-b">
                                     <CardTitle className="flex items-center gap-2 text-2xl">
                                         <Building className="h-6 w-6 text-primary" />
-                                        Horse Shows
+                                        Horse Show Staff
                                     </CardTitle>
                                     <CardDescription className="text-base mt-1">
-                                        View horse shows you're assigned to as staff
+                                        Shows where you have been sent a contract as staff
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="p-0">
@@ -607,17 +634,14 @@ const StaffPortalPage = () => {
                                                         <TableHead className="font-semibold text-sm h-14">Show Name</TableHead>
                                                         <TableHead className="font-semibold text-sm">Owner</TableHead>
                                                         <TableHead className="font-semibold text-sm">Admin</TableHead>
-                                                        <TableHead className="font-semibold text-sm">Judges</TableHead>
-                                                        <TableHead className="font-semibold text-sm">Staff</TableHead>
                                                         <TableHead className="font-semibold text-sm">Venue</TableHead>
                                                         <TableHead className="font-semibold text-sm">Start Date</TableHead>
-                                                        <TableHead className="font-semibold text-sm">Status</TableHead>
                                                         <TableHead className="font-semibold text-sm text-center">Action</TableHead>
                                                     </TableRow>
                                                 </TableHeader>
                                                 <TableBody>
                                                     {horseShowProjects
-                                                        .filter(project => project._contracted || (project.status || '').toLowerCase() !== 'in progress')
+                                                        .filter(project => project._contracted)
                                                         .map((project) => {
                                                         const details = getProjectDetails(project);
                                                         const peopleData = getPeopleData(project);
@@ -642,36 +666,6 @@ const StaffPortalPage = () => {
                                                                     </div>
                                                                 </TableCell>
                                                                 <TableCell className="py-4">
-                                                                    <Badge 
-                                                                        variant="outline"
-                                                                        className="text-xs px-3 py-1.5 bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-700 rounded-full"
-                                                                    >
-                                                                        {peopleData.judgesCount} Assigned
-                                                                    </Badge>
-                                                                </TableCell>
-                                                                <TableCell className="py-4">
-                                                                    {peopleData.staffList.length > 0 ? (
-                                                                        <div className="flex flex-wrap gap-1">
-                                                                            {peopleData.staffList.slice(0, 2).map((staff, idx) => (
-                                                                                <Badge 
-                                                                                    key={idx}
-                                                                                    variant="outline"
-                                                                                    className="text-xs px-2 py-1 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-700 rounded-full"
-                                                                                >
-                                                                                    {staff.name} - {staff.role}
-                                                                                </Badge>
-                                                                            ))}
-                                                                            {peopleData.staffList.length > 2 && (
-                                                                                <Badge variant="outline" className="text-xs px-2 py-1 rounded-full">
-                                                                                    +{peopleData.staffList.length - 2}
-                                                                                </Badge>
-                                                                            )}
-                                                                        </div>
-                                                                    ) : (
-                                                                        <span className="text-muted-foreground text-sm">—</span>
-                                                                    )}
-                                                                </TableCell>
-                                                                <TableCell className="py-4">
                                                                     {details.venue ? (
                                                                         <div className="flex items-center gap-2 text-sm">
                                                                             <Building className="h-4 w-4 text-muted-foreground" />
@@ -690,19 +684,6 @@ const StaffPortalPage = () => {
                                                                     ) : (
                                                                         <span className="text-muted-foreground text-sm">—</span>
                                                                     )}
-                                                                </TableCell>
-                                                                <TableCell className="py-4">
-                                                                    <Badge 
-                                                                        variant="secondary"
-                                                                        className={cn(
-                                                                            'text-xs px-3 py-1.5 font-semibold rounded-full shadow-sm',
-                                                                            (project.status || 'Draft') === 'Published'
-                                                                                ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300 border border-green-300 dark:border-green-700' 
-                                                                                : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300 border border-gray-300 dark:border-gray-600'
-                                                                        )}
-                                                                    >
-                                                                        {project.status || 'Draft'}
-                                                                    </Badge>
                                                                 </TableCell>
                                                                 <TableCell className="text-right py-4">
                                                                     <div className="flex items-center gap-2 justify-end">
@@ -747,7 +728,7 @@ const StaffPortalPage = () => {
                                             <Loader2 className="h-6 w-6 animate-spin text-primary" />
                                             <span className="ml-2 text-muted-foreground">Loading show access...</span>
                                         </div>
-                                    ) : adminAccessShows.length === 0 ? (
+                                    ) : adminAccessShows.length === 0 && secondAdminBooks.length === 0 ? (
                                         <div className="text-center py-12 text-muted-foreground">
                                             <Shield className="h-10 w-10 mx-auto mb-3 opacity-50" />
                                             <p>No show manager access yet.</p>
@@ -764,6 +745,24 @@ const StaffPortalPage = () => {
                                                     </TableRow>
                                                 </TableHeader>
                                                 <TableBody>
+                                                    {secondAdminBooks.map((book) => (
+                                                        <TableRow key={`pb-${book.id}`} className="border-b hover:bg-muted/30 transition-colors">
+                                                            <TableCell className="font-semibold py-4">
+                                                                <span className="text-base">{book.project_name || 'Untitled Pattern Book'}</span>
+                                                            </TableCell>
+                                                            <TableCell className="py-4">
+                                                                <Badge variant="outline" className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-700 rounded-full">
+                                                                    Pattern Book — Second Admin
+                                                                </Badge>
+                                                            </TableCell>
+                                                            <TableCell className="text-right py-4">
+                                                                <Button variant="default" size="sm" onClick={() => handleNavigateToBuilder(book.id)} className="gap-1.5">
+                                                                    Open
+                                                                    <ChevronRight className="h-3 w-3" />
+                                                                </Button>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))}
                                                     {adminAccessShows.map((show) => (
                                                         <TableRow key={show.id} className="border-b hover:bg-muted/30 transition-colors">
                                                             <TableCell className="font-semibold py-4">

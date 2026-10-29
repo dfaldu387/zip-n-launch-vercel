@@ -20,6 +20,7 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { sendContractEmail } from '@/lib/contractEmailService';
 import { notifyContractSent, syncStaffContractStatus } from '@/lib/notifications';
+import { saveStaffContractCopy } from '@/lib/contractCopies';
 import {
   DEFAULT_CONTRACT_TEMPLATE,
   PlaceholderToolbar,
@@ -240,6 +241,7 @@ export const Step4_GenerateContracts = ({ formData, setFormData, onSave, isSavin
           showName: formData.showName,
           status: 'sent',
         });
+        saveStaffContractCopy({ showId: linkedShowId, email: member.email, pdfBase64: contractPdfBase64, fileName: contractFileName });
       }
 
       setFormData(prev => {

@@ -8,7 +8,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/supabaseClient';
 import { notifyShowOwner } from '@/lib/notifications';
-import { Calendar, MapPin, Briefcase, FileText, ExternalLink, Upload, Loader2, CheckCircle, Trash2, Plane } from 'lucide-react';
+import { Calendar, MapPin, Briefcase, FileText, ExternalLink, Upload, Loader2, CheckCircle, Trash2, Plane, Download } from 'lucide-react';
 import StaffTravelDialog from '@/components/StaffTravelDialog';
 import { format } from 'date-fns';
 
@@ -50,6 +50,7 @@ export const StaffShowDialog = ({ open, onClose, project, userEmail }) => {
     const [busyDoc, setBusyDoc] = useState(null);
     const [travelOpen, setTravelOpen] = useState(false);
     const [status, setStatus] = useState('sent');
+    const [copy, setCopy] = useState(null);
 
     const showId = project?.id;
     const email = (userEmail || '').toLowerCase();
@@ -82,12 +83,25 @@ export const StaffShowDialog = ({ open, onClose, project, userEmail }) => {
         setStatus(data?.status || 'sent');
     }, [showId, email]);
 
+    // The copy of the contract the manager sent (saved when it was sent); older sends have none.
+    const loadCopy = useCallback(async () => {
+        if (!showId || !email) return;
+        const { data } = await supabase
+            .from('staff_contract_copies')
+            .select('file_name, storage_path')
+            .eq('show_id', showId)
+            .eq('member_email', email)
+            .maybeSingle();
+        setCopy(data || null);
+    }, [showId, email]);
+
     useEffect(() => {
         if (open) {
             loadUploads();
             loadStatus();
+            loadCopy();
         }
-    }, [open, loadUploads, loadStatus]);
+    }, [open, loadUploads, loadStatus, loadCopy]);
 
     if (!project) return null;
 
@@ -168,6 +182,17 @@ export const StaffShowDialog = ({ open, onClose, project, userEmail }) => {
         window.open(signed.signedUrl, '_blank', 'noopener');
     };
 
+    const downloadContract = async () => {
+        const { data: signed, error } = await supabase.storage
+            .from(BUCKET)
+            .createSignedUrl(copy.storage_path, 3600, { download: copy.file_name });
+        if (error || !signed?.signedUrl) {
+            toast({ title: 'Could not download contract', description: error?.message || 'Try again.', variant: 'destructive' });
+            return;
+        }
+        window.open(signed.signedUrl, '_blank', 'noopener');
+    };
+
     const removeFile = async (upload) => {
         const { error } = await supabase.from('staff_contract_documents').delete().eq('id', upload.id);
         if (error) {
@@ -191,6 +216,13 @@ export const StaffShowDialog = ({ open, onClose, project, userEmail }) => {
                         <span className="text-muted-foreground">Your contract:</span>
                         <Badge className={`border ${statusStyle.className}`}>{statusStyle.label}</Badge>
                     </div>
+
+                    {copy && (
+                        <Button variant="outline" className="w-full" onClick={downloadContract}>
+                            <Download className="mr-2 h-4 w-4" />
+                            Download contract
+                        </Button>
+                    )}
 
                     {rows.length > 0 && (
                         <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
