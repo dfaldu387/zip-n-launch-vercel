@@ -112,13 +112,25 @@ const StaffPortalPage = () => {
             .then(({ data }) => setOwnPatternBooks(data || []));
     }, [user?.id]);
 
-    // Owner names for shows made by someone else (the creator is the Owner unless Step 8 says otherwise).
-    // A database function returns the name only for shows where a contract was sent to me; keyed by show id.
+    // Pattern books where Step 8 names me as Admin, Owner or Second Admin. A database function finds them by
+    // email, so this does not depend on a notification row. Before that function exists it simply returns nothing.
+    const [adminPatternBooks, setAdminPatternBooks] = useState([]);
+    useEffect(() => {
+        if (!user?.id) return;
+        supabase.rpc('get_my_admin_pattern_books').then(({ data, error }) => {
+            if (!error) setAdminPatternBooks(data || []);
+        });
+    }, [user?.id]);
+
+    // Owner names for shows and books made by someone else (the creator is the Owner unless Step 8 says otherwise).
+    // A database function returns only the name, and only when a contract was sent to me or Step 8 names me; keyed by project id.
     const [ownerNames, setOwnerNames] = useState({});
     useEffect(() => {
-        const shows = horseShowProjects.filter(p => p.user_id !== user?.id);
-        if (shows.length === 0) return;
-        Promise.all(shows.map(async (p) => {
+        const others = [...horseShowProjects, ...patternBookProjects, ...adminPatternBooks]
+            .filter(p => p.user_id !== user?.id);
+        const unique = [...new Map(others.map(p => [p.id, p])).values()];
+        if (unique.length === 0) return;
+        Promise.all(unique.map(async (p) => {
             const { data } = await supabase.rpc('get_show_owner_name', { p_show_id: p.id });
             return [p.id, data];
         })).then((rows) => {
@@ -126,14 +138,14 @@ const StaffPortalPage = () => {
             rows.forEach(([id, name]) => { if (name) map[id] = name; });
             setOwnerNames(map);
         });
-    }, [horseShowProjects, user?.id]);
+    }, [horseShowProjects, patternBookProjects, adminPatternBooks, user?.id]);
 
     // Active Pattern Books: only the main Owner and main Admin chosen in Step 8.
     // A Second Admin belongs in Show Manager Access instead.
     const { mainPatternBooks, secondAdminBooks } = useMemo(() => {
         const me = user?.email;
         const byId = new Map();
-        [...patternBookProjects, ...ownPatternBooks].forEach(p => byId.set(p.id, p));
+        [...patternBookProjects, ...adminPatternBooks, ...ownPatternBooks].forEach(p => byId.set(p.id, p));
         const main = [];
         const second = [];
         byId.forEach(p => {
@@ -143,7 +155,7 @@ const StaffPortalPage = () => {
             else if (sameEmail(ao.secondAdminEmail, me)) second.push(p);
         });
         return { mainPatternBooks: main, secondAdminBooks: second };
-    }, [patternBookProjects, ownPatternBooks, user?.id, user?.email]);
+    }, [patternBookProjects, adminPatternBooks, ownPatternBooks, user?.id, user?.email]);
 
     // Fetch assigned projects via judge_notifications (same approach as Judges Portal)
     useEffect(() => {
