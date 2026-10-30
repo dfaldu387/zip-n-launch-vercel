@@ -113,7 +113,7 @@ const LabelInput = ({ value, onCommit, className, title }) => {
 };
 
 // A draggable / clickable booking chip in the left rail.
-const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, groupOptions, onSetGroup, onMove, onRemove, moving }) => {
+const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, groupOptions, onSetGroup, onMove, onRemove, moving, onHover, unitWord = 'stall' }) => {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
         id: `bk-${booking.id}`,
         data: { bookingId: booking.id },
@@ -131,6 +131,7 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
                 isDragging && 'opacity-40'
             )}
             style={{ borderLeft: `4px solid ${color}` }}
+            {...(onHover || {})}
         >
             <div className="flex items-center gap-2 cursor-pointer" onClick={() => onSelect(booking.id)}>
                 <span {...attributes} {...listeners} className="cursor-grab touch-none text-muted-foreground" title="Drag onto a stall">
@@ -138,7 +139,10 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
                 </span>
                 <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{booking.exhibitorName || '—'}</p>
-                    {booking.trainerName && <p className="text-[11px] text-muted-foreground truncate">{booking.trainerName}</p>}
+                    <p className="text-[11px] text-muted-foreground truncate">
+                        {booking.trainerName ? `${booking.trainerName} · ` : ''}
+                        <span className="font-medium text-foreground/80 tabular-nums">{requested} {unitWord}{requested === 1 ? '' : 's'}</span>
+                    </p>
                 </div>
                 {/* Move / remove just THIS exhibitor's own stalls (not the whole group) —
                     only shown once they hold at least one, same rule as the group card. */}
@@ -165,9 +169,10 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
                         {groupPickerOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                     </button>
                 )}
-                <Badge variant="outline" className={cn('text-[10px] tabular-nums shrink-0',
-                    done ? 'border-emerald-500 text-emerald-600' : 'border-amber-500 text-amber-600')}>
-                    {done ? <Check className="h-3 w-3" /> : `${assigned}/${requested}`}
+                <Badge variant="outline" className={cn('text-[10px] tabular-nums shrink-0 gap-0.5',
+                    done ? 'border-emerald-500 text-emerald-600' : 'border-amber-500 text-amber-600')}
+                    title={done ? `All ${requested} ${unitWord}${requested === 1 ? '' : 's'} assigned` : `${assigned} of ${requested} ${unitWord}s assigned`}>
+                    {done ? <><Check className="h-3 w-3" />{requested}</> : `${assigned}/${requested}`}
                 </Badge>
             </div>
             {/* Move this exhibitor into any group by hand — Robert's "take individuals
@@ -223,6 +228,7 @@ const outlineBorders = (sides, color) => {
 const UnitCell = ({
     unit, color, ownerName, isSelectedOwner, onClickUnit,
     groupOutline, groupColor, groupName, showGroupTag, size, cellText,
+    spot, flashing, flashKey,
 }) => {
     const type = unit.type || 'stall';       // RV spots have no type → assignable
     const assignable = type === 'stall';
@@ -241,7 +247,7 @@ const UnitCell = ({
         const quiet = type === 'aisle' || type === 'empty';
         return (
             <div className={cn(
-                'flex items-center justify-center border rounded-none -ml-px -mt-px select-none font-mono text-muted-foreground/60',
+                'shrink-0 flex items-center justify-center border rounded-none -ml-px -mt-px select-none font-mono text-muted-foreground/60',
                 S.cell, S.sub,
                 quiet ? 'bg-muted/30 border-dashed border-muted-foreground/20' : 'bg-muted/40'
             )}>
@@ -264,21 +270,27 @@ const UnitCell = ({
         <div
             ref={setNodeRef}
             onClick={() => onClickUnit(unit)}
+            data-bid={taken ? unit.bookingId : undefined}
             title={taken
                 ? `${unit.number} · ${ownerName}${groupName ? ` · ${groupName}` : ''}`
                 : `${unit.number} · available — click or drop to assign`}
             className={cn(
-                'relative flex flex-col items-center justify-center border rounded-none -ml-px -mt-px font-mono font-semibold cursor-pointer select-none transition-all overflow-hidden',
+                'relative shrink-0 flex flex-col items-center justify-center border rounded-none -ml-px -mt-px font-mono font-semibold cursor-pointer select-none transition-all overflow-hidden',
                 S.cell, S.main,
                 isOver && 'ring-2 ring-primary z-10 scale-105',
                 isSelectedOwner && 'ring-2 ring-primary z-10',
                 shadow && 'z-10',
+                spot === 'dim' && 'opacity-30',
+                spot === 'on' && 'z-20 scale-110',
                 !taken && 'bg-background hover:bg-primary/10'
             )}
             style={{
                 ...(fill ? { backgroundColor: fill, color: darkText ? '#0f172a' : '#fff', borderColor: fill } : {}),
                 ...(shadow ? { boxShadow: shadow } : {}),
                 ...(shadow ? outlineBorders(groupOutline, groupColor) : {}),
+                // Hover = steady white + dark double ring; flash = pulsing version of it.
+                ...(spot === 'on' ? { boxShadow: '0 0 0 2px #fff, 0 0 0 4px #0f172a, 0 0 12px 3px rgba(255,255,255,.8)' } : {}),
+                ...(flashing ? { animation: 'stallFlash 0.8s ease-in-out 4', position: 'relative', zIndex: 30 } : {}),
             }}
         >
             {/* The group's name, printed once at the top-left box of its block. */}
@@ -353,10 +365,60 @@ const AssignBoard = ({
 
     // Selecting a booking, selecting a group (to place), moving a whole group and moving
     // one exhibitor's own stalls are all mutually exclusive.
-    const pickBooking = (id) => { setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(null); setSelectedBookingId(id); };
-    const pickGroup = (id) => { setSelectedBookingId(null); setMoveGroupId(null); setMoveBookingId(null); setSelectedGroupId(prev => prev === id ? null : id); };
-    const pickMoveGroup = (id) => { setSelectedBookingId(null); setSelectedGroupId(null); setMoveBookingId(null); setMoveGroupId(prev => prev === id ? null : id); };
-    const pickMoveBooking = (id) => { setSelectedBookingId(null); setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(prev => prev === id ? null : id); };
+    // "Where are they on the map?" — a hover glow (temporary) and a click flash. Both work
+    // off booking ids; the cells light up wherever those bookings hold stalls and every
+    // other booked box dims a little so the highlighted ones jump out on a big map.
+    const boardRef = useRef(null);
+    const [hoverIds, setHoverIds] = useState(null);   // Set of booking ids under the mouse in the left rail
+    const [flash, setFlash] = useState(null);          // { ids:Set, key:number } — pulses for a few seconds
+    const flashTimer = useRef(null);
+    const flashBookings = (ids, scroll = false) => {
+        const set = new Set(ids);
+        if (set.size === 0) return;
+        setFlash({ ids: set, key: Date.now() });
+        clearTimeout(flashTimer.current);
+        flashTimer.current = setTimeout(() => setFlash(null), 3200);
+        if (scroll) {
+            // Open any collapsed barn that holds them, then bring the first stall into view.
+            setCollapsedBarns(prev => {
+                const hit = cfgRef.current.containers.filter(c => (c.units || []).some(u => set.has(u.bookingId))).map(c => c.id);
+                if (!hit.some(id => prev.has(id))) return prev;
+                const next = new Set(prev);
+                hit.forEach(id => next.delete(id));
+                return next;
+            });
+            setTimeout(() => {
+                const els = [...(boardRef.current?.querySelectorAll('[data-bid]') || [])].filter(el => set.has(el.dataset.bid));
+                els[0]?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            }, 120);
+        }
+    };
+    React.useEffect(() => () => clearTimeout(flashTimer.current), []);
+    const hoverRows = (rows) => ({
+        onMouseEnter: () => setHoverIds(new Set(rows.map(r => r.booking.id))),
+        onMouseLeave: () => setHoverIds(null),
+        // Re-light the group when the mouse drifts back from one of its exhibitor rows.
+        onMouseMove: () => setHoverIds(prev => prev || new Set(rows.map(r => r.booking.id))),
+    });
+
+    const pickBooking = (id) => {
+        setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(null); setSelectedBookingId(id);
+        flashBookings([id], true);
+    };
+    const pickGroup = (id) => {
+        setSelectedBookingId(null); setMoveGroupId(null); setMoveBookingId(null); setSelectedGroupId(prev => prev === id ? null : id);
+        const g = groupById[id];
+        if (g) flashBookings(g.rows.filter(r => r.assigned > 0).map(r => r.booking.id), true);
+    };
+    const pickMoveGroup = (id) => {
+        setSelectedBookingId(null); setSelectedGroupId(null); setMoveBookingId(null); setMoveGroupId(prev => prev === id ? null : id);
+        const g = groupById[id];
+        if (g) flashBookings(g.rows.map(r => r.booking.id), true);
+    };
+    const pickMoveBooking = (id) => {
+        setSelectedBookingId(null); setSelectedGroupId(null); setMoveGroupId(null); setMoveBookingId(prev => prev === id ? null : id);
+        flashBookings([id], true);
+    };
 
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -416,6 +478,8 @@ const AssignBoard = ({
             noContainers: 'No barns yet. Add a barn in the Inventory tab first.',
         };
     }, [mode, barns, rvWithSpots, onApplyBarns, onApplyRvAreas]);
+    const cfgRef = useRef(cfg);
+    cfgRef.current = cfg;
 
     // Bookings needing THIS mode's units, and their assigned counts. At-show supply
     // re-orders hold no stalls, so they never appear on the board.
@@ -524,6 +588,7 @@ const AssignBoard = ({
         }
         if (plan.length === 0) { toast({ title: 'No free stalls here', description: 'Pick an empty stall to start the group.' }); return; }
         onApplyBarns?.(applyPlanToBarns(barns, plan));
+        flashBookings(plan.map(p => p.bookingId), true);
         setSelectedGroupId(null);
         if (queue.length > 0) {
             toast({ title: `Placed ${plan.length} of "${group.name}"`, description: `${queue.length} still need stalls — ran out of free boxes from here.`, variant: 'destructive' });
@@ -602,6 +667,7 @@ const AssignBoard = ({
         } else {
             onApplyBarns?.(applyPlanToBarns(cleared, plan.map(p => ({ stallId: p.id, bookingId: p.bookingId }))));
         }
+        flashBookings([...bookingIds], true);
         toast({ title: `"${label}" moved`, description: `${plan.length} ${cfg.unitWord}${plan.length === 1 ? '' : 's'} relocated.` });
         return true;
     };
@@ -698,6 +764,7 @@ const AssignBoard = ({
             if (hint) toast({ title: 'Different barn than ordered', description: hint });
         }
         cfg.assign(unitId, bookingId);
+        flashBookings([bookingId]);
     };
 
     // A click or drag onto a unit that already belongs to a DIFFERENT booking used to
@@ -1039,7 +1106,8 @@ const AssignBoard = ({
                                         const closed = collapsedGroups.has(g.id);
                                         const filtered = g.visibleRows.length !== g.rows.length;
                                         return (
-                                            <div key={g.id} className={cn('rounded-lg border p-2 space-y-1.5', (sel || moving) && 'ring-2 ring-primary')} style={{ borderLeft: `4px solid ${colorByGroup[g.id]}` }}>
+                                            <div key={g.id} className={cn('rounded-lg border p-2 space-y-1.5', (sel || moving) && 'ring-2 ring-primary')} style={{ borderLeft: `4px solid ${colorByGroup[g.id]}` }}
+                                                {...hoverRows(g.rows)}>
                                                 <div className="flex items-center justify-between gap-2 flex-wrap">
                                                     <button type="button" onClick={() => toggleGroupCollapsed(g.id)}
                                                         className="min-w-0 text-left"
@@ -1086,7 +1154,8 @@ const AssignBoard = ({
                                                                 groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null}
                                                                 onMove={() => pickMoveBooking(r.booking.id)}
                                                                 onRemove={() => requestRemoveBooking(r)}
-                                                                moving={moveBookingId === r.booking.id} />
+                                                                moving={moveBookingId === r.booking.id}
+                                                                onHover={hoverRows([r])} unitWord={cfg.unitWord} />
                                                         ))}
                                                     </div>
                                                 )}
@@ -1105,7 +1174,8 @@ const AssignBoard = ({
                                                     groupOptions={groupOptions} onSetGroup={onSetBookingGroup ? handleSetGroup : null}
                                                     onMove={() => pickMoveBooking(r.booking.id)}
                                                     onRemove={() => requestRemoveBooking(r)}
-                                                    moving={moveBookingId === r.booking.id} />
+                                                    moving={moveBookingId === r.booking.id}
+                                                                onHover={hoverRows([r])} unitWord={cfg.unitWord} />
                                             ))}
                                         </div>
                                     )}
@@ -1122,7 +1192,8 @@ const AssignBoard = ({
                                                 selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]}
                                                 onMove={() => pickMoveBooking(r.booking.id)}
                                                 onRemove={() => requestRemoveBooking(r)}
-                                                moving={moveBookingId === r.booking.id} />
+                                                moving={moveBookingId === r.booking.id}
+                                                                onHover={hoverRows([r])} unitWord={cfg.unitWord} />
                                         ))}
                                     </div>
                                     {visibleDoneRows.length > 0 && (
@@ -1134,7 +1205,8 @@ const AssignBoard = ({
                                                     selected={selectedBookingId === r.booking.id} onSelect={pickBooking} groupOptions={[]}
                                                     onMove={() => pickMoveBooking(r.booking.id)}
                                                     onRemove={() => requestRemoveBooking(r)}
-                                                    moving={moveBookingId === r.booking.id} />
+                                                    moving={moveBookingId === r.booking.id}
+                                                                onHover={hoverRows([r])} unitWord={cfg.unitWord} />
                                             ))}
                                         </div>
                                     )}
@@ -1150,7 +1222,9 @@ const AssignBoard = ({
                     )}
 
                     {/* Right — charts */}
-                    <div className={cn('space-y-4', railOpen && 'lg:col-span-8')}>
+                    <div ref={boardRef} className={cn('space-y-4', railOpen && 'lg:col-span-8')}>
+                        {/* Pulse for the "flash" highlight — two soft rings so it reads on light and dark. */}
+                        <style>{`@keyframes stallFlash{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,0);transform:scale(1)}40%{box-shadow:0 0 0 2px #fff,0 0 0 5px #0f172a,0 0 16px 6px rgba(255,255,255,.9);transform:scale(1.12)}}`}</style>
                         {cfg.containers.length === 0 && (
                             <p className="text-sm text-muted-foreground">{cfg.noContainers}</p>
                         )}
@@ -1171,6 +1245,9 @@ const AssignBoard = ({
                                 groupById={groupById}
                                 selectedBookingId={selectedBookingId}
                                 selectedGroup={selectedGroup}
+                                hoverIds={hoverIds}
+                                flashIds={flash?.ids || null}
+                                flashKey={flash?.key}
                                 onClickUnit={handleUnitClick}
                                 onSetLabel={setBarnLabel}
                                 onResetLabels={resetBarnLabels}
@@ -1507,7 +1584,7 @@ const PublishPreview = ({ draft, barns, rvAreas, bookings }) => {
 const ContainerChart = ({
     container, isStalls, size, fit, layer, layerIndex, Icon,
     bookingById, colorByBooking, colorByGroup, groupIdByBooking, groupById,
-    selectedBookingId, selectedGroup, onClickUnit, onSetLabel, onResetLabels, onFillRow,
+    selectedBookingId, selectedGroup, hoverIds, flashIds, flashKey, onClickUnit, onSetLabel, onResetLabels, onFillRow,
     collapsed, onToggleCollapsed,
 }) => {
     const wrapRef = useRef(null);
@@ -1528,7 +1605,9 @@ const ContainerChart = ({
     const measure = useCallback(() => {
         if (!fit || collapsed) { setScale(1); setScaledHeight(null); return; }
         const w = wrapRef.current?.clientWidth || 0;
-        const k = w && naturalWidth > w ? w / naturalWidth : 1;
+        // Measure the real grid width (labels + boxes) instead of trusting the estimate.
+        const nw = innerRef.current?.offsetWidth || naturalWidth;
+        const k = w && nw > w ? w / nw : 1;
         setScale(k);
         const h = innerRef.current?.offsetHeight || 0;
         setScaledHeight(h ? Math.ceil(h * k) : null);
@@ -1616,7 +1695,7 @@ const ContainerChart = ({
             {collapsed ? null : (
             <div ref={wrapRef} className={cn(fit ? 'overflow-hidden' : 'overflow-x-auto')}
                 style={fit && scaledHeight ? { height: scaledHeight } : undefined}>
-                <div ref={innerRef} className="inline-flex flex-col gap-0 origin-top-left" style={fit ? { transform: `scale(${scale})` } : undefined}>
+                <div ref={innerRef} className="flex w-max flex-col gap-0 origin-top-left" style={fit ? { transform: `scale(${scale})` } : undefined}>
                     {/* Column labels (1,2,3… default, click to rename) — stalls only */}
                     {isStalls && (
                         <div className="flex gap-0">
@@ -1627,7 +1706,7 @@ const ContainerChart = ({
                                     value={labelValue(container.colLabels, defColLabels, ci)}
                                     title="Column label — click to rename"
                                     onCommit={(val) => onSetLabel(container.id, 'colLabels', ci, val)}
-                                    className={cn('h-6 text-center text-[10px] font-semibold text-muted-foreground bg-transparent outline-none cursor-text rounded-sm border border-dashed border-muted-foreground/25 hover:border-primary hover:bg-primary/5 focus:border-primary focus:border-solid focus:bg-primary/10 focus:text-foreground', S.colLabel, ci > 0 && '-ml-px')}
+                                    className={cn('h-6 shrink-0 text-center text-[10px] font-semibold text-muted-foreground bg-transparent outline-none cursor-text rounded-sm border border-dashed border-muted-foreground/25 hover:border-primary hover:bg-primary/5 focus:border-primary focus:border-solid focus:bg-primary/10 focus:text-foreground', S.colLabel, ci > 0 && '-ml-px')}
                                 />
                             ))}
                         </div>
@@ -1682,6 +1761,9 @@ const ContainerChart = ({
                                             color={unit.bookingId ? (colorByBooking[unit.bookingId] || '#2563eb') : undefined}
                                             ownerName={owner?.exhibitorName || 'Booked'}
                                             isSelectedOwner={!!selectedBookingId && unit.bookingId === selectedBookingId}
+                                            spot={hoverIds && unit.bookingId ? (hoverIds.has(unit.bookingId) ? 'on' : 'dim') : null}
+                                            flashing={!!(flashIds && unit.bookingId && flashIds.has(unit.bookingId))}
+                                            flashKey={flashKey}
                                             groupOutline={sides}
                                             groupColor={gid ? colorByGroup[gid] : undefined}
                                             groupName={gid ? groupById[gid]?.name : undefined}

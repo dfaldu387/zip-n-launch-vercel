@@ -796,9 +796,9 @@ const Step2_Details = ({ details, setDetails, showWindow, bookWindow = {} }) => 
                                     const n = Math.max(0, Math.min(50, parseInt(e.target.value) || 0));
                                     setDetails(d => {
                                         // Trim any names beyond the new count so removed lines don't linger.
-                                        const names = (d.horseNames || '').split(',').map(s => s.trim());
+                                        const names = [...(d.horseNames || [])];
                                         names.length = n;
-                                        return { ...d, horseCount: n, horseNames: names.join(', ') };
+                                        return { ...d, horseCount: n, horseNames: Array.from(names, s => s || '') };
                                     });
                                 }}
                             />
@@ -807,18 +807,18 @@ const Step2_Details = ({ details, setDetails, showWindow, bookWindow = {} }) => 
                         {details.horseCount > 0 && (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 {Array.from({ length: details.horseCount }).map((_, i) => {
-                                    const names = (details.horseNames || '').split(',').map(s => s.trim());
+                                    const names = details.horseNames || [];
                                     return (
                                         <div key={i}>
                                             <Label className="text-xs">Horse {i + 1} name</Label>
                                             <Input
                                                 value={names[i] || ''}
                                                 onChange={(e) => setDetails(d => {
-                                                    const arr = (d.horseNames || '').split(',').map(s => s.trim());
+                                                    // Keep names as a list so typed spaces (even at the end) are preserved.
+                                                    const arr = [...(d.horseNames || [])];
                                                     while (arr.length <= i) arr.push('');
                                                     arr[i] = e.target.value;
-                                                    arr.length = Math.max(arr.length, d.horseCount);
-                                                    return { ...d, horseNames: arr.join(', ') };
+                                                    return { ...d, horseNames: arr };
                                                 })}
                                                 placeholder={`e.g., ${['Dixie', 'Blaze', 'Apollo', 'Scout', 'Willow'][i % 5]}`}
                                             />
@@ -904,7 +904,7 @@ const Step3_Review = ({ orderSummary, details, onSubmit, isSubmitting }) => {
                             {details.trainerPhone && <p><span className="text-muted-foreground">Trainer Phone:</span> {details.trainerPhone}</p>}
                         </div>
                     )}
-                    {details.horseNames && <p><span className="text-muted-foreground">Horses:</span> {details.horseNames}</p>}
+                    {details.horseNames.some(n => n.trim()) && <p><span className="text-muted-foreground">Horses:</span> {details.horseNames.map(n => n.trim()).filter(Boolean).join(', ')}</p>}
                     {details.preferences && (
                         <p className="pt-2 border-t mt-2">
                             <span className="text-muted-foreground">Preferences:</span> {details.preferences}
@@ -963,7 +963,7 @@ const PublicBookingPage = () => {
         trainerEmail: '',
         trainerPhone: '',
         horseCount: 1,
-        horseNames: '',
+        horseNames: [],
         preferences: '',
     });
 
@@ -1329,8 +1329,8 @@ const PublicBookingPage = () => {
     const handleSubmit = async () => {
         setIsSubmitting(true);
         try {
-            const horseList = (details.horseNames || '')
-                .split(',').map(s => s.trim()).filter(Boolean);
+            const horseList = (details.horseNames || [])
+                .map(s => s.trim()).filter(Boolean);
 
             // The processing-fee line in orderSummary is a display-only estimate —
             // real bookings/totals never include it. It isn't a stall/RV/supply
