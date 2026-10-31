@@ -1,6 +1,8 @@
 // Opens a clean, print-ready window for a Load Sheet — Robert: "generate a
 // load sheet... it tells us what we need to load and how many bags of each
 // supply." Mirrors the window.open + autoPrint pattern in stallingChartPrint.js.
+import QRCode from 'qrcode';
+import { buildDeliveryUrl } from '@/lib/deliveryLink';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
@@ -21,9 +23,12 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
                 .join(', ');
             return `
                 <div class="line">
-                    <div class="who"><strong>${esc(l.customer)}</strong>${l.stableWith ? ` <span class="sub">Stabling with/under: ${esc(l.stableWith)}</span>` : ''}</div>
-                    <div class="where">${esc(l.barnName)}${l.stalls ? ` &middot; Stall ${esc(l.stalls)}` : ''}</div>
-                    <div class="what">${items}</div>
+                    <div class="info">
+                        <div class="who"><strong>${esc(l.customer)}</strong>${l.stableWith ? ` <span class="sub">Stabling with/under: ${esc(l.stableWith)}</span>` : ''}</div>
+                        <div class="where">${esc(l.barnName)}${l.stalls ? ` &middot; Stall ${esc(l.stalls)}` : ''}</div>
+                        <div class="what">${items}</div>
+                    </div>
+                    ${l.qr ? `<div class="qr"><a href="${esc(l.qrUrl)}" target="_blank" rel="noopener"><img src="${l.qr}" alt="Scan to mark delivered" /></a><span>Scan when delivered</span></div>` : ''}
                 </div>
             `;
         })
@@ -68,7 +73,11 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
         td{padding:3px 6px;border-bottom:1px solid #eee;vertical-align:top;}
         td.num{text-align:right;font-weight:600;}
         .barn{margin-bottom:10px;}
-        .line{border-bottom:1px solid #ddd;padding:8px 0;font-size:13px;page-break-inside:avoid;}
+        .line{border-bottom:1px solid #ddd;padding:8px 0;font-size:13px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center;gap:12px;}
+        .line .info{min-width:0;flex:1;}
+        .line .qr{text-align:center;flex-shrink:0;}
+        .line .qr img{width:84px;height:84px;display:block;}
+        .line .qr span{font-size:9px;color:#555;}
         .line .sub{color:#555;font-size:12px;margin-left:8px;}
         .line .where{color:#444;margin-top:2px;}
         .line .what{margin-top:2px;font-weight:600;}
@@ -90,10 +99,30 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
     </body></html>`;
 }
 
-export function printLoadSheet(data) {
-    const html = buildLoadSheetHtml(data);
-    const w = window.open('', '_blank');
+// Adds a QR data-URL to every line that has a delivery secret + a show id.
+// `data.showId` is the show the QR link points back to.
+async function withQrCodes(data) {
+    if (!data.showId || !data.lines?.length) return data;
+    const origin = window.location.origin;
+    const lines = await Promise.all(data.lines.map(async (l) => {
+        if (!l.deliverySecret || !l.id) return l;
+        const url = buildDeliveryUrl({
+            origin, showId: data.showId, bookingId: l.id, secret: l.deliverySecret, itemRefIds: l.itemRefIds,
+        });
+        const qr = await QRCode.toDataURL(url, { margin: 0, width: 200, errorCorrectionLevel: 'M' });
+        return { ...l, qr, qrUrl: url };
+    }));
+    return { ...data, lines };
+}
+
+// `win` lets the caller open the window first (inside the click) and print into
+// it after async work — otherwise the browser's pop-up blocker eats the window.
+export async function printLoadSheet(data, win = null) {
+    const html = buildLoadSheetHtml(await withQrCodes(data));
+    const w = win || window.open('', '_blank');
     if (!w) return false;
+    // open() wipes the "Preparing Load Sheet…" placeholder the caller wrote.
+    w.document.open();
     w.document.write(html);
     w.document.close();
     return true;

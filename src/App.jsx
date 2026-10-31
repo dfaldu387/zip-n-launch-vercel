@@ -90,6 +90,7 @@ const PublicShowPage = lazy(() => import('@/pages/PublicShowPage'));
 const PublicBookingPage = lazy(() => import('@/pages/PublicBookingPage'));
 const PublicStallingChartPage = lazy(() => import('@/pages/PublicStallingChartPage'));
 const QuickSupplyOrderPage = lazy(() => import('@/pages/QuickSupplyOrderPage'));
+const DeliveryLinePage = lazy(() => import('@/pages/DeliveryLinePage'));
 const PublicShowsListPage = lazy(() => import('@/pages/PublicShowsListPage'));
 const CheckInPage = lazy(() => import('@/pages/CheckInPage'));
 const BookingStatusPage = lazy(() => import('@/pages/BookingStatusPage'));
@@ -190,6 +191,7 @@ function App() {
                   <Route path="/show/:showId/book" element={<PublicBookingPage />} />
                   <Route path="/show/:showId/stalling-chart" element={<PublicStallingChartPage />} />
                   <Route path="/show/:showId/order-supplies" element={<QuickSupplyOrderPage />} />
+                  <Route path="/delivery/:token" element={<DeliveryLinePage />} />
                   <Route path="/booking/:bookingId" element={<BookingStatusPage />} />
                   <Route path="/find-booking" element={<FindBookingPage />} />
 

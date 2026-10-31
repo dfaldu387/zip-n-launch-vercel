@@ -165,6 +165,7 @@ export const buildLoadSheet = (orders, supplies, itemNames = null) => {
         const items = (order.items || []).filter(it => it?.type === 'supply');
         let orderHasQty = false;
         const lineItems = [];
+        const lineRefIds = [];
         for (const item of items) {
             const { status } = getItemStatus(order, item.refId);
             if (status === 'delivered') continue;
@@ -176,6 +177,7 @@ export const buildLoadSheet = (orders, supplies, itemNames = null) => {
             orderHasQty = true;
             const unit = unitOf.get(item.refId) || unitOf.get(name) || 'unit';
             lineItems.push({ name, qty, unit });
+            if (item.refId) lineRefIds.push(item.refId);
 
             const prevSupply = bySupply.get(name) || { qty: 0, unit };
             bySupply.set(name, { qty: prevSupply.qty + qty, unit });
@@ -197,6 +199,8 @@ export const buildLoadSheet = (orders, supplies, itemNames = null) => {
             orderCount += 1;
             lines.push({
                 id: order.id,
+                deliverySecret: order.deliverySecret || '',
+                itemRefIds: lineRefIds,
                 customer: order.exhibitorName || 'Unknown',
                 stableWith: order.stableWith || order.trainerName || '',
                 barnName: order.barnName || 'Unassigned',

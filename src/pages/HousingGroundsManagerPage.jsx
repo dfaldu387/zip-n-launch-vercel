@@ -67,6 +67,7 @@ import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/b
 import { getBookingRef } from '@/lib/bookingRef';
 import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
+import { newDeliverySecret } from '@/lib/deliveryLink';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from '@/lib/showDataWrite';
@@ -3145,8 +3146,8 @@ const pluralize = (qty) => (qty === 1 ? '' : 's');
 // barn/stall, with a print button and a bulk "mark out for delivery."
 // Permanent side panel (not a popup) — Robert's mockup keeps this visible at
 // all times next to the order list, live-updating as orders are checked.
-const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, isBusy, showName, itemFilter }) => {
-    const { bySupply, byBarn, orderCount, lines } = useMemo(() => buildLoadSheet(orders, supplies, itemFilter), [orders, supplies, itemFilter]);
+const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, onPrint, isBusy, itemFilter }) => {
+    const { bySupply, byBarn, orderCount } = useMemo(() => buildLoadSheet(orders, supplies, itemFilter), [orders, supplies, itemFilter]);
     const bySupplyEntries = [...bySupply.entries()];
     const byBarnEntries = [...byBarn.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
@@ -3205,9 +3206,9 @@ const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelive
                                             </div>
                                             <div className="space-y-1">
                                                 {[...entry.stalls.entries()].map(([stallLabel, itemsMap]) => (
-                                                    <div key={stallLabel} className="flex items-start justify-between gap-2 text-xs text-muted-foreground">
-                                                        <span className="min-w-0 break-words">{stallLabel}</span>
-                                                        <span className="text-right shrink-0">{[...itemsMap.entries()].map(([n, { qty, unit }]) => `${qty} ${unit}${pluralize(qty)} ${n}`).join(', ')}</span>
+                                                    <div key={stallLabel} className="text-xs text-muted-foreground space-y-0.5 py-1 border-t first:border-t-0">
+                                                        <p className="break-words">{stallLabel}</p>
+                                                        <p className="font-medium text-foreground break-words">{[...itemsMap.entries()].map(([n, { qty, unit }]) => `${qty} ${unit}${pluralize(qty)} ${n}`).join(', ')}</p>
                                                     </div>
                                                 ))}
                                             </div>
@@ -3247,7 +3248,7 @@ const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelive
                     <Button
                         variant="outline"
                         disabled={orders.length === 0}
-                        onClick={() => printLoadSheet({ showName, bySupply, byBarn, orderCount, lines, itemFilter })}
+                        onClick={onPrint}
                     >
                         <Printer className="h-4 w-4 mr-1.5" /> Preview / Print
                     </Button>
@@ -3784,7 +3785,7 @@ const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer, brandingContent }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onSaveDeliverySecrets, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer, brandingContent }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const { profile, refreshProfile } = useAuth();
@@ -4806,6 +4807,39 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         () => allSupplyOrders.filter(o => loadSheetIds.has(o.id)),
         [allSupplyOrders, loadSheetIds]
     );
+
+    // Print the Load Sheet with a QR on every order line. Each order needs a
+    // delivery secret first (created once, saved on the booking) — the QR link
+    // can't work without it. The print window is opened FIRST, inside the click,
+    // so the browser's pop-up blocker allows it while the secrets save.
+    const printLoadSheetWithQr = async () => {
+        const win = window.open('', '_blank');
+        if (!win) {
+            toast({ title: 'Pop-up blocked', description: 'Allow pop-ups for this site to print the Load Sheet.', variant: 'destructive' });
+            return;
+        }
+        win.document.write('<p style="font-family:sans-serif;padding:24px">Preparing Load Sheet…</p>');
+        try {
+            const first = buildLoadSheet(loadSheetOrders, supplies, supplyItemFilter);
+            let secrets = pd.deliverySecrets || {};
+            const missing = first.lines.filter(l => !secrets[l.id]).map(l => l.id);
+            if (missing.length > 0) {
+                const fresh = Object.fromEntries(missing.map(id => [id, newDeliverySecret()]));
+                // Saved to the show (merged with the newest copy), never onto the booking.
+                secrets = await onSaveDeliverySecrets(fresh);
+            }
+            const orders = loadSheetOrders.map(o => ({ ...o, deliverySecret: secrets[o.id] || '' }));
+            await printLoadSheet({
+                showName: show.project_name,
+                showId: show.id,
+                ...buildLoadSheet(orders, supplies, supplyItemFilter),
+                itemFilter: supplyItemFilter,
+            }, win);
+        } catch (err) {
+            win.close();
+            toast({ title: 'Could not print the Load Sheet', description: err.message, variant: 'destructive' });
+        }
+    };
 
     const markLoadSheetOutForDelivery = async () => {
         setIsMarkingOutForDelivery(true);
@@ -6379,11 +6413,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 size="sm"
                                 className="h-8 text-xs"
                                 disabled={loadSheetOrders.length === 0}
-                                onClick={() => printLoadSheet({
-                                    showName: show.project_name,
-                                    ...buildLoadSheet(loadSheetOrders, supplies, supplyItemFilter),
-                                    itemFilter: supplyItemFilter,
-                                })}
+                                onClick={printLoadSheetWithQr}
                             >
                                 <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Load Sheet
                             </Button>
@@ -6436,8 +6466,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 sortBy={loadSheetSort}
                                 onSortBy={setLoadSheetSort}
                                 onMarkOutForDelivery={markLoadSheetOutForDelivery}
+                                onPrint={printLoadSheetWithQr}
                                 isBusy={isMarkingOutForDelivery}
-                                showName={show.project_name}
                             />
                         </div>
                     )}
@@ -7656,6 +7686,19 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShowId, commitShowData, toast]);
 
+    // Delivery QR secrets (one per order, created the first time it is printed on a
+    // Load Sheet). Kept in their own map on the show — not on the booking — because
+    // the customer booking page returns the whole booking and must never see them.
+    // Merged onto the newest saved copy; a secret that already exists is kept, so a
+    // QR printed earlier keeps working. Returns the full map.
+    const saveDeliverySecrets = useCallback(async (fresh) => {
+        if (!selectedShowId) return {};
+        return commitShowData(latest => {
+            const merged = { ...fresh, ...(latest.deliverySecrets || {}) };
+            return { data: { ...latest, deliverySecrets: merged }, result: merged };
+        });
+    }, [selectedShowId, commitShowData]);
+
     // Delete a booking immediately (no Save All needed). The delete button in the
     // Bookings list only ever updated local React state — a deleted booking looked
     // gone until the next remote refresh silently brought it right back, because
@@ -7893,6 +7936,7 @@ const HousingGroundsManagerPage = () => {
                                 isSaving={isSaving}
                                 onUpdateBookingStatus={updateBookingStatusImmediate}
                                 onUpdateBookingFields={updateBookingFieldsImmediate}
+                                onSaveDeliverySecrets={saveDeliverySecrets}
                                 onUpdateBarns={updateBarnsImmediate}
                                 onUpdateRvAreas={updateRvAreasImmediate}
                                 onUpdateCover={updateCoverImageImmediate}
