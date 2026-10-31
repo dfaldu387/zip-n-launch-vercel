@@ -11,7 +11,9 @@ import {
     DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
-import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users, FileText, Loader2, Pencil, Trash2, Check, X, MoreVertical, StickyNote, History } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { supabase } from '@/lib/supabaseClient';
+import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, ChevronRight, ChevronDown, Mail, Phone, Users, FileText, Loader2, Pencil, Trash2, Check, X, MoreVertical, StickyNote, History, Camera } from 'lucide-react';
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 import { ensureAllRvSpots, getAssignedRvSpotsForBooking } from '@/lib/rvAssignment';
 import { computeBookingTotal } from '@/lib/bookingPricing';
@@ -71,6 +73,8 @@ const getSupplies = (booking) =>
                 name: base || it.name || 'Item',
                 qty,
                 refId: it.refId,
+                // Set when the line was delivered by scanning its QR (who typed their name).
+                deliveredBy: status === 'delivered' ? (booking?.itemStatuses?.[it.refId]?.deliveredBy || '') : '',
                 stageLabel: stage.label,
                 stageColor: stage.color,
                 lastUpdated: timestamps.length ? timestamps[timestamps.length - 1] : (booking?.createdAt || null),
@@ -254,8 +258,55 @@ const customerKey = (row) => {
 // box... we don't want to start mixing their orders together." One box per
 // order (pre-order or at-show), titled with its type, order number and date.
 // Read-only here — statuses are changed on the Hay & Shavings tab.
-const SupplyFulfillmentBox = ({ row, isCurrent, showTitle }) => {
+// Photos the driver took on the delivery page (QR). Stored privately; each opens
+// through a short-lived signed link. The booking keeps only the file names — the
+// folder holds the delivery secret — so the path is rebuilt here from the show's
+// secrets map.
+const DeliveryPhotosDialog = ({ open, onClose, photos, showId, bookingId, secret }) => {
+    const [urls, setUrls] = useState({});
+    const [error, setError] = useState('');
+    React.useEffect(() => {
+        if (!open) return;
+        let cancelled = false;
+        (async () => {
+            setError('');
+            const next = {};
+            for (const ph of photos) {
+                const { data, error: err } = await supabase.storage
+                    .from('delivery-photos')
+                    .createSignedUrl(`${showId}/${bookingId}/${secret}/${ph.file}`, 3600);
+                if (err) { if (!cancelled) setError('Could not open some photos.'); continue; }
+                next[ph.file] = data?.signedUrl;
+            }
+            if (!cancelled) setUrls(next);
+        })();
+        return () => { cancelled = true; };
+    }, [open, photos, showId, bookingId, secret]);
+
+    return (
+        <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                <DialogHeader><DialogTitle>Delivery photos</DialogTitle></DialogHeader>
+                {error && <p className="text-sm text-rose-600">{error}</p>}
+                <div className="grid gap-4 sm:grid-cols-2">
+                    {photos.map(ph => (
+                        <figure key={ph.file} className="space-y-1">
+                            {urls[ph.file]
+                                ? <a href={urls[ph.file]} target="_blank" rel="noopener noreferrer"><img src={urls[ph.file]} alt="Delivery" className="w-full rounded-md border" /></a>
+                                : <div className="h-40 rounded-md border flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+                            <figcaption className="text-xs text-muted-foreground">{ph.by} · {fmtDateTime(ph.at)}</figcaption>
+                        </figure>
+                    ))}
+                </div>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
+const SupplyFulfillmentBox = ({ row, isCurrent, showTitle, showId, deliverySecret }) => {
     const atShow = row.booking.orderType === 'live-supply';
+    const photos = Array.isArray(row.booking.deliveryPhotos) ? row.booking.deliveryPhotos : [];
+    const [photosOpen, setPhotosOpen] = useState(false);
     return (
         <div className={cn('rounded-md border overflow-hidden', isCurrent && showTitle && 'border-primary/40')}>
             {showTitle && (
@@ -265,8 +316,27 @@ const SupplyFulfillmentBox = ({ row, isCurrent, showTitle }) => {
                     </Badge>
                     <span className="font-mono text-muted-foreground">#{row.ref}</span>
                     {row.booking.createdAt && <span className="text-muted-foreground">{fmtDateTime(row.booking.createdAt)}</span>}
+                    {photos.length > 0 && deliverySecret && (
+                        <button
+                            type="button"
+                            onClick={() => setPhotosOpen(true)}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                        >
+                            <Camera className="h-3 w-3" /> View photos ({photos.length})
+                        </button>
+                    )}
                     {isCurrent && <span className="ml-auto text-[10px] font-medium text-primary">This booking</span>}
                 </div>
+            )}
+            {photos.length > 0 && deliverySecret && (
+                <DeliveryPhotosDialog
+                    open={photosOpen}
+                    onClose={() => setPhotosOpen(false)}
+                    photos={photos}
+                    showId={showId}
+                    bookingId={row.booking.id}
+                    secret={deliverySecret}
+                />
             )}
             <table className="w-full text-xs">
                 <thead>
@@ -291,6 +361,7 @@ const SupplyFulfillmentBox = ({ row, isCurrent, showTitle }) => {
                             <td className="px-2 py-1 text-center tabular-nums">{s.qty}</td>
                             <td className="px-2 py-1">
                                 <Badge className={cn(s.stageColor, 'text-white text-[10px]')}>{s.stageLabel}</Badge>
+                                {s.deliveredBy && <p className="text-[10px] text-muted-foreground mt-0.5">by {s.deliveredBy}</p>}
                             </td>
                             <td className="px-2 py-1 text-muted-foreground">
                                 {s.lastUpdated ? fmtDateTime(s.lastUpdated) : '—'}
@@ -306,7 +377,7 @@ const SupplyFulfillmentBox = ({ row, isCurrent, showTitle }) => {
 // One row (collapsed + expandable detail) — its own component so Edit/Delete
 // can hold local draft/confirm state without re-rendering the whole table.
 const MasterListRow = ({
-    r, isOpen, onToggleExpand, supplyOrders = [],
+    r, isOpen, onToggleExpand, supplyOrders = [], showId, deliverySecrets = {},
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
 }) => {
     const booking = r.booking;
@@ -882,6 +953,8 @@ const MasterListRow = ({
                                                     row={o}
                                                     isCurrent={o.booking.id === booking.id}
                                                     showTitle
+                                                    showId={showId}
+                                                    deliverySecret={deliverySecrets?.[o.booking.id]}
                                                 />
                                             ))}
                                         </div>
@@ -927,7 +1000,7 @@ const MasterListRow = ({
 };
 
 const MasterListPanel = ({
-    bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show',
+    bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show', showId, deliverySecrets = {},
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
     addBookingSlot,
 }) => {
@@ -1349,6 +1422,8 @@ const MasterListPanel = ({
                                     isOpen={expandedIds.has(r.booking.id)}
                                     onToggleExpand={() => toggleExpanded(r.booking.id)}
                                     supplyOrders={supplyOrdersByEmail.get(customerKey(r)) || []}
+                                    showId={showId}
+                                    deliverySecrets={deliverySecrets}
                                     onUpdateField={onUpdateField}
                                     onRecordPayment={onRecordPayment}
                                     onStatusChange={onStatusChange}

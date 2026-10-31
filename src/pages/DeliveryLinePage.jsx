@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { Loader2, Truck, CheckCircle2, MapPin, Users, AlertTriangle } from 'lucide-react';
+import { Loader2, Truck, CheckCircle2, MapPin, Users, AlertTriangle, Camera } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +32,21 @@ const fmtWhen = (iso) => {
     }
 };
 
+const MAX_PHOTOS = 3;
+
+// Phone photos are 4-12 MB; shrink to a 1600px JPEG (a few hundred KB) before upload.
+const shrinkPhoto = async (file) => {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+    if (!blob) throw new Error('Could not read that photo.');
+    return blob;
+};
+
 const DeliveryLinePage = () => {
     const { token } = useParams();
     const [search] = useSearchParams();
@@ -47,6 +62,9 @@ const DeliveryLinePage = () => {
     const [busyStatus, setBusyStatus] = useState('');
     const [actionError, setActionError] = useState('');
     const [justDone, setJustDone] = useState('');
+    const [photoCount, setPhotoCount] = useState(0);
+    const [photoBusy, setPhotoBusy] = useState(false);
+    const [photoMsg, setPhotoMsg] = useState('');
 
     useEffect(() => {
         const load = async () => {
@@ -74,6 +92,39 @@ const DeliveryLinePage = () => {
 
     // A button only appears when at least one item on this line can still move to it.
     const canMoveTo = (key) => items.some(it => stageIndex(it.status) < stageIndex(key));
+
+    // The photo needs a name too (it is logged). Once everything is delivered the
+    // name box is hidden, so fall back to whoever delivered it.
+    const photoBy = driver.trim() || items.find(it => it.deliveredBy)?.deliveredBy || '';
+
+    const addPhoto = async (file) => {
+        if (!file || photoBusy) return;
+        setPhotoBusy(true);
+        setPhotoMsg('');
+        try {
+            const blob = await shrinkPhoto(file);
+            const name = `${crypto.randomUUID()}.jpg`;
+            const path = `${link.showId}/${link.bookingId}/${link.secret}/${name}`;
+            const { error: upErr } = await supabase.storage.from('delivery-photos').upload(path, blob, { contentType: 'image/jpeg' });
+            if (upErr) throw upErr;
+            const { data, error } = await supabase.rpc('add_delivery_photo', {
+                p_show_id: link.showId,
+                p_booking_id: link.bookingId,
+                p_secret: link.secret,
+                p_item_ids: itemIds,
+                p_file: name,
+                p_by: photoBy,
+            });
+            if (error) throw error;
+            try { localStorage.setItem(NAME_KEY, photoBy); } catch { /* private mode */ }
+            setPhotoCount(data?.photoCount ?? (c => c + 1));
+            setPhotoMsg('Photo saved.');
+        } catch (err) {
+            setPhotoMsg(err?.message || 'Could not save the photo. Please try again.');
+        } finally {
+            setPhotoBusy(false);
+        }
+    };
 
     const apply = async (status) => {
         if (!nameOk || busyStatus) return;
@@ -160,6 +211,29 @@ const DeliveryLinePage = () => {
                                         </div>
                                     );
                                 })}
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardContent className="p-4 space-y-2">
+                                <p className="text-sm font-medium">Photo of the delivery <span className="text-muted-foreground font-normal">(optional)</span></p>
+                                <label className={cn(
+                                    'flex items-center justify-center gap-2 h-12 rounded-md border text-base font-medium cursor-pointer',
+                                    (photoBy.trim().length < 2 || photoBusy || photoCount >= MAX_PHOTOS) && 'opacity-50 pointer-events-none'
+                                )}>
+                                    {photoBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                                    {photoCount > 0 ? 'Add another photo' : 'Take a photo'}
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        capture="environment"
+                                        className="hidden"
+                                        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; addPhoto(f); }}
+                                    />
+                                </label>
+                                {photoBy.trim().length < 2 && <p className="text-xs text-muted-foreground text-center">Type your name first.</p>}
+                                {photoCount > 0 && <p className="text-sm text-emerald-700 text-center">{photoCount} photo{photoCount === 1 ? '' : 's'} saved</p>}
+                                {photoMsg && photoMsg !== 'Photo saved.' && <p className="text-sm text-rose-600 text-center">{photoMsg}</p>}
                             </CardContent>
                         </Card>
 

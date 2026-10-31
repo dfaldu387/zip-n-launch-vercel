@@ -6481,6 +6481,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         rvAreas={rvAreas}
                         extraStallFees={extraStallFees}
                         showName={show.project_name || 'Show'}
+                        showId={show.id}
+                        deliverySecrets={pd.deliverySecrets || {}}
                         onUpdateField={(bookingId, field, value) => updateBooking(bookingId, field, value)}
                         onRecordPayment={recordPayment}
                         onStatusChange={changeBookingStatus}

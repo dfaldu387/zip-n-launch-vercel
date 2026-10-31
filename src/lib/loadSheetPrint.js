@@ -76,7 +76,7 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
         .line{border-bottom:1px solid #ddd;padding:8px 0;font-size:13px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center;gap:12px;}
         .line .info{min-width:0;flex:1;}
         .line .qr{text-align:center;flex-shrink:0;}
-        .line .qr img{width:84px;height:84px;display:block;}
+        .line .qr img{width:112px;height:112px;display:block;}
         .line .qr span{font-size:9px;color:#555;}
         .line .sub{color:#555;font-size:12px;margin-left:8px;}
         .line .where{color:#444;margin-top:2px;}
@@ -109,7 +109,7 @@ async function withQrCodes(data) {
         const url = buildDeliveryUrl({
             origin, showId: data.showId, bookingId: l.id, secret: l.deliverySecret, itemRefIds: l.itemRefIds,
         });
-        const qr = await QRCode.toDataURL(url, { margin: 0, width: 200, errorCorrectionLevel: 'M' });
+        const qr = await QRCode.toDataURL(url, { margin: 1, width: 360, errorCorrectionLevel: 'L' });
         return { ...l, qr, qrUrl: url };
     }));
     return { ...data, lines };
