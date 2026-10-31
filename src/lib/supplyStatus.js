@@ -66,8 +66,11 @@ export const isDelivered = (order) => stageIndexOf(order) === SUPPLY_STAGES.leng
 // (e.g. Delivered) backward just because a SIBLING item on the same order is
 // still behind — stageIndexOf takes the order's slowest item, so a mixed
 // order still counts as "undelivered" and gets swept up.
-export function computeItemStageUpdates(order, targetKey, { allowBackward = true } = {}) {
-    const items = order?.items || [];
+//
+// onlyItemNames: when a Load Sheet item filter is on (e.g. only Alfalfa), the
+// sweep touches just those items and leaves the rest of the order alone.
+export function computeItemStageUpdates(order, targetKey, { allowBackward = true, onlyItemNames = null } = {}) {
+    const items = (order?.items || []).filter(it => !onlyItemNames?.length || onlyItemNames.includes(baseItemName(it.name)));
     const targetIndex = SUPPLY_STAGES.findIndex(s => s.key === targetKey);
     const target = SUPPLY_STAGES[targetIndex];
     const now = new Date().toISOString();
@@ -113,6 +116,9 @@ export const getSupplyLastUpdate = (order) => {
 // supply line item. item.name already reads like "Shavings × 3"; strip the
 // trailing "× n" so it can be re-rendered consistently as "Shavings ×3" with
 // qty exposed on its own.
+// "Hay (Grass) × 1" -> "Hay (Grass)" — the name every filter/Load Sheet match uses.
+export const baseItemName = (name) => String(name || '').replace(/\s*×\s*\d+\s*$/, '').trim() || 'Item';
+
 export const getSupplyLineItems = (booking) =>
     (booking?.items || [])
         .filter(it => it?.type === 'supply')
@@ -141,25 +147,35 @@ export const unitLookup = (supplies) => {
 // flat total and grouped by barn/stall so a crew knows what goes where.
 // order.barnName/stallNumber are set on pre-show orders (real stall
 // assignment); at-show reorders have no barn, so they fall under "Unassigned".
-export const buildLoadSheet = (orders, supplies) => {
+//
+// itemNames (optional): only these supplies count — Robert: "when we are
+// building out these load forms, maybe they're just delivering alfalfa hay."
+// Empty/omitted = every supply. `lines` is one row per order for the printed
+// sheet: who it goes to, who they stable with, which stalls, which items.
+export const buildLoadSheet = (orders, supplies, itemNames = null) => {
     const unitOf = unitLookup(supplies);
+    const wanted = itemNames?.length ? new Set(itemNames) : null;
 
     const bySupply = new Map(); // name -> { qty, unit }
+    const lines = [];
     const byBarn = new Map();   // barnLabel -> { totals: Map(name -> {qty,unit}), stalls: Map(stallLabel -> Map(name -> {qty,unit})) }
     let orderCount = 0;
 
     for (const order of orders || []) {
         const items = (order.items || []).filter(it => it?.type === 'supply');
         let orderHasQty = false;
+        const lineItems = [];
         for (const item of items) {
             const { status } = getItemStatus(order, item.refId);
             if (status === 'delivered') continue;
             const qty = Number(item.qty) || 0;
             if (!qty) continue;
-            orderHasQty = true;
 
-            const name = String(item.name || '').replace(/\s*×\s*\d+\s*$/, '').trim() || 'Item';
+            const name = baseItemName(item.name);
+            if (wanted && !wanted.has(name)) continue;
+            orderHasQty = true;
             const unit = unitOf.get(item.refId) || unitOf.get(name) || 'unit';
+            lineItems.push({ name, qty, unit });
 
             const prevSupply = bySupply.get(name) || { qty: 0, unit };
             bySupply.set(name, { qty: prevSupply.qty + qty, unit });
@@ -177,8 +193,18 @@ export const buildLoadSheet = (orders, supplies) => {
             const prevStall = stallMap.get(name) || { qty: 0, unit };
             stallMap.set(name, { qty: prevStall.qty + qty, unit });
         }
-        if (orderHasQty) orderCount += 1;
+        if (orderHasQty) {
+            orderCount += 1;
+            lines.push({
+                id: order.id,
+                customer: order.exhibitorName || 'Unknown',
+                stableWith: order.stableWith || order.trainerName || '',
+                barnName: order.barnName || 'Unassigned',
+                stalls: order.stallNumber ? String(order.stallNumber) : '',
+                items: lineItems,
+            });
+        }
     }
 
-    return { bySupply, byBarn, orderCount };
+    return { bySupply, byBarn, orderCount, lines };
 };

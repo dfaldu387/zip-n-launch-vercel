@@ -8,8 +8,26 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => (
 
 const plural = (qty) => (qty === 1 ? '' : 's');
 
-function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 0 }) {
+function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 0, lines = [], itemFilter = [] }) {
     const generatedAt = new Date().toLocaleString();
+    const filterNote = itemFilter.length ? ` &middot; Only: ${itemFilter.map(esc).join(', ')}` : '';
+
+    // One block per order — Robert: who it is delivered to, who they stable
+    // with, which stalls, and what items, so the driver knows where it goes.
+    const lineBlocks = lines
+        .map(l => {
+            const items = l.items
+                .map(({ name, qty, unit }) => `${qty} ${esc(unit)}${plural(qty)} ${esc(name)}`)
+                .join(', ');
+            return `
+                <div class="line">
+                    <div class="who"><strong>${esc(l.customer)}</strong>${l.stableWith ? ` <span class="sub">Stabling with/under: ${esc(l.stableWith)}</span>` : ''}</div>
+                    <div class="where">${esc(l.barnName)}${l.stalls ? ` &middot; Stall ${esc(l.stalls)}` : ''}</div>
+                    <div class="what">${items}</div>
+                </div>
+            `;
+        })
+        .join('');
 
     const supplyRows = [...bySupply.entries()]
         .map(([name, { qty, unit }]) => `<tr><td>${esc(name)}</td><td class="num">${qty} ${esc(unit)}${plural(qty)}</td></tr>`)
@@ -50,17 +68,23 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
         td{padding:3px 6px;border-bottom:1px solid #eee;vertical-align:top;}
         td.num{text-align:right;font-weight:600;}
         .barn{margin-bottom:10px;}
+        .line{border-bottom:1px solid #ddd;padding:8px 0;font-size:13px;page-break-inside:avoid;}
+        .line .sub{color:#555;font-size:12px;margin-left:8px;}
+        .line .where{color:#444;margin-top:2px;}
+        .line .what{margin-top:2px;font-weight:600;}
         @media print{ body{padding:0} }
     </style>
     </head><body>
         <h1>Load Sheet — ${esc(showName)}</h1>
-        <p class="meta">Generated ${esc(generatedAt)} &middot; ${orderCount} order${plural(orderCount)} with supplies to load</p>
+        <p class="meta">Generated ${esc(generatedAt)} &middot; ${orderCount} order${plural(orderCount)} with supplies to load${filterNote}</p>
 
         <h2>Load Totals</h2>
         <table><tbody>${supplyRows || '<tr><td>Nothing left to load.</td></tr>'}</tbody></table>
 
         <h2>By Barn / Location</h2>
         ${barnBlocks || '<p class="meta">No barn/location on these orders.</p>'}
+
+        ${lineBlocks ? `<h2>Deliveries</h2>${lineBlocks}` : ''}
 
         <script>window.onload=function(){window.focus();window.print();}<\/script>
     </body></html>`;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeItemStageUpdates, stageIndexOf, isDelivered } from './supplyStatus';
+import { computeItemStageUpdates, stageIndexOf, isDelivered, buildLoadSheet } from './supplyStatus';
 
 // Regression tests for the bulk Load Sheet "Mark as Out for Delivery" bug: an
 // order with one item already Delivered and a sibling item still behind still
@@ -82,5 +82,39 @@ describe('computeItemStageUpdates — manual per-card action (allowBackward: tru
         expect(result.anyAdvancedToDelivered).toBe(true); // hay newly reached delivered
         expect(result.nextItemStatuses.hay.status).toBe('delivered');
         expect(result.nextItemStatuses.shavings.status).toBe('delivered'); // already there, untouched
+    });
+});
+
+describe('buildLoadSheet — item filter', () => {
+    const order = {
+        id: 'o1', exhibitorName: 'Weston', trainerName: 'Hilary', barnName: 'Moncreif', stallNumber: '5162, 5163',
+        items: [
+            { type: 'supply', refId: 'a', name: 'Hay (Alfalfa) × 2', qty: 2 },
+            { type: 'supply', refId: 's', name: 'Shavings × 4', qty: 4 },
+        ],
+    };
+
+    it('counts every supply when no filter is set', () => {
+        const { bySupply, lines } = buildLoadSheet([order], []);
+        expect([...bySupply.keys()]).toEqual(['Hay (Alfalfa)', 'Shavings']);
+        expect(lines[0].items).toHaveLength(2);
+    });
+
+    it('counts only the picked supplies and carries stall + stabling-with on the line', () => {
+        const { bySupply, byBarn, lines, orderCount } = buildLoadSheet([order], [], ['Hay (Alfalfa)']);
+        expect([...bySupply.keys()]).toEqual(['Hay (Alfalfa)']);
+        expect([...byBarn.get('Moncreif').totals.keys()]).toEqual(['Hay (Alfalfa)']);
+        expect(orderCount).toBe(1);
+        expect(lines[0]).toMatchObject({ customer: 'Weston', stableWith: 'Hilary', stalls: '5162, 5163' });
+    });
+
+    it('skips an order that has none of the picked supplies', () => {
+        expect(buildLoadSheet([order], [], ['Hay (Grass)']).orderCount).toBe(0);
+    });
+
+    it('filtered bulk sweep touches only the picked items', () => {
+        const { nextItemStatuses } = computeItemStageUpdates(order, 'out_for_delivery', { onlyItemNames: ['Hay (Alfalfa)'] });
+        expect(nextItemStatuses.a.status).toBe('out_for_delivery');
+        expect(nextItemStatuses.s).toBeUndefined();
     });
 });

@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -65,7 +65,7 @@ import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
-import { SUPPLY_STAGES, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
+import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
@@ -2677,7 +2677,7 @@ const applyItemStage = async ({ order, item, targetKey, onFulfill, showName, toa
 // the Shavings, but might not get to the Hay quite yet," so each item (not
 // just the order as a whole) gets its own Ordered/Received/Out for
 // Delivery/Delivered dropdown and sends its own delivery email.
-const ItemStatusRow = ({ order, item, onFulfill, showName, unitOf }) => {
+const ItemStatusRow = ({ order, item, onFulfill, showName, unitOf, itemFilter = [] }) => {
     const { toast } = useToast();
     const [isNotifying, setIsNotifying] = useState(false);
     const { status, stageTimestamps } = getItemStatus(order, item.refId);
@@ -2687,17 +2687,20 @@ const ItemStatusRow = ({ order, item, onFulfill, showName, unitOf }) => {
     // in QuickSupplyOrderPage); pre-show items already had this stripped in
     // beddingItemsOf. Strip it here too so both read as a clean name plus one
     // qty/unit suffix, not a duplicated "× 1 ... 1 bale".
-    const displayName = String(item.name || '').replace(/\s*×\s*\d+\s*$/, '').trim() || item.name;
+    const displayName = baseItemName(item.name);
+    // Item filter on: the picked items read bold, the rest stay visible but dim.
+    const filterOn = itemFilter.length > 0;
+    const isPicked = filterOn && itemFilter.includes(displayName);
     const unit = unitOf?.get(item.refId) || unitOf?.get(displayName) || '';
     const qty = Number(item.qty) || 0;
 
     const setStage = (val) => applyItemStage({ order, item, targetKey: val, onFulfill, showName, toast, setBusy: setIsNotifying });
 
     return (
-        <div className="py-1.5 flex flex-wrap items-center gap-3 text-sm">
+        <div className={cn('py-1.5 flex flex-wrap items-center gap-3 text-sm', filterOn && !isPicked && 'opacity-50')}>
             <div className="flex items-center gap-2 min-w-0 flex-1 basis-40">
                 <span className={cn('h-2 w-2 rounded-full shrink-0', stage.color)} />
-                <span className="truncate">{displayName}</span>
+                <span className={cn('truncate', isPicked && 'font-bold')}>{displayName}</span>
                 {qty > 0 && unit && (
                     <span className="text-xs text-muted-foreground shrink-0">{qty} {unit}{qty === 1 ? '' : 's'}</span>
                 )}
@@ -2726,23 +2729,30 @@ const ItemStatusRow = ({ order, item, onFulfill, showName, unitOf }) => {
 // "Mark as Out for Delivery" action so both behave identically.
 // See computeItemStageUpdates (supplyStatus.js) for the allowBackward rule this
 // shares with the bulk Load Sheet sweep below.
-const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast, setBusy = () => {}, allowBackward = true }) => {
-    const items = order.items || [];
+const applyAllItemsStage = async ({ order, targetKey, onFulfill, showName, toast, setBusy = () => {}, allowBackward = true, onlyItemNames = null }) => {
+    const partial = !!onlyItemNames?.length;
+    const items = (order.items || []).filter(it => !partial || onlyItemNames.includes(baseItemName(it.name)));
     const { nextItemStatuses, anyChanged, anyAdvancedToDelivered, skippedBackward, target } =
-        computeItemStageUpdates(order, targetKey, { allowBackward });
+        computeItemStageUpdates(order, targetKey, { allowBackward, onlyItemNames });
     if (!anyChanged) return { skippedBackward };
     const now = new Date().toISOString();
 
     if (anyAdvancedToDelivered) setBusy(true);
 
-    await onFulfill(order.id, {
-        itemStatuses: nextItemStatuses,
-        // Kept in sync for anything still reading the old order-level fields.
-        fulfillmentStatus: target.key,
-        stageTimestamps: { ...(order.stageTimestamps || {}), [target.key]: now },
-        fulfilledAt: target.key === 'delivered' ? now : null,
-        _activityMessage: `All items marked ${target.label}`,
-    });
+    await onFulfill(order.id, partial
+        // Only some items moved — leave the order-level status to its slowest item.
+        ? {
+            itemStatuses: nextItemStatuses,
+            _activityMessage: `${items.map(it => baseItemName(it.name)).join(', ')} marked ${target.label}`,
+        }
+        : {
+            itemStatuses: nextItemStatuses,
+            // Kept in sync for anything still reading the old order-level fields.
+            fulfillmentStatus: target.key,
+            stageTimestamps: { ...(order.stageTimestamps || {}), [target.key]: now },
+            fulfilledAt: target.key === 'delivered' ? now : null,
+            _activityMessage: `All items marked ${target.label}`,
+        });
 
     if (!anyAdvancedToDelivered) return { skippedBackward };
     if (!order.email) {
@@ -2777,7 +2787,7 @@ const SOURCE_BADGE = {
     atshow: { label: 'At-Show', className: 'bg-cyan-600' },
 };
 
-const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onToggleCollapse, selected, onToggleSelect, unitOf }) => {
+const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onToggleCollapse, selected, onToggleSelect, unitOf, itemFilter }) => {
     const { toast } = useToast();
     const current = stageIndexOf(order);
     const delivered = isDelivered(order);
@@ -2905,7 +2915,7 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
                 ) : (
                     <div className="mt-3 border-t pt-2">
                         {items.map((it, i) => (
-                            <ItemStatusRow key={it.refId || i} order={order} item={it} onFulfill={onFulfill} showName={showName} unitOf={unitOf} />
+                            <ItemStatusRow key={it.refId || i} order={order} item={it} onFulfill={onFulfill} showName={showName} unitOf={unitOf} itemFilter={itemFilter} />
                         ))}
                     </div>
                 )}
@@ -2939,11 +2949,12 @@ const sortOrdersBy = (list, sortBy) => {
 // list (Pre-Show + At-Show together, tagged with a source badge) instead of
 // two separate sections, matching Robert's mockup of a single Supply Orders
 // table with "All Barns"/"All Items" filters and clickable status tabs.
-const useUnifiedOrderListControls = (orders) => {
+// itemFilter is an array of picked supply names ([] = All Items). It lives in
+// the parent so the Load Sheet can use the same picks.
+const useUnifiedOrderListControls = (orders, itemFilter) => {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [barnFilter, setBarnFilter] = useState('all');
-    const [itemFilter, setItemFilter] = useState('all');
     const [collapsedIds, setCollapsedIds] = useState(() => new Set());
 
     const barnOptions = useMemo(() => {
@@ -2957,7 +2968,7 @@ const useUnifiedOrderListControls = (orders) => {
     const itemOptions = useMemo(() => {
         const set = new Set();
         for (const o of orders) {
-            for (const it of (o.items || [])) if (it?.name) set.add(it.name);
+            for (const it of (o.items || [])) if (it?.name) set.add(baseItemName(it.name));
         }
         return [...set].sort();
     }, [orders]);
@@ -2966,7 +2977,7 @@ const useUnifiedOrderListControls = (orders) => {
         let list = orders.filter(o => orderMatchesSearch(o, search));
         if (statusFilter !== 'all') list = list.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === statusFilter);
         if (barnFilter !== 'all') list = list.filter(o => String(o.barnName || '').split(',').map(s => s.trim()).includes(barnFilter));
-        if (itemFilter !== 'all') list = list.filter(o => (o.items || []).some(it => it?.name === itemFilter));
+        if (itemFilter.length > 0) list = list.filter(o => (o.items || []).some(it => itemFilter.includes(baseItemName(it?.name))));
         return sortOrdersBy(list, 'newest');
     }, [orders, search, statusFilter, barnFilter, itemFilter]);
 
@@ -2976,7 +2987,7 @@ const useUnifiedOrderListControls = (orders) => {
         return next;
     });
 
-    return { search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, itemFilter, setItemFilter, barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse };
+    return { search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse };
 };
 
 const STATUS_TAB_LABELS = { new: 'Pending', received: 'Ready to Load', out_for_delivery: 'Out for Delivery', delivered: 'Delivered' };
@@ -3027,24 +3038,44 @@ const SupplyFilterBar = ({ search, onSearch, barnFilter, onBarnFilter, barnOptio
                 {barnOptions.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
             </SelectContent>
         </Select>
-        <Select value={itemFilter} onValueChange={onItemFilter}>
-            <SelectTrigger className="h-9 w-[9.5rem] text-sm"><SelectValue /></SelectTrigger>
-            <SelectContent>
-                <SelectItem value="all">All Items</SelectItem>
-                {itemOptions.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
-            </SelectContent>
-        </Select>
+        {/* Multi-select: tick Alfalfa + Grass + Mixed, leave Shavings off. */}
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="h-9 w-[11rem] justify-between text-sm font-normal">
+                    <span className="truncate">
+                        {itemFilter.length === 0 ? 'All Items' : itemFilter.length === 1 ? itemFilter[0] : `${itemFilter.length} items`}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 ml-1 shrink-0" />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[11rem]">
+                <DropdownMenuItem onSelect={() => onItemFilter([])}>
+                    <span className={cn(itemFilter.length === 0 && 'font-bold')}>All Items</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {itemOptions.map(i => (
+                    <DropdownMenuCheckboxItem
+                        key={i}
+                        checked={itemFilter.includes(i)}
+                        onSelect={(e) => e.preventDefault()}
+                        onCheckedChange={(on) => onItemFilter(on ? [...itemFilter, i] : itemFilter.filter(x => x !== i))}
+                    >
+                        {i}
+                    </DropdownMenuCheckboxItem>
+                ))}
+            </DropdownMenuContent>
+        </DropdownMenu>
     </div>
 );
 
 // One merged table-style list for Pre-Show + At-Show orders together — each
 // row carries its own Pre-Show/At-Show badge (see SOURCE_BADGE) instead of
 // living under two separate section headers.
-const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName, selectedIds, onToggleSelect, unitOf }) => {
+const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName, selectedIds, onToggleSelect, unitOf, itemFilter, setItemFilter }) => {
     const {
-        search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, itemFilter, setItemFilter,
+        search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter,
         barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse,
-    } = useUnifiedOrderListControls(orders);
+    } = useUnifiedOrderListControls(orders, itemFilter);
 
     if (orders.length === 0) {
         return (
@@ -3097,7 +3128,7 @@ const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, 
                             key={o.id} order={o} onFulfill={onFulfill} showName={showName}
                             collapsed={collapsedIds.has(o.id)} onToggleCollapse={() => toggleCollapse(o.id)}
                             selected={selectedIds?.has(o.id)} onToggleSelect={onToggleSelect}
-                            unitOf={unitOf}
+                            unitOf={unitOf} itemFilter={itemFilter}
                         />
                     ))}
                 </div>
@@ -3114,8 +3145,8 @@ const pluralize = (qty) => (qty === 1 ? '' : 's');
 // barn/stall, with a print button and a bulk "mark out for delivery."
 // Permanent side panel (not a popup) — Robert's mockup keeps this visible at
 // all times next to the order list, live-updating as orders are checked.
-const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, isBusy, showName }) => {
-    const { bySupply, byBarn, orderCount } = useMemo(() => buildLoadSheet(orders, supplies), [orders, supplies]);
+const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, isBusy, showName, itemFilter }) => {
+    const { bySupply, byBarn, orderCount, lines } = useMemo(() => buildLoadSheet(orders, supplies, itemFilter), [orders, supplies, itemFilter]);
     const bySupplyEntries = [...bySupply.entries()];
     const byBarnEntries = [...byBarn.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
@@ -3124,7 +3155,9 @@ const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelive
             <CardContent className="p-4 space-y-4">
                 <div>
                     <p className="font-bold text-sm flex items-center gap-2"><Truck className="h-4 w-4" /> Load Sheet</p>
-                    <p className="text-xs text-muted-foreground">Today's Delivery Run</p>
+                    <p className="text-xs text-muted-foreground">
+                        {itemFilter?.length ? `Only: ${itemFilter.join(', ')}` : "Today's Delivery Run"}
+                    </p>
                     <p className="text-xs text-muted-foreground mt-1">
                         {orders.length} order{pluralize(orders.length)} selected · {orderCount} still {orderCount === 1 ? 'has' : 'have'} supplies to load
                     </p>
@@ -3172,9 +3205,9 @@ const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelive
                                             </div>
                                             <div className="space-y-1">
                                                 {[...entry.stalls.entries()].map(([stallLabel, itemsMap]) => (
-                                                    <div key={stallLabel} className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                                                        <span className="shrink-0">{stallLabel}</span>
-                                                        <span className="text-right">{[...itemsMap.entries()].map(([n, { qty, unit }]) => `${qty} ${unit}${pluralize(qty)} ${n}`).join(', ')}</span>
+                                                    <div key={stallLabel} className="flex items-start justify-between gap-2 text-xs text-muted-foreground">
+                                                        <span className="min-w-0 break-words">{stallLabel}</span>
+                                                        <span className="text-right shrink-0">{[...itemsMap.entries()].map(([n, { qty, unit }]) => `${qty} ${unit}${pluralize(qty)} ${n}`).join(', ')}</span>
                                                     </div>
                                                 ))}
                                             </div>
@@ -3214,7 +3247,7 @@ const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelive
                     <Button
                         variant="outline"
                         disabled={orders.length === 0}
-                        onClick={() => printLoadSheet({ showName, bySupply, byBarn, orderCount })}
+                        onClick={() => printLoadSheet({ showName, bySupply, byBarn, orderCount, lines, itemFilter })}
                     >
                         <Printer className="h-4 w-4 mr-1.5" /> Preview / Print
                     </Button>
@@ -3762,6 +3795,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // orders are checked (shown in a permanent side panel, not a popup), and
     // how its breakdown is sorted (by barn/location or by supply type).
     const [loadSheetIds, setLoadSheetIds] = useState(() => new Set());
+    // Supplies picked in the Hay & Shavings item dropdown ([] = all) — drives the
+    // list highlight, the Load Sheet panel, the printed sheet and "Mark out".
+    const [supplyItemFilter, setSupplyItemFilter] = useState([]);
     const [loadSheetSort, setLoadSheetSort] = useState('barn');
     const [isMarkingOutForDelivery, setIsMarkingOutForDelivery] = useState(false);
     const toggleLoadSheetId = (id) => setLoadSheetIds(prev => {
@@ -4784,6 +4820,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                     order, targetKey: 'out_for_delivery',
                     onFulfill: updateBookingFieldsLocal, showName: show.project_name, toast,
                     allowBackward: false,
+                    onlyItemNames: supplyItemFilter,
                 });
                 skippedBackward += outcome?.skippedBackward || 0;
             }
@@ -6344,7 +6381,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 disabled={loadSheetOrders.length === 0}
                                 onClick={() => printLoadSheet({
                                     showName: show.project_name,
-                                    ...buildLoadSheet(loadSheetOrders, supplies),
+                                    ...buildLoadSheet(loadSheetOrders, supplies, supplyItemFilter),
+                                    itemFilter: supplyItemFilter,
                                 })}
                             >
                                 <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Load Sheet
@@ -6388,8 +6426,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 selectedIds={loadSheetIds}
                                 onToggleSelect={toggleLoadSheetId}
                                 unitOf={supplyUnitOf}
+                                itemFilter={supplyItemFilter}
+                                setItemFilter={setSupplyItemFilter}
                             />
                             <LoadSheetPanel
+                                itemFilter={supplyItemFilter}
                                 orders={loadSheetOrders}
                                 supplies={supplies}
                                 sortBy={loadSheetSort}
