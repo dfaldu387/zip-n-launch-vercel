@@ -242,13 +242,83 @@ const COLUMNS = [
     { key: 'paidAmount', label: 'Paid', align: 'right' },
 ];
 
+const LOG_PREVIEW_COUNT = 5;
+
+// Same customer = same email AND same exhibitor name ('' when no email).
+const customerKey = (row) => {
+    const email = (row.email || '').trim().toLowerCase();
+    return email ? `${email}|${(row.name || '').trim().toLowerCase()}` : '';
+};
+
+// Robert: "each order this customer makes would have its own supply fulfillment
+// box... we don't want to start mixing their orders together." One box per
+// order (pre-order or at-show), titled with its type, order number and date.
+// Read-only here — statuses are changed on the Hay & Shavings tab.
+const SupplyFulfillmentBox = ({ row, isCurrent, showTitle }) => {
+    const atShow = row.booking.orderType === 'live-supply';
+    return (
+        <div className={cn('rounded-md border overflow-hidden', isCurrent && showTitle && 'border-primary/40')}>
+            {showTitle && (
+                <div className="flex items-center gap-2 flex-wrap px-2 py-1 bg-muted/40 border-b text-[11px]">
+                    <Badge variant="outline" className={cn('text-[9px] font-normal', atShow ? 'border-amber-400 text-amber-600' : 'border-sky-400 text-sky-600')}>
+                        {atShow ? 'At-show order' : 'Pre-order'}
+                    </Badge>
+                    <span className="font-mono text-muted-foreground">#{row.ref}</span>
+                    {row.booking.createdAt && <span className="text-muted-foreground">{fmtDateTime(row.booking.createdAt)}</span>}
+                    {isCurrent && <span className="ml-auto text-[10px] font-medium text-primary">This booking</span>}
+                </div>
+            )}
+            <table className="w-full text-xs">
+                <thead>
+                    <tr className="bg-muted/50 text-muted-foreground">
+                        <th className="px-2 py-1 text-left font-medium">Item</th>
+                        <th className="px-2 py-1 text-center font-medium">Qty</th>
+                        <th className="px-2 py-1 text-left font-medium">Status</th>
+                        <th className="px-2 py-1 text-left font-medium">Last Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {row.supplies.map((s, i) => (
+                        <tr key={i} className="border-t">
+                            <td className="px-2 py-1">
+                                <span>{s.name}</span>
+                                {!showTitle && (
+                                    atShow
+                                        ? <Badge variant="outline" className="ml-2 text-[9px] font-normal border-amber-400 text-amber-600">At show</Badge>
+                                        : <Badge variant="outline" className="ml-2 text-[9px] font-normal border-sky-400 text-sky-600">Pre-order</Badge>
+                                )}
+                            </td>
+                            <td className="px-2 py-1 text-center tabular-nums">{s.qty}</td>
+                            <td className="px-2 py-1">
+                                <Badge className={cn(s.stageColor, 'text-white text-[10px]')}>{s.stageLabel}</Badge>
+                            </td>
+                            <td className="px-2 py-1 text-muted-foreground">
+                                {s.lastUpdated ? fmtDateTime(s.lastUpdated) : '—'}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
 // One row (collapsed + expandable detail) — its own component so Edit/Delete
 // can hold local draft/confirm state without re-rendering the whole table.
 const MasterListRow = ({
-    r, isOpen, onToggleExpand,
+    r, isOpen, onToggleExpand, supplyOrders = [],
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
 }) => {
     const booking = r.booking;
+    // This booking's own supplies first guaranteed present; other orders by the
+    // same customer follow (pre-orders, then at-show, oldest first).
+    // Activity Log: newest first; bookings from before the log existed still get a
+    // sensible first line, synthesized from when they were booked.
+    const [logExpanded, setLogExpanded] = useState(false);
+    const logEntries = booking.activityLog?.length
+        ? [...booking.activityLog].reverse()
+        : (booking.createdAt ? [{ at: booking.createdAt, message: 'Booking created' }] : []);
+    const fulfillmentOrders = supplyOrders.some(o => o.booking.id === booking.id) ? supplyOrders : [r, ...supplyOrders];
     const partial = r.assignedCount > 0 && r.assignedCount < r.stalls;
     const extraStalls = Math.max(r.assignedCount - r.horses, 0);
     const balanceDue = Math.max(0, r.amount - r.paidAmount);
@@ -803,39 +873,17 @@ const MasterListRow = ({
                                 {r.supplies.length > 0 && (
                                     <div className="rounded-md border bg-background/60 p-2.5">
                                         <p className="font-semibold text-foreground mb-1">Supply Fulfillment</p>
-                                        <div className="rounded-md border overflow-hidden">
-                                            <table className="w-full text-xs">
-                                                <thead>
-                                                    <tr className="bg-muted/50 text-muted-foreground">
-                                                        <th className="px-2 py-1 text-left font-medium">Item</th>
-                                                        <th className="px-2 py-1 text-center font-medium">Qty</th>
-                                                        <th className="px-2 py-1 text-left font-medium">Status</th>
-                                                        <th className="px-2 py-1 text-left font-medium">Last Updated</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {r.supplies.map((s, i) => (
-                                                        <tr key={i} className="border-t">
-                                                            <td className="px-2 py-1">
-                                                                <span>{s.name}</span>
-                                                                {/* Robert: tag each line as pre-ordered or ordered at the show. */}
-                                                                {r.booking.orderType === 'live-supply' ? (
-                                                                    <Badge variant="outline" className="ml-2 text-[9px] font-normal border-amber-400 text-amber-600">At show</Badge>
-                                                                ) : (
-                                                                    <Badge variant="outline" className="ml-2 text-[9px] font-normal border-sky-400 text-sky-600">Pre-order</Badge>
-                                                                )}
-                                                            </td>
-                                                            <td className="px-2 py-1 text-center tabular-nums">{s.qty}</td>
-                                                            <td className="px-2 py-1">
-                                                                <Badge className={cn(s.stageColor, 'text-white text-[10px]')}>{s.stageLabel}</Badge>
-                                                            </td>
-                                                            <td className="px-2 py-1 text-muted-foreground">
-                                                                {s.lastUpdated ? fmtDateTime(s.lastUpdated) : '—'}
-                                                            </td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
+                                        {/* One box per order by this customer (same email): this booking's own
+                                            pre-order plus any other pre-order / at-show orders, never merged. */}
+                                        <div className="space-y-2">
+                                            {fulfillmentOrders.map(o => (
+                                                <SupplyFulfillmentBox
+                                                    key={o.booking.id}
+                                                    row={o}
+                                                    isCurrent={o.booking.id === booking.id}
+                                                    showTitle
+                                                />
+                                            ))}
                                         </div>
                                     </div>
                                 )}
@@ -845,18 +893,29 @@ const MasterListRow = ({
                                 <div className="rounded-md border bg-background/60 p-2.5">
                                     <p className="font-semibold text-foreground mb-1 flex items-center gap-1.5">
                                         <History className="h-3 w-3 text-muted-foreground" /> Activity Log
+                                        <span className="text-[10px] font-normal text-muted-foreground">({logEntries.length})</span>
                                     </p>
-                                    <ul className="space-y-0.5">
-                                        {(booking.activityLog?.length
-                                            ? [...booking.activityLog].reverse()
-                                            : (booking.createdAt ? [{ at: booking.createdAt, message: 'Booking created' }] : [])
-                                        ).map((entry, i) => (
+                                    {/* Newest 5 by default; the rest sit behind a button and scroll
+                                        inside the box so a long history can't stretch the row. */}
+                                    <ul className={cn('space-y-0.5', logExpanded && 'max-h-72 overflow-y-auto pr-1')}>
+                                        {(logExpanded ? logEntries : logEntries.slice(0, LOG_PREVIEW_COUNT)).map((entry, i) => (
                                             <li key={i} className="flex items-baseline gap-2">
                                                 <span className="text-[10px] text-muted-foreground shrink-0 w-[92px]">{fmtDateTime(entry.at)}</span>
                                                 <span>{entry.message}</span>
                                             </li>
                                         ))}
                                     </ul>
+                                    {logEntries.length > LOG_PREVIEW_COUNT && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setLogExpanded(v => !v)}
+                                            className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                                        >
+                                            {logExpanded
+                                                ? <><ChevronDown className="h-3 w-3 rotate-180" /> Show less</>
+                                                : <><ChevronDown className="h-3 w-3" /> Show all {logEntries.length} entries</>}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -895,6 +954,29 @@ const MasterListPanel = ({
         () => (bookings || []).filter(Boolean).map(b => buildRow(b, barns, extraStallFees, rvWithSpots)),
         [bookings, barns, extraStallFees, rvWithSpots]
     );
+
+    // Every order with supplies, grouped by customer (email + exhibitor name), so
+    // an open row shows a separate Supply Fulfillment box for each order THAT
+    // customer made. Name is part of the key because one email (a trainer's) can
+    // book for several exhibitors — their orders must never mix.
+    // Cancelled orders are left out; no email = the booking stands alone.
+    const supplyOrdersByEmail = useMemo(() => {
+        const map = new Map();
+        for (const row of rows) {
+            const key = customerKey(row);
+            if (!key || row.supplies.length === 0 || row.status === 'cancelled') continue;
+            if (!map.has(key)) map.set(key, []);
+            map.get(key).push(row);
+        }
+        for (const list of map.values()) {
+            list.sort((a, b) => {
+                const typeA = a.booking.orderType === 'live-supply' ? 1 : 0;
+                const typeB = b.booking.orderType === 'live-supply' ? 1 : 0;
+                return typeA - typeB || String(a.booking.createdAt || '').localeCompare(String(b.booking.createdAt || ''));
+            });
+        }
+        return map;
+    }, [rows]);
 
     const trainers = useMemo(() => {
         const set = new Set(rows.map(r => r.trainer).filter(Boolean));
@@ -1266,6 +1348,7 @@ const MasterListPanel = ({
                                     r={r}
                                     isOpen={expandedIds.has(r.booking.id)}
                                     onToggleExpand={() => toggleExpanded(r.booking.id)}
+                                    supplyOrders={supplyOrdersByEmail.get(customerKey(r)) || []}
                                     onUpdateField={onUpdateField}
                                     onRecordPayment={onRecordPayment}
                                     onStatusChange={onStatusChange}
