@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDeliveryToken, parseDeliveryToken, buildDeliveryUrl, parseItemsParam, newDeliverySecret } from './deliveryLink';
+import { buildDeliveryToken, parseDeliveryToken, buildDeliveryUrl, parseItemsParam, newDeliverySecret, buildSheetUrl, parseSheetToken } from './deliveryLink';
 
 describe('delivery QR link', () => {
     const showId = '21bb29b5-9e3c-4c0f-8508-0e0db7b015a6';
@@ -20,5 +20,16 @@ describe('delivery QR link', () => {
         const url = buildDeliveryUrl({ origin: 'https://x.test', showId, bookingId, secret: 'abc', itemRefIds: ['hay-alfalfa', 'shav'] });
         expect(url.startsWith('https://x.test/delivery/')).toBe(true);
         expect(parseItemsParam(new URL(url).searchParams.get('items'))).toEqual(['hay-alfalfa', 'shav']);
+    });
+});
+
+describe('delivery sheet link', () => {
+    it('round-trips show id and secret', () => {
+        const url = buildSheetUrl({ origin: 'https://x.test', showId: 'show-1', secret: 'abc123' });
+        const token = url.split('/delivery-sheet/')[1];
+        expect(parseSheetToken(token)).toEqual({ showId: 'show-1', secret: 'abc123' });
+    });
+    it('rejects junk', () => {
+        expect(parseSheetToken('%%%')).toBeNull();
     });
 });

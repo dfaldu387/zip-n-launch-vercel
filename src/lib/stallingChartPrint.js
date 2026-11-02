@@ -29,7 +29,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
 ));
 
-const rvCols = (area) => Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
+const rvCols = (area) => Number(area.layoutPerRow) > 0 ? Number(area.layoutPerRow) : Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
 
 // Hex + 2-digit alpha, so a faded (muted) stall still hints at its owner's colour —
 // same rule the on-screen board uses.
@@ -109,7 +109,8 @@ function buildStallingChartHtml({
             return `<div class="cell room">${label}</div>`;
         }
         const owner = unit.bookingId ? bookingById[unit.bookingId] : null;
-        if (!owner) return `<div class="cell free"><span class="num">${esc(unit.number)}</span></div>`;
+        const amps = unit.amps ? `<span class="num2">${esc(unit.amps)}A</span>` : '';
+        if (!owner) return `<div class="cell free"><span class="num">${esc(unit.number)}</span>${amps}</div>`;
 
         const base = colorByBooking[owner.id] || '#2563eb';
         const info = useLayer ? layerCell(layerIds, { unit, index }) : { lines: [], num: '', tone: 'booked' };
@@ -133,10 +134,11 @@ function buildStallingChartHtml({
             ${subExhibitor}
             ${extraLines}
             ${sub}
+            ${amps}
         </div>`;
     };
 
-    const containerBlock = (name, cols, units, rowLabels = [], colLabels = [], useLayer = false, hideName = false) => {
+    const containerBlock = (name, cols, units, rowLabels = [], colLabels = [], useLayer = false, hideName = false, roadsAfter = []) => {
         const total = units.filter(u => (u.type || 'stall') === 'stall').length;
         const assigned = units.filter(u => (u.type || 'stall') === 'stall' && u.bookingId).length;
         const rowCount = Math.ceil(units.length / cols);
@@ -181,6 +183,10 @@ function buildStallingChartHtml({
                 }
                 cells += cellHtml(unit, { outline, useLayer });
             }
+            // RV areas: a roadway strip between rows (set in the RV editor).
+            if (ri < rowCount - 1 && roadsAfter.includes(ri)) {
+                cells += `<div class="hcell"></div><div class="road" style="grid-column:span ${cols}">Roadway</div>`;
+            }
         }
         return `<section class="barn">
             ${hideName ? '' : `<h2>${esc(name)} <span class="meta">${assigned}/${total} assigned</span></h2>`}
@@ -208,7 +214,7 @@ function buildStallingChartHtml({
     const rvMat = ensureAllRvSpots(rvAreas);
     const rvBlocks = rvMat
         .filter(a => (a.spots || []).length > 0)
-        .map(a => containerBlock(`${a.name} (RV / camping)`, rvCols(a), a.spots, a.rowLabels || [], a.colLabels || [], false))
+        .map(a => containerBlock(`${a.name} (RV / camping)`, rvCols(a), a.spots, a.rowLabels || [], a.colLabels || [], false, false, a.layoutRoadsAfter || []))
         .join('');
 
     // A simple legend of who owns a stall or an RV spot (name → color).
@@ -245,6 +251,7 @@ function buildStallingChartHtml({
         .hcell.corner{background:transparent}
         .hcell.rlabel{min-height:58px}
         .hcell.rlabel.thin{min-height:0}
+        .road{height:16px;align-self:center;background:#fde68a;border:1px solid #fbbf24;border-radius:3px;text-align:center;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#92400e;line-height:14px}
         .aisle{height:16px;align-self:center;background:#e2e8f0;border:1px dashed #cbd5e1;border-radius:3px}
         .cell{position:relative;min-height:58px;border:1px solid #cbd5e1;border-radius:5px;padding:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden}
         .cell .num{font-size:13px;font-family:ui-monospace,monospace;color:#475569;font-weight:700}

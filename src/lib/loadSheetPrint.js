@@ -2,7 +2,7 @@
 // load sheet... it tells us what we need to load and how many bags of each
 // supply." Mirrors the window.open + autoPrint pattern in stallingChartPrint.js.
 import QRCode from 'qrcode';
-import { buildDeliveryUrl } from '@/lib/deliveryLink';
+import { buildDeliveryUrl, buildSheetUrl } from '@/lib/deliveryLink';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
@@ -10,7 +10,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => (
 
 const plural = (qty) => (qty === 1 ? '' : 's');
 
-function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 0, lines = [], itemFilter = [] }) {
+function buildLoadSheetHtml({ showName = 'Show', sheetQr = '', sheetUrl = '', bySupply, byBarn, orderCount = 0, lines = [], itemFilter = [] }) {
     const generatedAt = new Date().toLocaleString();
     const filterNote = itemFilter.length ? ` &middot; Only: ${itemFilter.map(esc).join(', ')}` : '';
 
@@ -77,6 +77,8 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
         .line .info{min-width:0;flex:1;}
         .line .qr{text-align:center;flex-shrink:0;}
         .line .qr img{width:112px;height:112px;display:block;}
+        .sheetqr{display:flex;align-items:center;gap:14px;border:2px solid #111;border-radius:8px;padding:10px;margin-bottom:16px;font-size:12px;}
+        .sheetqr img{width:130px;height:130px;display:block;}
         .line .qr span{font-size:9px;color:#555;}
         .line .sub{color:#555;font-size:12px;margin-left:8px;}
         .line .where{color:#444;margin-top:2px;}
@@ -84,6 +86,7 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
         @media print{ body{padding:0} }
     </style>
     </head><body>
+        ${sheetQr ? `<div class="sheetqr"><a href="${esc(sheetUrl)}" target="_blank" rel="noopener"><img src="${sheetQr}" alt="Scan to open the delivery list" /></a><div><strong>Delivery list for the whole show</strong><br>Scan to see every order and tap Delivered. Each order below also has its own QR.</div></div>` : ''}
         <h1>Load Sheet — ${esc(showName)}</h1>
         <p class="meta">Generated ${esc(generatedAt)} &middot; ${orderCount} order${plural(orderCount)} with supplies to load${filterNote}</p>
 
@@ -102,8 +105,14 @@ function buildLoadSheetHtml({ showName = 'Show', bySupply, byBarn, orderCount = 
 // Adds a QR data-URL to every line that has a delivery secret + a show id.
 // `data.showId` is the show the QR link points back to.
 async function withQrCodes(data) {
-    if (!data.showId || !data.lines?.length) return data;
     const origin = window.location.origin;
+    let sheetQr = '';
+    let sheetUrl = '';
+    if (data.showId && data.showSecret) {
+        sheetUrl = buildSheetUrl({ origin, showId: data.showId, secret: data.showSecret });
+        sheetQr = await QRCode.toDataURL(sheetUrl, { margin: 1, width: 400, errorCorrectionLevel: 'L' });
+    }
+    if (!data.showId || !data.lines?.length) return { ...data, sheetQr, sheetUrl };
     const lines = await Promise.all(data.lines.map(async (l) => {
         if (!l.deliverySecret || !l.id) return l;
         const url = buildDeliveryUrl({
@@ -112,7 +121,7 @@ async function withQrCodes(data) {
         const qr = await QRCode.toDataURL(url, { margin: 1, width: 360, errorCorrectionLevel: 'L' });
         return { ...l, qr, qrUrl: url };
     }));
-    return { ...data, lines };
+    return { ...data, lines, sheetQr, sheetUrl };
 }
 
 // `win` lets the caller open the window first (inside the click) and print into

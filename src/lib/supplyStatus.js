@@ -212,3 +212,35 @@ export const buildLoadSheet = (orders, supplies, itemNames = null) => {
 
     return { bySupply, byBarn, orderCount, lines };
 };
+
+// Robert 11-01: "how many of each supply is sold to each barn" — one row per
+// barn + supply with what was sold, what has been delivered and what is still to
+// deliver. An order's barn comes from its assigned stalls; an order spread over
+// two barns keeps its own combined label ("Barn A, Barn B") rather than being
+// split by guesswork. Orders with no stall (at-show reorders) are 'Unassigned'.
+export const buildSupplyByBarn = (orders, supplies) => {
+    const unitOf = unitLookup(supplies);
+    const rows = new Map(); // `${barn}||${supply}` -> row
+
+    for (const order of orders || []) {
+        const barn = order.barnName || 'Unassigned';
+        for (const item of (order.items || [])) {
+            if (item?.type !== 'supply') continue;
+            const qty = Number(item.qty) || 0;
+            if (!qty) continue;
+            const name = baseItemName(item.name);
+            const key = `${barn}||${name}`;
+            const row = rows.get(key) || {
+                barn, name, unit: unitOf.get(item.refId) || unitOf.get(name) || 'unit',
+                sold: 0, delivered: 0, toDeliver: 0, revenue: 0,
+            };
+            row.sold += qty;
+            row.revenue += Number(item.amount) || 0;
+            if (getItemStatus(order, item.refId).status === 'delivered') row.delivered += qty;
+            else row.toDeliver += qty;
+            rows.set(key, row);
+        }
+    }
+
+    return [...rows.values()].sort((a, b) => a.barn.localeCompare(b.barn) || a.name.localeCompare(b.name));
+};

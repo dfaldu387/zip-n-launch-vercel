@@ -49,7 +49,7 @@ const PALETTE = [
 // to `stallGroup` being empty which means "fall back to the trainer name".
 const NO_GROUP = '__none__';
 
-const rvCols = (area) => Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
+const rvCols = (area) => Number(area.layoutPerRow) > 0 ? Number(area.layoutPerRow) : Math.min(Math.max(1, Number(area.spotCount) || 1), 10);
 
 // Which group a booking belongs to: an explicit manual group wins, otherwise the
 // trainer / ranch name it booked under. A booking with neither returns '' and falls
@@ -305,6 +305,10 @@ const UnitCell = ({
             <span className={cn('px-0.5 text-center leading-tight truncate max-w-full', showGroupTag && 'mt-1.5')}>
                 {cellText?.lines?.length ? cellText.lines[0].text : (cellText?.num ?? unit.number)}
             </span>
+            {/* RV power rating, set per spot in the RV editor. */}
+            {unit.amps && size !== 'sm' && (
+                <span className={cn(S.sub, 'opacity-80 leading-none')}>{unit.amps}A</span>
+            )}
             {/* Hierarchy for the Trainer/Group layer: group name above (the main line),
                 exhibitor here, stall number last — skipped in the smallest box size. */}
             {cellText?.lines?.[0]?.subExhibitor && size !== 'sm' && (
@@ -454,7 +458,7 @@ const AssignBoard = ({
             return {
                 label: 'RV / camping', unitWord: 'spot', Icon: Car,
                 containers: rvWithSpots.map(a => ({
-                    id: a.id, name: a.name, cols: rvCols(a), units: a.spots || [],
+                    id: a.id, name: a.name, cols: rvCols(a), units: a.spots || [], roadsAfter: a.layoutRoadsAfter || [],
                 })),
                 requested: getRequestedRvCount,
                 assignedFor: (b) => getAssignedRvSpotsForBooking(b, rvWithSpots),
@@ -1727,7 +1731,8 @@ const ContainerChart = ({
                             );
                         }
                         return (
-                            <div key={ri} className="flex gap-0 items-stretch">
+                            <React.Fragment key={ri}>
+                            <div className="flex gap-0 items-stretch">
                                 {/* Row label (A,B,C… default, click to rename) — stalls only */}
                                 {isStalls && (
                                     <LabelInput
@@ -1772,6 +1777,14 @@ const ContainerChart = ({
                                     );
                                 })}
                             </div>
+                            {/* RV areas: a roadway strip between rows (set in the RV editor). */}
+                            {!isStalls && ri < rowCount - 1 && (container.roadsAfter || []).includes(ri) && (
+                                <div className="flex items-center">
+                                    <div className="my-1 h-4 rounded-sm bg-amber-200/70 border border-amber-400/60 text-[9px] font-semibold uppercase tracking-wider text-amber-800 text-center leading-[14px]"
+                                        style={{ width: c * S.px - (c - 1) }}>Roadway</div>
+                                </div>
+                            )}
+                            </React.Fragment>
                         );
                     })}
                 </div>

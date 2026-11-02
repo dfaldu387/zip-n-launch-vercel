@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeItemStageUpdates, stageIndexOf, isDelivered, buildLoadSheet } from './supplyStatus';
+import { computeItemStageUpdates, stageIndexOf, isDelivered, buildLoadSheet, buildSupplyByBarn } from './supplyStatus';
 
 // Regression tests for the bulk Load Sheet "Mark as Out for Delivery" bug: an
 // order with one item already Delivered and a sibling item still behind still
@@ -116,5 +116,27 @@ describe('buildLoadSheet — item filter', () => {
         const { nextItemStatuses } = computeItemStageUpdates(order, 'out_for_delivery', { onlyItemNames: ['Hay (Alfalfa)'] });
         expect(nextItemStatuses.a.status).toBe('out_for_delivery');
         expect(nextItemStatuses.s).toBeUndefined();
+    });
+});
+
+describe('buildSupplyByBarn', () => {
+    const supplies = [{ id: 'shav', name: 'Shavings', unit: 'bag' }];
+    const order = (id, barnName, qty, status) => ({
+        id, barnName,
+        items: [{ type: 'supply', refId: 'shav', name: 'Shavings', qty, amount: qty * 10 }],
+        itemStatuses: status ? { shav: { status } } : {},
+    });
+
+    it('splits sold / delivered / to deliver per barn and supply', () => {
+        const rows = buildSupplyByBarn([
+            order('a', 'Barn A', 4, 'delivered'),
+            order('b', 'Barn A', 2, null),
+            order('c', 'Barn B', 3, null),
+            order('d', '', 1, null),
+        ], supplies);
+        const a = rows.find(r => r.barn === 'Barn A');
+        expect(a).toMatchObject({ sold: 6, delivered: 4, toDeliver: 2, revenue: 60, unit: 'bag' });
+        expect(rows.find(r => r.barn === 'Barn B').toDeliver).toBe(3);
+        expect(rows.find(r => r.barn === 'Unassigned').sold).toBe(1);
     });
 });

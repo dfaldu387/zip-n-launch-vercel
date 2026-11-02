@@ -62,6 +62,7 @@ const DeliveryLinePage = () => {
     const [busyStatus, setBusyStatus] = useState('');
     const [actionError, setActionError] = useState('');
     const [justDone, setJustDone] = useState('');
+    const [emailMsg, setEmailMsg] = useState('');
     const [photoCount, setPhotoCount] = useState(0);
     const [photoBusy, setPhotoBusy] = useState(false);
     const [photoMsg, setPhotoMsg] = useState('');
@@ -141,8 +142,31 @@ const DeliveryLinePage = () => {
             });
             if (error) throw error;
             try { localStorage.setItem(NAME_KEY, driver.trim()); } catch { /* private mode */ }
+
+            // Robert 11-01: tell the customer. Only lines that just reached Delivered
+            // (a repeat scan changes nothing, so it sends nothing). A failed email
+            // never undoes the delivery; the page just says so.
+            const newlyDelivered = status === 'delivered'
+                ? (data?.items || []).filter(after => {
+                    const before = items.find(it => it.refId === after.refId);
+                    return after.status === 'delivered' && before && before.status !== 'delivered';
+                }).map(it => it.refId)
+                : [];
             setLine(data);
             setJustDone(status);
+            setEmailMsg('');
+            if (newlyDelivered.length > 0) {
+                const { error: mailError } = await supabase.functions.invoke('send-supply-order-email', {
+                    body: {
+                        kind: 'delivered',
+                        bookingId: link.bookingId,
+                        deliverySecret: link.secret,
+                        itemRefIds: newlyDelivered,
+                    },
+                });
+                // "No email on file" is normal for some orders, so it is not an error here.
+                setEmailMsg(mailError ? 'Marked delivered. The customer email could not be sent.' : 'Customer was emailed.');
+            }
         } catch (err) {
             setActionError(err?.message || 'Could not save. Please try again.');
         } finally {
@@ -236,6 +260,10 @@ const DeliveryLinePage = () => {
                                 {photoMsg && photoMsg !== 'Photo saved.' && <p className="text-sm text-rose-600 text-center">{photoMsg}</p>}
                             </CardContent>
                         </Card>
+
+                        {emailMsg && (
+                            <p className={cn('text-sm text-center', emailMsg.includes('could not') ? 'text-amber-700' : 'text-emerald-700')}>{emailMsg}</p>
+                        )}
 
                         {allDelivered ? (
                             <Card className="border-emerald-300">

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
     ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers,
     assignRvSpotToBooking,
+    setRvSpotType, setRvSpotAmps, copyRvLayout,
 } from './rvAssignment';
 import { sequenceFrom } from './numberSequence';
 
@@ -75,5 +76,54 @@ describe('custom RV numbers', () => {
 
     it('finds duplicates ignoring case', () => {
         expect([...duplicateRvNumbers([{ number: 'A1' }, { number: 'a1' }, { number: 'B2' }])]).toEqual(['a1']);
+    });
+});
+
+
+describe('setRvSpotType', () => {
+    const area = { id: 'a1', spotCount: 3, spots: [] };
+    it('blocks a free spot and clears it again', () => {
+        const blocked = setRvSpotType(area, 'a1::spot::2', 'blocked');
+        expect(blocked.find(s => s.id === 'a1::spot::2').type).toBe('blocked');
+        const back = setRvSpotType({ ...area, spots: blocked }, 'a1::spot::2', null);
+        expect(back.find(s => s.id === 'a1::spot::2').type).toBeUndefined();
+    });
+    it('refuses a booked spot', () => {
+        const booked = { ...area, spots: assignRvSpotToBooking([ensureRvSpots(area)], 'a1::spot::1', 'b1')[0].spots };
+        expect(setRvSpotType(booked, 'a1::spot::1', 'blocked')).toBeNull();
+    });
+});
+
+describe('setRvSpotAmps', () => {
+    it('sets and clears amps on a spot', () => {
+        const area = { id: 'a', spotCount: 3 };
+        const id = ensureRvSpots(area).spots[0].id;
+        const on = setRvSpotAmps(area, id, '50');
+        expect(on[0].amps).toBe('50');
+        const off = setRvSpotAmps({ ...area, spots: on }, id, null);
+        expect(off[0].amps).toBeUndefined();
+    });
+});
+
+describe('copyRvLayout', () => {
+    it('copies row width, roadways, blocked spots and amps by position', () => {
+        let src = { id: 'a', spotCount: 4, layoutPerRow: 2, layoutRoadsAfter: [0] };
+        const ids = ensureRvSpots(src).spots.map(s => s.id);
+        src = { ...src, spots: setRvSpotType(src, ids[1], 'blocked') };
+        src = { ...src, spots: setRvSpotAmps(src, ids[2], '50') };
+        const out = copyRvLayout(src, { id: 'b', spotCount: 4 });
+        expect(out.layoutPerRow).toBe(2);
+        expect(out.layoutRoadsAfter).toEqual([0]);
+        expect(out.spots[1].type).toBe('blocked');
+        expect(out.spots[2].amps).toBe('50');
+        expect(out.spots[0].type).toBeUndefined();
+    });
+    it('never blocks a booked spot', () => {
+        const src = { id: 'a', spotCount: 2 };
+        const blocked = setRvSpotType(src, ensureRvSpots(src).spots[0].id, 'blocked');
+        const tgtSpots = ensureRvSpots({ id: 'b', spotCount: 2 }).spots.map((s, i) => i === 0 ? { ...s, bookingId: 'bk' } : s);
+        const out = copyRvLayout({ ...src, spots: blocked }, { id: 'b', spotCount: 2, spots: tgtSpots });
+        expect(out.spots[0].type).toBeUndefined();
+        expect(out.spots[0].bookingId).toBe('bk');
     });
 });

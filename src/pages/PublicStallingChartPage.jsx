@@ -24,7 +24,7 @@ const PALETTE = [
 
 const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack' };
 
-const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, Icon = Home }) => {
+const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, roadsAfter = [], Icon = Home }) => {
     const cols = gridCols({ layoutCols, stallCount });
     const rowCount = Math.ceil(units.length / cols);
     const { rowLabels: defRows, colLabels: defCols } = computeGridLabels(units, cols);
@@ -74,9 +74,17 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
                                                 <span className="text-[8px] opacity-90 leading-tight truncate max-w-full">{unit.exhibitor}</span>
                                             )}
                                             <span className="text-[8px] opacity-80 leading-tight">{unit.number}</span>
+                                            {unit.amps && <span className="text-[8px] opacity-80 leading-tight">{unit.amps}A</span>}
                                         </div>
                                     );
                                 })}
+                                {/* RV areas: a roadway strip between rows. */}
+                                {ri < rowCount - 1 && roadsAfter.includes(ri) && (
+                                    <div style={{ gridColumn: '1 / -1' }}
+                                        className="h-4 rounded-sm bg-amber-200/70 border border-amber-400/60 text-[9px] font-semibold uppercase tracking-wider text-amber-800 text-center leading-[14px]">
+                                        Roadway
+                                    </div>
+                                )}
                             </React.Fragment>
                         ))}
                     </div>
@@ -212,8 +220,9 @@ const PublicStallingChartPage = () => {
                         <UnitGrid
                             name={area.name}
                             units={area.spots || []}
-                            layoutCols={area.spotCount}
+                            layoutCols={area.layoutPerRow || Math.min(Math.max(1, area.spotCount || 1), 10)}
                             stallCount={area.spotCount}
+                            roadsAfter={area.roadsAfter || []}
                             rowLabels={area.rowLabels}
                             colLabels={area.colLabels}
                             colorByGroup={colorByGroup}

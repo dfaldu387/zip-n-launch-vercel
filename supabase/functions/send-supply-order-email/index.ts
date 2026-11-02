@@ -26,6 +26,9 @@ interface SupplyOrderEmailRequest {
   // (one item marked delivered). Always escaped, never used as the recipient.
   items?: OrderItem[];
   total?: number;
+  // QR delivery page (no login): the QR's secret plus the supply refIds just delivered.
+  deliverySecret?: string;
+  itemRefIds?: string[];
 }
 
 interface EmailContent {
@@ -167,7 +170,17 @@ const handler = async (req: Request): Promise<Response> => {
 
     // ── Who is asking ───────────────────────────────────────────────────────
     const isDelivered = kind === "delivered";
-    if (isDelivered) {
+    // A driver who scanned the Load Sheet QR has no login. Their credential is the
+    // QR's own secret (project_data.deliverySecrets[bookingId]), the same one the
+    // delivery page's SQL functions check. With it they can only trigger the notice
+    // for supply lines already saved as Delivered on that order.
+    const providedSecret = String(payload.deliverySecret ?? "");
+    const savedSecret = String(project.project_data?.deliverySecrets?.[bookingId] ?? "");
+    const viaQr = isDelivered && providedSecret !== "" && savedSecret !== "" && providedSecret === savedSecret;
+
+    if (isDelivered && viaQr) {
+      if (booking.status === "cancelled") return refuse("Order not found", 404);
+    } else if (isDelivered) {
       // Staff only: signed in AND able to manage the show this order belongs to
       // (same rule as send-booking-confirmed-email).
       const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -202,13 +215,30 @@ const handler = async (req: Request): Promise<Response> => {
     );
     const savedTotal = Number(booking.totalAmount ?? booking.amount ?? 0);
 
+    // QR path: the caller names lines by refId only; names and prices come from the
+    // saved order, and a line is included only if it is saved as Delivered.
+    let qrItems: OrderItem[] = [];
+    if (viaQr) {
+      const wanted: string[] = Array.isArray(payload.itemRefIds) ? payload.itemRefIds.map(String) : [];
+      qrItems = (Array.isArray(booking.items) ? booking.items : [])
+        .filter((it: any) =>
+          it.type === "supply" &&
+          wanted.includes(String(it.refId)) &&
+          booking.itemStatuses?.[it.refId]?.status === "delivered"
+        )
+        .map((it: any) => ({ name: it.name, amount: it.amount }));
+      if (qrItems.length === 0) return refuse("Nothing delivered to report", 400);
+    }
+
     const content: EmailContent = {
       customerName: booking.exhibitorName || "there",
       showName: project.project_name || "the show",
       orderRef: String(bookingId).slice(0, 8).toUpperCase(),
       // Staff can send a delivery notice for just the item(s) they marked.
-      items: isDelivered && Array.isArray(payload.items) ? payload.items : savedItems,
-      total: isDelivered && payload.total !== undefined ? Number(payload.total) : savedTotal,
+      items: viaQr ? qrItems : isDelivered && Array.isArray(payload.items) ? payload.items : savedItems,
+      total: viaQr
+        ? qrItems.reduce((s, it) => s + (Number(it.amount) || 0), 0)
+        : isDelivered && payload.total !== undefined ? Number(payload.total) : savedTotal,
       stableWith: booking.stableWith || booking.trainerName || "",
       stallNumber: booking.stallNumber || "",
     };

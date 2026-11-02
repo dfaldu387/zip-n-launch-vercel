@@ -60,12 +60,13 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
-import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers } from '@/lib/rvAssignment';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
-import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
+import { printSupplyBarnReport } from '@/lib/supplyBarnReportPrint';
+import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, buildSupplyByBarn, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { newDeliverySecret } from '@/lib/deliveryLink';
 import { sendStallInvoice } from '@/lib/housingCheckout';
@@ -1667,7 +1668,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 //   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
     const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
@@ -1682,6 +1683,26 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
     const rvSpots = variant === 'inventory' ? ensureRvSpots(rvArea).spots : [];
     const rvDuplicates = duplicateRvNumbers(rvSpots);
     const hasCustomSpotNumbers = rvSpots.some(s => s.customNumber);
+    const rvPerRow = Math.max(1, Number(rvArea.layoutPerRow) || 10);
+    const [rvTool, setRvTool] = useState('number');
+    const [rvAmp, setRvAmp] = useState('50');
+    const paintAmps = (spotId, current) => {
+        const next = setRvSpotAmps(rvArea, spotId, current === rvAmp ? null : rvAmp);
+        if (next) onUpdate('spots', next);
+    };
+    const rvRoads = rvArea.layoutRoadsAfter || [];
+    const toggleRoad = (rowIndex) => onUpdate('layoutRoadsAfter',
+        rvRoads.includes(rowIndex) ? rvRoads.filter(i => i !== rowIndex) : [...rvRoads, rowIndex].sort((x, y) => x - y));
+    const setSpotType = (spotId, type) => {
+        const next = setRvSpotType(rvArea, spotId, type);
+        if (!next) {
+            toast({ title: 'That spot is booked', description: 'Move the exhibitor to another spot first.', variant: 'destructive' });
+            return;
+        }
+        onUpdate('spots', next);
+    };
+    const rvRows = [];
+    for (let i = 0; i < rvSpots.length; i += rvPerRow) rvRows.push(rvSpots.slice(i, i + rvPerRow));
     const renameSpot = (spotId, value) => {
         const next = setRvCustomNumber(rvArea, spotId, value);
         if (next) onUpdate('spots', next);
@@ -1825,6 +1846,37 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
                             </button>
                             {showSpotNumbers && (
                                 <div className="rounded-md border border-dashed p-3 space-y-3 text-xs">
+                                    <div className="flex flex-wrap items-center justify-end gap-2">
+                                        {otherRvAreas.length > 0 && !rvArea.layoutLocked && (
+                                            <Select
+                                                value=""
+                                                onValueChange={(id) => {
+                                                    const src = otherRvAreas.find(r => r.id === id);
+                                                    if (!src) return;
+                                                    const copy = copyRvLayout(src, rvArea);
+                                                    onUpdate('layoutPerRow', copy.layoutPerRow);
+                                                    onUpdate('layoutRoadsAfter', copy.layoutRoadsAfter);
+                                                    onUpdate('spots', copy.spots);
+                                                    toast({ title: 'Layout copied', description: `Copied from ${src.name || 'the other RV area'}.` });
+                                                }}
+                                            >
+                                                <SelectTrigger className="h-7 w-52 text-xs"><SelectValue placeholder="Copy layout from…" /></SelectTrigger>
+                                                <SelectContent>
+                                                    {otherRvAreas.map(r => <SelectItem key={r.id} value={r.id}>{r.name || 'RV area'}</SelectItem>)}
+                                                </SelectContent>
+                                            </Select>
+                                        )}
+                                        <Button
+                                            type="button" size="sm"
+                                            variant={rvArea.layoutLocked ? 'default' : 'outline'}
+                                            className={cn('h-7 text-xs gap-1', rvArea.layoutLocked && 'bg-amber-500 hover:bg-amber-600 text-white')}
+                                            onClick={() => onUpdate('layoutLocked', !rvArea.layoutLocked)}
+                                        >
+                                            <Lock className="h-3.5 w-3.5" />
+                                            {rvArea.layoutLocked ? 'Locked — click to edit' : 'Lock layout'}
+                                        </Button>
+                                    </div>
+                                    <fieldset disabled={!!rvArea.layoutLocked} className="space-y-3 min-w-0 border-0 p-0 m-0 disabled:opacity-70">
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-muted-foreground">Fill all spots from:</span>
                                         <Input
@@ -1847,24 +1899,117 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, variant = 'inventory', moveInD
                                         )}
                                     </div>
                                     <p className="text-muted-foreground">Or click any spot below and type its own number, then press Enter.</p>
-                                    <div className="flex flex-wrap gap-1.5 max-h-56 overflow-y-auto">
-                                        {rvSpots.map(spot => {
-                                            const dup = rvDuplicates.has(String(spot.number).toLowerCase());
-                                            return (
-                                                <GridLabelInput
-                                                    key={spot.id}
-                                                    value={spot.number}
-                                                    title={spot.bookingId ? 'Spot number (booked)' : 'Spot number — click to type your own'}
-                                                    onCommit={(val) => renameSpot(spot.id, val)}
-                                                    className={cn(
-                                                        'h-8 w-16 rounded-sm border text-center text-[11px] font-mono font-semibold outline-none focus:border-primary focus:bg-primary/10',
-                                                        spot.bookingId ? 'bg-blue-600 text-white border-blue-700' : 'bg-background border-muted-foreground/40',
-                                                        dup && 'ring-2 ring-amber-500',
-                                                    )}
-                                                />
-                                            );
-                                        })}
+                                    {/* Robert 11-01: RV sites are long, so draw them as tall rectangles in rows, like the barn map. */}
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-muted-foreground">Spots per row:</span>
+                                        <Input
+                                            type="number" min={1} max={40}
+                                            value={rvPerRow}
+                                            onChange={(e) => onUpdate('layoutPerRow', Math.min(40, Math.max(1, parseInt(e.target.value) || 1)))}
+                                            className="h-7 w-16 text-xs"
+                                        />
                                     </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-muted-foreground">Click a spot to:</span>
+                                        {[['number', 'Type its number'], ['empty', 'Mark empty'], ['blocked', 'Mark blocked'], ['power', 'Set power']].map(([key, label]) => (
+                                            <Button
+                                                key={key} type="button" size="sm" className="h-7 text-xs"
+                                                variant={rvTool === key ? 'default' : 'outline'}
+                                                onClick={() => setRvTool(key)}
+                                            >{label}</Button>
+                                        ))}
+                                    </div>
+                                    {rvTool === 'power' && (
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="text-muted-foreground">Power:</span>
+                                            {['30', '50'].map(a => (
+                                                <Button key={a} type="button" size="sm" className="h-7 text-xs"
+                                                    variant={rvAmp === a ? 'default' : 'outline'}
+                                                    onClick={() => setRvAmp(a)}>{a} Amp</Button>
+                                            ))}
+                                            <span className="text-muted-foreground">Click spots to give them this power. Click again to clear.</span>
+                                        </div>
+                                    )}
+                                    <div className="max-h-80 overflow-auto pb-1">
+                                        {rvRows.map((row, ri) => (
+                                            <React.Fragment key={ri}>
+                                                <div className="flex gap-1.5">
+                                                    {row.map(spot => {
+                                                        const dup = rvDuplicates.has(String(spot.number).toLowerCase());
+                                                        if (rvTool === 'power') {
+                                                            if (spot.type) return <div key={spot.id} className="h-24 w-14 shrink-0 rounded-sm border border-dashed bg-muted/30 opacity-50" />;
+                                                            return (
+                                                                <button
+                                                                    key={spot.id} type="button"
+                                                                    onClick={() => paintAmps(spot.id, spot.amps)}
+                                                                    className={cn(
+                                                                        'h-24 w-14 shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold flex flex-col items-center justify-center gap-1',
+                                                                        spot.amps === '50' ? 'bg-orange-100 border-orange-400 text-orange-900'
+                                                                            : spot.amps === '30' ? 'bg-sky-100 border-sky-400 text-sky-900'
+                                                                                : 'bg-background border-muted-foreground/40 hover:border-primary',
+                                                                    )}
+                                                                ><span>{spot.number}</span>{spot.amps && <span>{spot.amps}A</span>}</button>
+                                                            );
+                                                        }
+                                                        if (rvTool !== 'number') {
+                                                            // Empty / Blocked tool: spots become buttons you click to flip.
+                                                            const t = spot.type;
+                                                            return (
+                                                                <button
+                                                                    key={spot.id} type="button"
+                                                                    title={spot.bookingId ? 'Booked - move the exhibitor first' : (t === rvTool ? 'Click to make it a normal spot' : 'Click to mark ' + rvTool)}
+                                                                    onClick={() => setSpotType(spot.id, t === rvTool ? null : rvTool)}
+                                                                    className={cn(
+                                                                        'h-24 w-14 shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold',
+                                                                        spot.bookingId ? 'bg-blue-600 text-white border-blue-700'
+                                                                            : t === 'blocked' ? 'bg-muted text-muted-foreground border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]'
+                                                                                : t === 'empty' ? 'bg-muted/30 border-dashed border-muted-foreground/30 text-muted-foreground/60'
+                                                                                    : 'bg-background border-muted-foreground/40 hover:border-primary',
+                                                                    )}
+                                                                >{t === 'blocked' ? 'Blocked' : t === 'empty' ? 'Empty' : spot.number}</button>
+                                                            );
+                                                        }
+                                                        if (spot.type) {
+                                                            return (
+                                                                <div key={spot.id} className={cn(
+                                                                    'h-24 w-14 shrink-0 rounded-sm border flex items-center justify-center text-[10px] font-mono text-muted-foreground/70',
+                                                                    spot.type === 'blocked' ? 'bg-muted border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]' : 'bg-muted/30 border-dashed border-muted-foreground/30',
+                                                                )}>{spot.type === 'blocked' ? 'Blocked' : ''}</div>
+                                                            );
+                                                        }
+                                                        return (
+                                                            <GridLabelInput
+                                                                key={spot.id}
+                                                                value={spot.number}
+                                                                title={spot.bookingId ? 'Spot number (booked)' : 'Spot number - click to type your own'}
+                                                                onCommit={(val) => renameSpot(spot.id, val)}
+                                                                className={cn(
+                                                                    'h-24 w-14 shrink-0 rounded-sm border text-center text-[11px] font-mono font-semibold outline-none focus:border-primary focus:bg-primary/10',
+                                                                    spot.bookingId ? 'bg-blue-600 text-white border-blue-700' : 'bg-background border-muted-foreground/40',
+                                                                    dup && 'ring-2 ring-amber-500',
+                                                                )}
+                                                            />
+                                                        );
+                                                    })}
+                                                </div>
+                                                {/* Roadway between this row and the next - click the strip to remove it. */}
+                                                {ri < rvRows.length - 1 && (rvRoads.includes(ri) ? (
+                                                    <button
+                                                        type="button" title="Click to remove this roadway"
+                                                        onClick={() => toggleRoad(ri)}
+                                                        className="my-1 h-5 w-full rounded-sm bg-amber-200/70 dark:bg-amber-500/20 border border-amber-400/60 text-[10px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300"
+                                                    >Roadway (click to remove)</button>
+                                                ) : (
+                                                    <button
+                                                        type="button" title="Add a roadway here"
+                                                        onClick={() => toggleRoad(ri)}
+                                                        className="my-0.5 h-3 w-full text-[9px] leading-none text-muted-foreground/50 hover:text-primary hover:bg-primary/5 rounded-sm"
+                                                    >+ roadway</button>
+                                                ))}
+                                            </React.Fragment>
+                                        ))}
+                                    </div>
+                                    </fieldset>
                                     {rvDuplicates.size > 0 && (
                                         <p className="text-amber-600 dark:text-amber-400">
                                             Two or more spots share a number ({[...rvDuplicates].slice(0, 5).join(', ')}{rvDuplicates.size > 5 ? '…' : ''}). Give each spot its own number.
@@ -3146,7 +3291,7 @@ const pluralize = (qty) => (qty === 1 ? '' : 's');
 // barn/stall, with a print button and a bulk "mark out for delivery."
 // Permanent side panel (not a popup) — Robert's mockup keeps this visible at
 // all times next to the order list, live-updating as orders are checked.
-const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, onPrint, isBusy, itemFilter }) => {
+const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelivery, onPrint, onOpenMap, isBusy, itemFilter }) => {
     const { bySupply, byBarn, orderCount } = useMemo(() => buildLoadSheet(orders, supplies, itemFilter), [orders, supplies, itemFilter]);
     const bySupplyEntries = [...bySupply.entries()];
     const byBarnEntries = [...byBarn.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -3162,6 +3307,11 @@ const LoadSheetPanel = ({ orders, supplies, sortBy, onSortBy, onMarkOutForDelive
                     <p className="text-xs text-muted-foreground mt-1">
                         {orders.length} order{pluralize(orders.length)} selected · {orderCount} still {orderCount === 1 ? 'has' : 'have'} supplies to load
                     </p>
+                    {onOpenMap && (
+                        <Button variant="outline" size="sm" className="mt-2 h-8 text-xs w-full" onClick={onOpenMap}>
+                            <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Deliver on Map
+                        </Button>
+                    )}
                 </div>
 
                 {orders.length === 0 ? (
@@ -3356,7 +3506,9 @@ const SupplyStockCardsGrid = ({ cards, allSuppliesCard }) => (
                         </div>
                         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                             <div><p className="text-muted-foreground text-[10px] uppercase">Total Inventory</p><p className="font-semibold">{c.total}</p></div>
+                            <div><p className="text-muted-foreground text-[10px] uppercase">Sold</p><p className="font-semibold">{c.delivered + c.committed}</p></div>
                             <div><p className="text-muted-foreground text-[10px] uppercase">Delivered</p><p className="font-semibold text-emerald-600">{c.delivered}</p></div>
+                            <div><p className="text-muted-foreground text-[10px] uppercase">To deliver</p><p className={cn('font-semibold', c.committed > 0 && 'text-amber-600')}>{c.committed}</p></div>
                             <div><p className="text-muted-foreground text-[10px] uppercase">Remaining</p><p className="font-semibold">{c.remaining}</p></div>
                             <div><p className="text-muted-foreground text-[10px] uppercase">Available to sell</p><p className={cn('font-semibold', isLow && 'text-red-600')}>{c.available}</p></div>
                         </div>
@@ -3422,13 +3574,112 @@ const SupplyOrderStatTiles = ({ total, delivered, outForDelivery, readyToLoad, p
     );
 };
 
+// Robert 11-01: which barn uses how much of each supply, and what is still to
+// deliver — with Barn / Item filters. Shared by the main Analytics tab and the
+// Hay & Shavings Analytics view so both always agree.
+const SupplyByBarnReport = ({ rows, showName }) => {
+    const [barnPick, setBarnPick] = useState('all');
+    const [itemPick, setItemPick] = useState('all');
+    const barnOptions = useMemo(() => [...new Set(rows.map(r => r.barn))], [rows]);
+    const itemOptions = useMemo(() => [...new Set(rows.map(r => r.name))], [rows]);
+    const shown = rows.filter(r => (barnPick === 'all' || r.barn === barnPick) && (itemPick === 'all' || r.name === itemPick));
+    const totals = shown.reduce((t, r) => ({
+        sold: t.sold + r.sold, delivered: t.delivered + r.delivered,
+        toDeliver: t.toDeliver + r.toDeliver, revenue: t.revenue + r.revenue,
+    }), { sold: 0, delivered: 0, toDeliver: 0, revenue: 0 });
+    // A single item selected means one unit, so a total is meaningful; mixed units are not summed as a number of "things".
+    const oneUnit = new Set(shown.map(r => r.unit)).size <= 1;
+
+    if (rows.length === 0) return null;
+    return (
+        <div>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-amber-600" /> Supplies by Barn
+                </h4>
+                <div className="flex items-center gap-2">
+                    <Button
+                        size="sm" variant="outline" className="h-8 text-xs"
+                        onClick={() => printSupplyBarnReport({
+                            showName, rows: shown,
+                            barnLabel: barnPick === 'all' ? 'All Barns' : barnPick,
+                            itemLabel: itemPick === 'all' ? 'All Items' : itemPick,
+                        })}
+                    >
+                        <Printer className="h-3.5 w-3.5 mr-1.5" /> Print Report
+                    </Button>
+                    <Select value={barnPick} onValueChange={setBarnPick}>
+                        <SelectTrigger className="h-8 w-[10rem] text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all" className="text-xs">All Barns</SelectItem>
+                            {barnOptions.map(b => <SelectItem key={b} value={b} className="text-xs">{b}</SelectItem>)}
+                        </SelectContent>
+                    </Select>
+                    <Select value={itemPick} onValueChange={setItemPick}>
+                        <SelectTrigger className="h-8 w-[10rem] text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all" className="text-xs">All Items</SelectItem>
+                            {itemOptions.map(i => <SelectItem key={i} value={i} className="text-xs">{i}</SelectItem>)}
+                        </SelectContent>
+                    </Select>
+                </div>
+            </div>
+            <p className="text-xs text-muted-foreground mb-2">
+                Every supply order that is not cancelled, the same orders you see on the Hay &amp; Shavings tab.
+            </p>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b bg-muted/30 text-xs uppercase text-muted-foreground">
+                            <th className="text-left px-3 py-2 font-medium">Barn</th>
+                            <th className="text-left px-3 py-2 font-medium">Item</th>
+                            <th className="text-center px-3 py-2 font-medium">Sold</th>
+                            <th className="text-center px-3 py-2 font-medium">Delivered</th>
+                            <th className="text-center px-3 py-2 font-medium">To Deliver</th>
+                            <th className="text-center px-3 py-2 font-medium">Unit</th>
+                            <th className="text-right px-3 py-2 font-medium">Revenue</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {shown.length === 0 ? (
+                            <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">No supply orders match this filter.</td></tr>
+                        ) : shown.map(r => (
+                            <tr key={`${r.barn}-${r.name}`} className="border-b">
+                                <td className="px-3 py-2 font-medium">{r.barn}</td>
+                                <td className="px-3 py-2">{r.name}</td>
+                                <td className="px-3 py-2 text-center">{r.sold}</td>
+                                <td className="px-3 py-2 text-center text-emerald-700 dark:text-emerald-300">{r.delivered}</td>
+                                <td className={cn('px-3 py-2 text-center', r.toDeliver > 0 && 'text-amber-700 dark:text-amber-300 font-semibold')}>{r.toDeliver}</td>
+                                <td className="px-3 py-2 text-center text-muted-foreground">{r.unit}</td>
+                                <td className="px-3 py-2 text-right font-semibold text-emerald-700 dark:text-emerald-300">${r.revenue.toLocaleString()}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                    {shown.length > 1 && (
+                        <tfoot>
+                            <tr className="bg-muted/30 font-semibold">
+                                <td className="px-3 py-2" colSpan={2}>Total</td>
+                                <td className="px-3 py-2 text-center">{oneUnit ? totals.sold : '—'}</td>
+                                <td className="px-3 py-2 text-center">{oneUnit ? totals.delivered : '—'}</td>
+                                <td className="px-3 py-2 text-center">{oneUnit ? totals.toDeliver : '—'}</td>
+                                <td className="px-3 py-2 text-center text-muted-foreground">{oneUnit ? shown[0].unit : ''}</td>
+                                <td className="px-3 py-2 text-right">${totals.revenue.toLocaleString()}</td>
+                            </tr>
+                        </tfoot>
+                    )}
+                </table>
+            </div>
+        </div>
+    );
+};
+
 // Robert: "I also think we should have some analytics specific to hay
 // shavings and barn services" — Low Inventory table + Recent Deliveries feed.
 // The per-supply stock cards themselves now live above the List/Map/Analytics
 // toggle (see SupplyStockCardsGrid), so they aren't repeated here.
 // Skips his mockup's date-scheduled "Today's/Upcoming Orders" — this data
 // model has no per-order delivery date to group by.
-const SupplyAnalyticsPanel = ({ supplies, allOrders, cards, allSuppliesCard }) => {
+const SupplyAnalyticsPanel = ({ supplies, allOrders, cards, allSuppliesCard, supplyByBarn, showName }) => {
     const recentDeliveries = useMemo(() => {
         const rows = [];
         for (const o of allOrders) {
@@ -3456,6 +3707,12 @@ const SupplyAnalyticsPanel = ({ supplies, allOrders, cards, allSuppliesCard }) =
     return (
         <div className="space-y-5">
             <SupplyStockCardsGrid cards={cards} allSuppliesCard={allSuppliesCard} />
+
+            <Card>
+                <CardContent className="p-4">
+                    <SupplyByBarnReport rows={supplyByBarn} showName={showName} />
+                </CardContent>
+            </Card>
 
             <div className="grid md:grid-cols-2 gap-4">
                 <Card>
@@ -4788,6 +5045,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         [preShowDeliveryOrders, liveSupplyOrders]
     );
     const supplyUnitOf = useMemo(() => unitLookup(supplies), [supplies]);
+    const supplyByBarn = useMemo(() => buildSupplyByBarn(allSupplyOrders, supplies), [allSupplyOrders, supplies]);
 
     // Feeds the icon-badge stat tiles at the top of the Hay & Shavings tab —
     // Robert's mockup gives these their own icon + % styling, distinct from
@@ -4822,16 +5080,21 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         try {
             const first = buildLoadSheet(loadSheetOrders, supplies, supplyItemFilter);
             let secrets = pd.deliverySecrets || {};
-            const missing = first.lines.filter(l => !secrets[l.id]).map(l => l.id);
-            if (missing.length > 0) {
+            let showSecret = pd.deliveryShowSecret || '';
+            // The top QR lists every supply order in the show, so each one needs a secret
+            // (not only the orders ticked for this load).
+            const needIds = [...new Set([...first.lines.map(l => l.id), ...allSupplyOrders.map(o => o.id)])];
+            const missing = needIds.filter(id => id && !secrets[id]);
+            if (missing.length > 0 || !showSecret) {
                 const fresh = Object.fromEntries(missing.map(id => [id, newDeliverySecret()]));
                 // Saved to the show (merged with the newest copy), never onto the booking.
-                secrets = await onSaveDeliverySecrets(fresh);
+                ({ secrets, showSecret } = await onSaveDeliverySecrets(fresh, newDeliverySecret()));
             }
             const orders = loadSheetOrders.map(o => ({ ...o, deliverySecret: secrets[o.id] || '' }));
             await printLoadSheet({
                 showName: show.project_name,
                 showId: show.id,
+                showSecret,
                 ...buildLoadSheet(orders, supplies, supplyItemFilter),
                 itemFilter: supplyItemFilter,
             }, win);
@@ -5922,6 +6185,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             rvArea={rv}
                                             onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
                                             onRemove={() => removeRvArea(rv.id)}
+                                            otherRvAreas={rvAreas.filter(r => r.id !== rv.id)}
                                             moveInDate={moveInDate}
                                             moveOutDate={moveOutDate}
                                             datesLocked={datesLocked}
@@ -6409,6 +6673,17 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     <DropdownMenuItem onClick={() => applyLoadSheetPreset('allUndelivered')}>All Undelivered Orders</DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
+                            {/* Robert 11-01: jump from the Load Sheet straight to the map and deliver stall by stall. */}
+                            {supplyView !== 'map' && (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 text-xs"
+                                    onClick={() => setSupplyView('map')}
+                                >
+                                    <MapIcon className="h-3.5 w-3.5 mr-1.5" /> Deliver on Map
+                                </Button>
+                            )}
                             <Button
                                 size="sm"
                                 className="h-8 text-xs"
@@ -6443,6 +6718,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             allOrders={allSupplyOrders}
                             cards={supplyStockCards.cards}
                             allSuppliesCard={supplyStockCards.allSuppliesCard}
+                            supplyByBarn={supplyByBarn}
+                            showName={show.project_name}
                         />
                     ) : (
                         <div className="grid lg:grid-cols-[1fr_340px] gap-4 items-start">
@@ -6467,6 +6744,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 onSortBy={setLoadSheetSort}
                                 onMarkOutForDelivery={markLoadSheetOutForDelivery}
                                 onPrint={printLoadSheetWithQr}
+                                onOpenMap={() => setSupplyView('map')}
                                 isBusy={isMarkingOutForDelivery}
                             />
                         </div>
@@ -7278,6 +7556,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                         </div>
                                     </div>
                                 )}
+
+                                <SupplyByBarnReport rows={supplyByBarn} showName={show.project_name} />
                             </div>
 
                             {/* Empty state */}
@@ -7693,11 +7973,15 @@ const HousingGroundsManagerPage = () => {
     // the customer booking page returns the whole booking and must never see them.
     // Merged onto the newest saved copy; a secret that already exists is kept, so a
     // QR printed earlier keeps working. Returns the full map.
-    const saveDeliverySecrets = useCallback(async (fresh) => {
-        if (!selectedShowId) return {};
+    const saveDeliverySecrets = useCallback(async (fresh, showSecret) => {
+        if (!selectedShowId) return { secrets: {}, showSecret: '' };
         return commitShowData(latest => {
             const merged = { ...fresh, ...(latest.deliverySecrets || {}) };
-            return { data: { ...latest, deliverySecrets: merged }, result: merged };
+            const sheetSecret = latest.deliveryShowSecret || showSecret;
+            return {
+                data: { ...latest, deliverySecrets: merged, deliveryShowSecret: sheetSecret },
+                result: { secrets: merged, showSecret: sheetSecret },
+            };
         });
     }, [selectedShowId, commitShowData]);
 

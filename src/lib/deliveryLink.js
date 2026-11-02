@@ -36,3 +36,16 @@ export const buildDeliveryUrl = ({ origin, showId, bookingId, secret, itemRefIds
 
 export const parseItemsParam = (value) =>
     String(value || '').split(',').map(s => s.trim()).filter(Boolean);
+
+// The Load Sheet's top QR (one for the whole show): `${showId}:${showSecret}`.
+export const buildSheetUrl = ({ origin, showId, secret }) =>
+    `${origin}/delivery-sheet/${toB64Url(`${showId}:${secret}`)}`;
+
+export const parseSheetToken = (token) => {
+    try {
+        const [showId, secret] = fromB64Url(token).split(':');
+        return showId && secret ? { showId, secret } : null;
+    } catch {
+        return null;
+    }
+};

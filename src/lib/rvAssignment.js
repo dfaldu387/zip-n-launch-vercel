@@ -64,6 +64,54 @@ export function clearRvCustomNumbers(area) {
     return ensureRvSpots({ ...area, spots: spots.map(({ customNumber, ...rest }) => rest) }).spots;
 }
 
+// Mark a spot 'empty' or 'blocked' (or back to a normal spot with null). The
+// stalling board already skips any unit whose type is not 'stall', so such a spot
+// can never be given to a booking. A booked spot is refused (returns null) — move
+// the exhibitor first. Same idea as the barn layout's Empty / Blocked boxes.
+export function setRvSpotType(area, spotId, type) {
+    const { spots } = ensureRvSpots(area);
+    const spot = spots.find(s => s.id === spotId);
+    if (!spot || spot.bookingId) return null;
+    return spots.map(s => {
+        if (s.id !== spotId) return s;
+        const { type: _drop, ...rest } = s;
+        return type === 'empty' || type === 'blocked' ? { ...rest, type } : rest;
+    });
+}
+
+// Power rating (amps) for one spot. Allowed even when booked - it describes the site, not the layout.
+export function setRvSpotAmps(area, spotId, amps) {
+    const { spots } = ensureRvSpots(area);
+    if (!spots.some(s => s.id === spotId)) return null;
+    return spots.map(s => {
+        if (s.id !== spotId) return s;
+        const { amps: _drop, ...rest } = s;
+        return amps ? { ...rest, amps: String(amps) } : rest;
+    });
+}
+
+// Copy the LAYOUT of one RV area onto another: spots per row, roadways, which spots are
+// Empty / Blocked, and each spot's amps - matched by position (1st spot to 1st spot).
+// Spot numbers and bookings on the target are left alone; a booked spot is never
+// turned into Empty / Blocked.
+export function copyRvLayout(source, target) {
+    const from = ensureRvSpots(source).spots;
+    const spots = ensureRvSpots(target).spots.map((spot, i) => {
+        const src = from[i];
+        const { type: _t, amps: _a, ...rest } = spot;
+        const out = { ...rest };
+        if (spot.bookingId) { if (spot.type) out.type = spot.type; }
+        else if (src?.type) out.type = src.type;
+        if (src?.amps) out.amps = src.amps;
+        return out;
+    });
+    return {
+        layoutPerRow: Number(source.layoutPerRow) > 0 ? Number(source.layoutPerRow) : undefined,
+        layoutRoadsAfter: [...(source.layoutRoadsAfter || [])],
+        spots,
+    };
+}
+
 // Numbers used by more than one spot (ignoring case).
 export function duplicateRvNumbers(spots = []) {
     const seen = new Map();
