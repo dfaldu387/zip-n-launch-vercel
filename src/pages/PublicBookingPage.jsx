@@ -28,6 +28,7 @@ import {
 import {
     buildRvAreaOptionItems, flatRateForRvArea, rvsByAreaFromSelection,
     groupRvAreasForBooking, allocatePooledRvSpots, ALL_RV_GROUP_ID,
+    expandPublicRvInventory,
 } from '@/lib/extraRvFees';
 import { nightsInRange } from '@/lib/stallNights';
 
@@ -1039,14 +1040,17 @@ const PublicBookingPage = () => {
     // Cancelled bookings never count.
     const inventory = useMemo(() => {
         const inv = show?.inventory || {};
+        // An RV area with 2+ camping types is sold type by type (one row per type,
+        // its own price and spots left); other areas pass through unchanged.
+        const rv = expandPublicRvInventory(inv.rvAreas || [], inv.extraRvFees || []);
         return {
             barns: inv.barns || [],
-            rvAreas: inv.rvAreas || [],
+            rvAreas: rv.rvAreas,
             supportSpaces: inv.supportSpaces || [],
             supplies: inv.supplies || [],
             // Circuit / flat fees that aren't tied to one barn (see public_show_inventory).
             extraStallFees: inv.extraStallFees || [],
-            extraRvFees: inv.extraRvFees || [],
+            extraRvFees: rv.extraRvFees,
         };
     }, [show]);
 

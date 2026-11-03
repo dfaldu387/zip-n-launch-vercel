@@ -17,6 +17,8 @@ import {
     ALL_BARNS, allocatePooledStalls, buildBarnStallOptionItems,
 } from './extraStallFees';
 
+import { getCampingTypes, campingTypeLabel } from './rvCampingTypes';
+
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
 /** Scope value meaning "every RV area in the facility" — same sentinel as ALL_BARNS. */
@@ -34,11 +36,56 @@ export const nightlyCostForRvArea = nightlyCostForBarn;
 export const flatCostForRvArea = flatCostForBarn;
 export const allocatePooledRvSpots = allocatePooledStalls;
 
+/**
+ * Camping types as priceable units (Robert 11-02: different prices per camping type).
+ * An area with ONE camping type is returned unchanged — it behaves exactly as before.
+ * An area with 2+ types becomes one unit per type: id = the type's id, spotCount = its
+ * count, areaId/typeLabel point back to the area. Nothing is saved; this is derived.
+ */
+export function rvPriceUnits(rvAreas = []) {
+    return rvAreas.flatMap(area => {
+        const types = getCampingTypes(area);
+        if (types.length < 2) return [area];
+        return types.map((t, i) => ({
+            ...area,
+            id: t.id,
+            areaId: area.id,
+            typeLabel: campingTypeLabel(t, i),
+            name: `${area.name} · ${campingTypeLabel(t, i)}`,
+            spotCount: Number(t.count) || 0,
+            hookupType: t.hookupType,
+            powerType: t.powerType,
+            isCampingType: true,
+        }));
+    });
+}
+
+/**
+ * Fees ready to price camping-type units: a fee scoped to an area also lists that
+ * area's type ids (so it covers every type); a fee scoped to a type already lists
+ * the type id. "All RV areas" fees stay "all". Fees for single-type areas are untouched.
+ */
+export function expandRvFeesForTypes(rvAreas = [], fees = []) {
+    const typeIdsByArea = new Map();
+    for (const area of rvAreas) {
+        const types = getCampingTypes(area);
+        if (types.length >= 2) typeIdsByArea.set(area.id, types.map(t => t.id));
+    }
+    if (typeIdsByArea.size === 0) return fees;
+    return (fees || []).map(fee => {
+        const scope = rvFeeScope(fee);
+        if (scope === ALL_RV_AREAS) return fee;
+        const extra = scope.flatMap(id => typeIdsByArea.get(id) || []);
+        return extra.length ? { ...fee, appliesTo: [...scope, ...extra] } : fee;
+    });
+}
+
 /** Plain-language scope label for an RV fee, for badges and summaries. */
 export function scopeLabelForRvFee(fee, rvAreas = []) {
     const scope = rvFeeScope(fee);
     if (scope === ALL_RV_AREAS) return 'All RV areas';
-    const names = scope.map(id => rvAreas.find(r => r.id === id)?.name).filter(Boolean);
+    const units = rvPriceUnits(rvAreas);
+    const names = scope.map(id => rvAreas.find(r => r.id === id)?.name || units.find(u => u.id === id)?.name).filter(Boolean);
     if (names.length === 0) return 'RV area removed';
     if (names.length <= 2) return names.join(' + ');
     return `${names.length} areas`;
@@ -174,4 +221,77 @@ export function buildRvAreaOptionItems({ rvAreas = [], rvSelection = {}, extraRv
         nightsByBarn: nightsByArea,
         itemType: 'rv',
     });
+}
+
+/**
+ * Store each camping type's price on the type itself (pricePerNight + flatRate), the
+ * same way an area keeps a synced pricePerNight. The server prices a booking from
+ * these saved numbers, so they must follow the fees. Only areas with 2+ camping
+ * types are touched. Returns the SAME array when nothing changed.
+ */
+export function syncCampingTypePrices(rvAreas = [], fees = []) {
+    let changed = false;
+    const next = rvAreas.map(area => {
+        const types = getCampingTypes(area);
+        if (types.length < 2) return area;
+        const eff = expandRvFeesForTypes([area], fees);
+        let areaChanged = false;
+        const newTypes = types.map(t => {
+            const pricePerNight = nightlyRateForRvArea(t.id, eff);
+            const flatRate = flatRateForRvArea(t.id, eff);
+            if (t.pricePerNight === pricePerNight && t.flatRate === flatRate) return t;
+            areaChanged = true;
+            return { ...t, pricePerNight, flatRate };
+        });
+        if (!areaChanged) return area;
+        changed = true;
+        return { ...area, campingTypes: newTypes };
+    });
+    return changed ? next : rvAreas;
+}
+
+/**
+ * Public booking page: turn areas with 2+ camping types into one bookable row per
+ * type (id = the type's id), and give the fee list the same treatment so prices
+ * resolve per type. Single-type areas and old payloads (no campingTypes) pass
+ * through untouched. `areas` come from get_public_show(): each camping type
+ * carries its own count and `taken`.
+ */
+export function expandPublicRvInventory(rvAreas = [], extraRvFees = []) {
+    const multi = (a) => Array.isArray(a.campingTypes) && a.campingTypes.length >= 2;
+    if (!rvAreas.some(multi)) return { rvAreas, extraRvFees };
+    const units = rvAreas.flatMap(a => {
+        if (!multi(a)) return [a];
+        return a.campingTypes.map((t, i) => ({
+            ...a,
+            id: t.id,
+            areaId: a.id,
+            name: `${a.name} · ${campingTypeLabel(t, i)}`,
+            hookupType: t.hookupType || a.hookupType,
+            powerType: t.powerType || a.powerType,
+            pricePerNight: Number(t.pricePerNight) || 0,
+            total: Number(t.count) || 0,
+            taken: Number(t.taken) || 0,
+            campingTypes: undefined,
+        }));
+    });
+    const typeIdsByArea = new Map(rvAreas.filter(multi).map(a => [a.id, a.campingTypes.map(t => t.id)]));
+    const fees = (extraRvFees || []).map(fee => {
+        const scope = rvFeeScope(fee);
+        if (scope === ALL_RV_AREAS) return fee;
+        const extra = scope.flatMap(id => typeIdsByArea.get(id) || []);
+        return extra.length ? { ...fee, appliesTo: [...scope, ...extra] } : fee;
+    });
+    return { rvAreas: units, extraRvFees: fees };
+}
+
+/**
+ * The manager's own "add / edit booking" form: one row per camping type (for areas with
+ * 2+ types), each priced from the fees that apply to it. Single-type areas pass through.
+ */
+export function rvBookingFormInventory(rvAreas = [], extraRvFees = []) {
+    const fees = expandRvFeesForTypes(rvAreas, extraRvFees);
+    const units = rvPriceUnits(rvAreas).map(u =>
+        u.isCampingType ? { ...u, pricePerNight: nightlyRateForRvArea(u.id, fees) } : u);
+    return { rvAreas: units, extraRvFees: fees };
 }

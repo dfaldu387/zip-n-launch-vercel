@@ -62,7 +62,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
-import { paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
+import { campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
 import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
@@ -86,7 +86,7 @@ import {
 } from '@/lib/barnGrid';
 import { netAfterFees, estimateNetAfterFees, moneyNum } from '@/lib/netRevenue';
 import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee, barnPerStallTotal as computeBarnPerStallTotal, barnPerStallCost as computeBarnPerStallCost } from '@/lib/extraStallFees';
-import { ALL_RV_AREAS, nightlyRateForRvArea, flatRateForRvArea, nightlyCostForRvArea, flatCostForRvArea, scopeLabelForRvFee } from '@/lib/extraRvFees';
+import { ALL_RV_AREAS, nightlyRateForRvArea, flatRateForRvArea, nightlyCostForRvArea, flatCostForRvArea, scopeLabelForRvFee, rvPriceUnits, expandRvFeesForTypes, syncCampingTypePrices, rvBookingFormInventory } from '@/lib/extraRvFees';
 
 // ── Constants ──
 
@@ -377,18 +377,30 @@ const RvScopePicker = ({ value, rvAreas, onChange, disabled }) => {
                     <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
                 </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-56 p-2" align="start">
+            <PopoverContent className="w-64 p-2" align="start">
                 <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
                     <Checkbox checked={isAll} onCheckedChange={(checked) => onChange(checked ? ALL_RV_AREAS : rvAreas.map(r => r.id))} />
                     All RV areas (facility)
                 </label>
                 <div className="my-1 border-t" />
-                {rvAreas.map(r => (
-                    <label key={r.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
-                        <Checkbox checked={!isAll && scope.includes(r.id)} onCheckedChange={() => toggleArea(r.id)} />
-                        {r.name}
-                    </label>
-                ))}
+                {rvAreas.map(r => {
+                    const types = getCampingTypes(r);
+                    return (
+                        <React.Fragment key={r.id}>
+                            <label className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/60 cursor-pointer text-sm">
+                                <Checkbox checked={!isAll && scope.includes(r.id)} onCheckedChange={() => toggleArea(r.id)} />
+                                {r.name}
+                                {types.length > 1 && <span className="text-[10px] text-muted-foreground">(all types)</span>}
+                            </label>
+                            {types.length > 1 && types.map((t, ti) => (
+                                <label key={t.id} className="flex items-center gap-2 pl-7 pr-2 py-1 rounded hover:bg-muted/60 cursor-pointer text-xs">
+                                    <Checkbox checked={!isAll && scope.includes(t.id)} onCheckedChange={() => toggleArea(t.id)} />
+                                    {campingTypeLabel(t, ti)}
+                                </label>
+                            ))}
+                        </React.Fragment>
+                    );
+                })}
             </PopoverContent>
         </Popover>
     );
@@ -1673,7 +1685,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 //   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', extraRvFees = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
     const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
@@ -2127,6 +2139,28 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                     <p className="text-xs text-muted-foreground">
                         Pricing for this area now lives in the RV Fees list below — add a fee and pick this area under "Applies to".
                     </p>
+                    {getCampingTypes(rvArea).length > 1 && (
+                        <div className="rounded-md border divide-y text-xs">
+                            {rvPriceUnits([rvArea]).map(u => {
+                                const fees = expandRvFeesForTypes([rvArea], extraRvFees);
+                                const night = nightlyRateForRvArea(u.id, fees);
+                                const flat = flatRateForRvArea(u.id, fees);
+                                const t = getCampingTypes(rvArea).find(x => x.id === u.id);
+                                return (
+                                    <div key={u.id} className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ borderLeft: `4px solid ${CAMPING_TYPE_HEX[t?.color] || CAMPING_TYPE_HEX.sky}` }}>
+                                        <span className="font-medium">{u.typeLabel}</span>
+                                        <span className="text-muted-foreground">{u.spotCount} spots · {RV_HOOKUP_TYPES.find(h => h.id === u.hookupType)?.name || u.hookupType} · {RV_POWER_TYPES.find(h => h.id === u.powerType)?.name || u.powerType}</span>
+                                        <span className="ml-auto font-semibold">
+                                            {night > 0 || flat > 0
+                                                ? [night > 0 ? `$${night}/night` : null, flat > 0 ? `$${flat} flat` : null].filter(Boolean).join(' + ')
+                                                : <span className="text-amber-600 font-normal">No fee yet</span>}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                            <p className="px-3 py-2 text-muted-foreground">Each camping type is priced by the fees that apply to it. Pick a camping type under "Applies to" to give it its own price.</p>
+                        </div>
+                    )}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div className="space-y-1">
                             <Label className="text-xs">Max RV Length (ft)</Label>
@@ -2803,7 +2837,7 @@ const BookingRow = ({
                 pricing option a stall/spot was booked under. */}
             {editingItems && (
                 <AddBookingDialog
-                    inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
+                    inventory={{ barns, ...rvBookingFormInventory(rvAreas, extraRvFees), supplies, extraStallFees }}
                     suppliesSold={suppliesSold}
                     booking={booking}
                     open={editingItems}
@@ -4251,6 +4285,11 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             return changed ? next : prev;
         });
     }, [extraRvFees]);
+    // Each camping type's price is saved on the type too (the server prices a public
+    // booking from saved numbers). Follows the fees and any type edits.
+    useEffect(() => {
+        setRvAreas(prev => syncCampingTypePrices(prev, extraRvFees));
+    }, [extraRvFees, rvAreas]);
     // Support Spaces are no longer offered (removed from UI). We still carry any
     // previously-saved data through so it isn't lost, but it's never edited here.
     const supportSpaces = pd.stallingService?.supportSpaces || [];
@@ -5410,11 +5449,15 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // RV areas work the same way as barns now — the price isn't typed directly
     // on the area, it's whichever RV fees (Flat and/or Per-Night) are scoped to
     // it in the RV Fees list, added together.
-    const rvFlatTotal = (r) => flatRateForRvArea(r.id, extraRvFees);
-    const rvNightlyRate = (r) => nightlyRateForRvArea(r.id, extraRvFees);
+    // Areas with 2+ camping types are priced type by type (rvUnits / rvPriceFees);
+    // single-type areas come through unchanged.
+    const rvUnits = rvPriceUnits(rvAreas);
+    const rvPriceFees = expandRvFeesForTypes(rvAreas, extraRvFees);
+    const rvFlatTotal = (r) => flatRateForRvArea(r.id, rvPriceFees);
+    const rvNightlyRate = (r) => nightlyRateForRvArea(r.id, rvPriceFees);
     const rvIsFlat = (r) => rvFlatTotal(r) > 0;
     const rvPerSpotTotal = (r, nights) => rvNightlyRate(r) * Math.max(1, Number(nights) || 1) + rvFlatTotal(r);
-    const rvCostPerSpotTotal = (r, nights) => nightlyCostForRvArea(r.id, extraRvFees) * Math.max(1, Number(nights) || 1) + flatCostForRvArea(r.id, extraRvFees);
+    const rvCostPerSpotTotal = (r, nights) => nightlyCostForRvArea(r.id, rvPriceFees) * Math.max(1, Number(nights) || 1) + flatCostForRvArea(r.id, rvPriceFees);
 
     // Barns work the same way, but the price isn't typed directly on the barn —
     // it's whichever stall fees (Flat and/or Per-Night) are scoped to it in the
@@ -5476,23 +5519,23 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 });
             }
         }
-        for (const rv of rvAreas) {
+        for (const rv of rvUnits) {
             const capacity = rv.spotCount || 0;
-            const nightly = nightlyRateForRvArea(rv.id, extraRvFees) > 0;
+            const nightly = nightlyRateForRvArea(rv.id, rvPriceFees) > 0;
             const flat = rvIsFlat(rv);
             if (nightly) {
-                const perUnit = nightlyRateForRvArea(rv.id, extraRvFees) * showNights;
-                const costPerUnit = nightlyCostForRvArea(rv.id, extraRvFees) * showNights;
+                const perUnit = nightlyRateForRvArea(rv.id, rvPriceFees) * showNights;
+                const costPerUnit = nightlyCostForRvArea(rv.id, rvPriceFees) * showNights;
                 rows.push({
                     key: `${rv.id}::night`, name: rv.name, tag: '(RV)',
-                    priceLabel: `$${moneyNum(nightlyRateForRvArea(rv.id, extraRvFees))}/night`,
-                    costLabel: `$${moneyNum(nightlyCostForRvArea(rv.id, extraRvFees))}/night`,
+                    priceLabel: `$${moneyNum(nightlyRateForRvArea(rv.id, rvPriceFees))}/night`,
+                    costLabel: `$${moneyNum(nightlyCostForRvArea(rv.id, rvPriceFees))}/night`,
                     nightsLabel: showNights, perUnit, costPerUnit, capacity,
                 });
             }
             if (flat) {
                 const perUnit = rvFlatTotal(rv);
-                const costPerUnit = flatCostForRvArea(rv.id, extraRvFees);
+                const costPerUnit = flatCostForRvArea(rv.id, rvPriceFees);
                 rows.push({
                     key: `${rv.id}::flat`, name: rv.name, tag: '(RV)',
                     priceLabel: `$${moneyNum(perUnit)} flat`,
@@ -5552,9 +5595,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     };
     // Pricing & Revenue Summary totals: max you could sell, after the estimated fees.
     const summaryGrossRevenue = barns.reduce((sum, b) => sum + ((b.stallCount || 0) * barnPerStallTotal(b, showNights || 3)), 0)
-        + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights || 3)), 0);
+        + rvUnits.reduce((sum, r) => sum + ((r.spotCount || 0) * rvPerSpotTotal(r, showNights || 3)), 0);
     const summaryTotalCost = barns.reduce((sum, b) => sum + ((b.stallCount || 0) * barnCostPerStallTotal(b, showNights || 3)), 0)
-        + rvAreas.reduce((sum, r) => sum + ((r.spotCount || 0) * rvCostPerSpotTotal(r, showNights || 3)), 0);
+        + rvUnits.reduce((sum, r) => sum + ((r.spotCount || 0) * rvCostPerSpotTotal(r, showNights || 3)), 0);
     const summaryMaxRevenue = estimateFees(summaryGrossRevenue).net;
     const summaryMaxProfit = summaryMaxRevenue - summaryTotalCost;
     // Whole dollars stay clean ($228); cents always show two digits ($26.60); negatives read −$12.
@@ -5626,7 +5669,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             const power = RV_POWER_TYPES.find(t => t.id === (area.powerType || 'none'))?.name;
             return power && power !== 'No Power' ? `${hookup} · ${power}` : hookup;
         };
-        for (const area of rvAreas) {
+        for (const area of rvUnits) {
             const key = rvTypeKey(area);
             if (!rvTypeStats.has(key)) {
                 rvTypeStats.set(key, { key, label: rvTypeLabel(area), total: 0, occupied: 0, revenue: 0 });
@@ -5727,7 +5770,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 } else if (it.type === 'rv' || it.type === 'rv_fee') {
                     if (isActive) { rvRevenue += itAmt; realizedRevenue += itAmt; }
                     if (it.type === 'rv') {
-                        const area = rvAreas.find(x => x.id === it.refId);
+                        const area = rvUnits.find(x => x.id === it.refId);
                         if (area) {
                             if (!demandedInThisBooking.has(area.id)) {
                                 demandedInThisBooking.add(area.id);
@@ -5743,8 +5786,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 // area's nightly cost too, and a split booking's cost was
                                 // inflated on both items. Price each item at only the part it
                                 // was actually bought under, same rule as stalls.
-                                const nightlyCost = nightlyCostForRvArea(area.id, extraRvFees);
-                                const flatCost = flatCostForRvArea(area.id, extraRvFees);
+                                const nightlyCost = nightlyCostForRvArea(area.id, rvPriceFees);
+                                const flatCost = flatCostForRvArea(area.id, rvPriceFees);
                                 realizedCost += (Number(it.qty) || 0) * stallUnitPrice(it.feeType, nightlyCost, flatCost, nights);
                             }
                         }
@@ -5808,7 +5851,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         // RV power load
         let ampsUsed = 0;
         let ampsCapacity = 0;
-        for (const area of rvAreas) {
+        for (const area of rvUnits) {
             const ampPer = POWER_AMPS[area.powerType] || 0;
             ampsCapacity += ampPer * (area.spotCount || 0);
         }
@@ -5816,7 +5859,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             if (!ACTIVE_STATUSES.has(b.status)) continue;
             for (const it of b.items || []) {
                 if (it.type !== 'rv') continue;
-                const area = rvAreas.find(x => x.id === it.refId);
+                const area = rvUnits.find(x => x.id === it.refId);
                 if (!area) continue;
                 ampsUsed += (POWER_AMPS[area.powerType] || 0) * (it.qty || 0);
             }
@@ -6554,6 +6597,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 key={rv.id}
                                                 rvArea={rv}
                                                 variant="fees"
+                                                extraRvFees={extraRvFees}
                                                 onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
                                                 onRemove={() => removeRvArea(rv.id)}
                                             />
@@ -6608,7 +6652,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 <TabsContent value="bookings" className="space-y-4 mt-4">
                     <div className="flex items-center gap-3 flex-wrap">
                         <AddBookingDialog
-                            inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
+                            inventory={{ barns, ...rvBookingFormInventory(rvAreas, extraRvFees), supplies, extraStallFees }}
                             suppliesSold={suppliesSold}
                             defaultNights={showNights}
                             onAdd={addBooking}
@@ -6872,7 +6916,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         onLogActivity={logActivity}
                         addBookingSlot={(
                             <AddBookingDialog
-                                inventory={{ barns, rvAreas, supplies, extraStallFees, extraRvFees }}
+                                inventory={{ barns, ...rvBookingFormInventory(rvAreas, extraRvFees), supplies, extraStallFees }}
                                 suppliesSold={suppliesSold}
                                 defaultNights={showNights}
                                 onAdd={addBooking}
@@ -7136,27 +7180,27 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                             );
                                                         });
                                                     })}
-                                                    {rvAreas.flatMap(rv => {
+                                                    {rvUnits.flatMap(rv => {
                                                         const hookupInfo = RV_HOOKUP_TYPES.find(t => t.id === rv.hookupType) || RV_HOOKUP_TYPES[0];
                                                         const rvBooked = bookedSpotsForRvArea(rv);
                                                         const capacity = rv.spotCount || 0;
                                                         const variants = [];
-                                                        if (nightlyRateForRvArea(rv.id, extraRvFees) > 0) {
+                                                        if (nightlyRateForRvArea(rv.id, rvPriceFees) > 0) {
                                                             variants.push({
                                                                 key: `${rv.id}::night`,
-                                                                priceLabel: `$${moneyNum(nightlyRateForRvArea(rv.id, extraRvFees))}/night`,
-                                                                costLabel: `$${moneyNum(nightlyCostForRvArea(rv.id, extraRvFees))}/night`,
-                                                                perUnit: nightlyRateForRvArea(rv.id, extraRvFees) * (showNights || 3),
-                                                                costPerUnit: nightlyCostForRvArea(rv.id, extraRvFees) * (showNights || 3),
+                                                                priceLabel: `$${moneyNum(nightlyRateForRvArea(rv.id, rvPriceFees))}/night`,
+                                                                costLabel: `$${moneyNum(nightlyCostForRvArea(rv.id, rvPriceFees))}/night`,
+                                                                perUnit: nightlyRateForRvArea(rv.id, rvPriceFees) * (showNights || 3),
+                                                                costPerUnit: nightlyCostForRvArea(rv.id, rvPriceFees) * (showNights || 3),
                                                             });
                                                         }
                                                         if (rvIsFlat(rv)) {
                                                             variants.push({
                                                                 key: `${rv.id}::flat`,
                                                                 priceLabel: `$${moneyNum(rvFlatTotal(rv))} flat`,
-                                                                costLabel: `$${moneyNum(flatCostForRvArea(rv.id, extraRvFees))} flat`,
+                                                                costLabel: `$${moneyNum(flatCostForRvArea(rv.id, rvPriceFees))} flat`,
                                                                 perUnit: rvFlatTotal(rv),
-                                                                costPerUnit: flatCostForRvArea(rv.id, extraRvFees),
+                                                                costPerUnit: flatCostForRvArea(rv.id, rvPriceFees),
                                                             });
                                                         }
                                                         if (variants.length === 0) {
@@ -7191,7 +7235,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                         <td className="px-3 py-2" />
                                                         <td className="px-3 py-2 text-center">
                                                             {barns.reduce((s, b) => s + bookedStallsForBarn(b), 0)
-                                                                + rvAreas.reduce((s, r) => s + bookedSpotsForRvArea(r), 0)}
+                                                                + rvUnits.reduce((s, r) => s + bookedSpotsForRvArea(r), 0)}
                                                         </td>
                                                         <td className="px-3 py-2 text-right">
                                                             {fmt$(summaryMaxRevenue)}

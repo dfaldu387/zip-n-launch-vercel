@@ -747,6 +747,28 @@ const AssignBoard = ({
         return `${b.exhibitorName || 'This booking'} ordered: ${summary}. Placing another here bills at ${barn.name}'s rate.`;
     };
 
+    // RV twin of the barn hint: a booking that ordered a specific camping type should
+    // sit on spots painted with that type. A heads-up, not a block.
+    const rvTypeMismatchHint = (unitId, bookingId) => {
+        const b = bookingById[bookingId];
+        const areas = rvWithSpots || [];
+        const area = areas.find(a => (a.spots || []).some(s => s.id === unitId));
+        const spot = area?.spots.find(s => s.id === unitId);
+        if (!b || !spot) return null;
+        const typeIds = new Set(areas.flatMap(a => (a.campingTypes || []).map(t => t.id)));
+        const typeItems = (b.items || []).filter(it => it.type === 'rv' && typeIds.has(it.refId));
+        if (typeItems.length === 0) return null; // ordered by area, nothing to compare
+        const orderedHere = typeItems.filter(it => it.refId === spot.campingTypeId)
+            .reduce((n, it) => n + (Number(it.qty) || 0), 0);
+        const alreadyHere = getAssignedRvSpotsForBooking(b, areas).filter(s => s.campingTypeId === spot.campingTypeId).length;
+        if (spot.campingTypeId && alreadyHere < orderedHere) return null;
+        const summary = typeItems.map(it => `${Number(it.qty) || 0}× ${it.name || it.refId}`).join(', ');
+        const spotTypes = area.campingTypes || [];
+        const ti = spotTypes.findIndex(t => t.id === spot.campingTypeId);
+        const thisType = ti >= 0 ? (spotTypes[ti].label || `Type ${ti + 1}`) : null;
+        return `${b.exhibitorName || 'This booking'} ordered: ${summary}. This spot is ${thisType ? `${area.name} · ${thisType}` : 'not set to a camping type'}.`;
+    };
+
     // Enforce the booking's cap: never assign more units than the booking was
     // booked for. To add more, the booking must be updated on the Bookings tab
     // first. Reassigning a unit the booking already owns doesn't change its count,
@@ -766,6 +788,10 @@ const AssignBoard = ({
         if (mode === 'stalls') {
             const hint = stallOrderMismatchHint(unitId, bookingId);
             if (hint) toast({ title: 'Different barn than ordered', description: hint });
+        }
+        if (mode === 'rv') {
+            const hint = rvTypeMismatchHint(unitId, bookingId);
+            if (hint) toast({ title: 'Different camping type than ordered', description: hint });
         }
         cfg.assign(unitId, bookingId);
         flashBookings([bookingId]);

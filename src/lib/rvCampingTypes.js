@@ -90,3 +90,5 @@ export function paintCampingType(spots, spotId, type) {
         return { ...rest, campingTypeId: type.id, ...(amps ? { amps } : {}) };
     });
 }
+
+export const campingTypeLabel = (t, index = 0) => (t?.label || '').trim() || `Type ${index + 1}`;
