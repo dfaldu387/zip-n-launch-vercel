@@ -120,3 +120,42 @@ describe('saved RV layouts', () => {
         expect(applyRvLayout({ id: 'b' }, { cells: [] }, () => 'x')).toBeNull();
     });
 });
+
+import { campingTypeDeleteBlock, bookedQtyByType } from '@/lib/rvCampingTypes';
+describe('delete guard', () => {
+    const three = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const two = [{ id: 'a' }, { id: 'b' }];
+    const bk = (refId, qty, status = 'confirmed') => ({ status, items: [{ type: 'rv', refId, qty }] });
+    it('ignores cancelled bookings', () => {
+        expect(bookedQtyByType(two, [bk('a', 2), bk('a', 5, 'cancelled')])).toEqual({ a: 2 });
+    });
+    it('blocks deleting a type that is booked, allows an unbooked one', () => {
+        expect(campingTypeDeleteBlock(three, 'a', [bk('a', 1)]).blocked).toBe(true);
+        expect(campingTypeDeleteBlock(three, 'c', [bk('a', 1)]).blocked).toBe(false);
+    });
+    it('going from 2 types to 1 checks bookings on BOTH types', () => {
+        expect(campingTypeDeleteBlock(two, 'b', [bk('a', 3)]).blocked).toBe(true);
+        expect(campingTypeDeleteBlock(two, 'b', []).blocked).toBe(false);
+    });
+    it('never deletes the last type', () => {
+        expect(campingTypeDeleteBlock([{ id: 'a' }], 'a', []).blocked).toBe(true);
+    });
+});
+
+import { trimRvSpots } from '@/lib/rvAssignment';
+describe('trimRvSpots', () => {
+    const area = { id: 'a', spots: Array.from({ length: 18 }, (_, i) => ({ id: `a::spot::${i + 1}`, number: `R${i + 1}` })) };
+    it('drops spots beyond the new count', () => {
+        expect(trimRvSpots(area, 10)).toHaveLength(10);
+    });
+    it('never drops a booked spot', () => {
+        const booked = { ...area, spots: area.spots.map((s, i) => (i === 14 ? { ...s, bookingId: 'bk' } : s)) };
+        const out = trimRvSpots(booked, 10);
+        expect(out).toHaveLength(15);
+        expect(out[14].bookingId).toBe('bk');
+    });
+    it('leaves a list that is already short enough alone', () => {
+        const same = trimRvSpots(area, 18);
+        expect(same).toBe(area.spots);
+    });
+});

@@ -47,6 +47,8 @@ const groupNameOf = (b) => {
 };
 
 // Room labels shown in non-stall boxes; aisle/empty print blank for a clean chart.
+// Widest strip printed in one piece; wider barns wrap into stacked strips.
+const MAX_PRINT_COLS = 20;
 const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack' };
 
 function buildStallingChartHtml({
@@ -102,6 +104,7 @@ function buildStallingChartHtml({
     // layer, so they render as free/taken with their number.
     const cellHtml = (unit, { outline = '', useLayer = false } = {}) => {
         const type = unit.type || 'stall';
+        if (type === 'roadway') return '<div class="cell room road">Road</div>';
         if (type !== 'stall') {
             // Blocked shows its number; office/feed/wash/tack show their name; aisle &
             // empty print blank so walkways don't clutter the chart.
@@ -143,9 +146,6 @@ function buildStallingChartHtml({
         const assigned = units.filter(u => (u.type || 'stall') === 'stall' && u.bookingId).length;
         const rowCount = Math.ceil(units.length / cols);
         const { rowLabels: defRows, colLabels: defCols } = computeGridLabels(units, cols);
-        // Header row: a blank corner then one column label per column.
-        let cells = `<div class="hcell corner"></div>`;
-        for (let ci = 0; ci < cols; ci++) cells += `<div class="hcell">${esc(labelValue(colLabels, defCols, ci))}</div>`;
         const gOf = (j) => (j >= 0 && j < units.length && units[j]?.bookingId) ? groupIdByBooking[units[j].bookingId] : null;
         // A row of nothing but aisle / empty boxes prints as one thin walkway strip,
         // the same as on screen — a band of tall blank boxes just wastes the page.
@@ -156,41 +156,53 @@ function buildStallingChartHtml({
                 return t === 'aisle' || t === 'empty';
             });
         };
-        for (let ri = 0; ri < rowCount; ri++) {
-            if (useLayer && isWalkwayRow(ri)) {
-                cells += `<div class="hcell rlabel thin">${esc(labelValue(rowLabels, defRows, ri))}</div>`;
-                cells += `<div class="aisle" style="grid-column:span ${cols}"></div>`;
-                continue;
-            }
-            cells += `<div class="hcell rlabel">${esc(labelValue(rowLabels, defRows, ri))}</div>`;
-            for (let ci = 0; ci < cols; ci++) {
-                const idx = ri * cols + ci;
-                const unit = units[idx];
-                if (!unit) { cells += `<div class="cell free"></div>`; continue; }
-                const gid = unit.bookingId ? groupIdByBooking[unit.bookingId] : null;
-                let outline = '';
-                if (gid) {
-                    const sides = {
-                        top: gOf(idx - cols) !== gid,
-                        bottom: gOf(idx + cols) !== gid,
-                        left: ci === 0 || gOf(idx - 1) !== gid,
-                        right: ci === cols - 1 || gOf(idx + 1) !== gid,
-                    };
-                    // Group identity is carried by the coloured block + the top legend
-                    // (Robert's pick — a long name never fit inside one narrow box), so we
-                    // draw only the group outline here, no on-box name tag.
-                    outline = outlineStyle(sides, colorByGroup[gid]);
+        // One grid for columns [c0, c1). A very wide barn (say 100 columns) is cut into
+        // several strips of at most MAX_PRINT_COLS columns, stacked down the page, so
+        // every box stays big enough to read instead of shrinking to a sliver.
+        const stripGrid = (c0, c1) => {
+            const width = c1 - c0;
+            // Header row: a blank corner then one column label per column.
+            let cells = `<div class="hcell corner"></div>`;
+            for (let ci = c0; ci < c1; ci++) cells += `<div class="hcell">${esc(labelValue(colLabels, defCols, ci))}</div>`;
+            for (let ri = 0; ri < rowCount; ri++) {
+                if (useLayer && isWalkwayRow(ri)) {
+                    cells += `<div class="hcell rlabel thin">${esc(labelValue(rowLabels, defRows, ri))}</div>`;
+                    cells += `<div class="aisle" style="grid-column:span ${width}"></div>`;
+                    continue;
                 }
-                cells += cellHtml(unit, { outline, useLayer });
+                cells += `<div class="hcell rlabel">${esc(labelValue(rowLabels, defRows, ri))}</div>`;
+                for (let ci = c0; ci < c1; ci++) {
+                    const idx = ri * cols + ci;
+                    const unit = units[idx];
+                    if (!unit) { cells += `<div class="cell free"></div>`; continue; }
+                    const gid = unit.bookingId ? groupIdByBooking[unit.bookingId] : null;
+                    let outline = '';
+                    if (gid) {
+                        const sides = {
+                            top: gOf(idx - cols) !== gid,
+                            bottom: gOf(idx + cols) !== gid,
+                            left: ci === c0 || gOf(idx - 1) !== gid,
+                            right: ci === c1 - 1 || gOf(idx + 1) !== gid,
+                        };
+                        // Group identity is carried by the coloured block + the top legend
+                        // (Robert's pick — a long name never fit inside one narrow box), so we
+                        // draw only the group outline here, no on-box name tag.
+                        outline = outlineStyle(sides, colorByGroup[gid]);
+                    }
+                    cells += cellHtml(unit, { outline, useLayer });
+                }
+                // RV areas: a roadway strip between rows (set in the RV editor).
+                if (ri < rowCount - 1 && roadsAfter.includes(ri)) {
+                    cells += `<div class="hcell"></div><div class="road" style="grid-column:span ${width}">Roadway</div>`;
+                }
             }
-            // RV areas: a roadway strip between rows (set in the RV editor).
-            if (ri < rowCount - 1 && roadsAfter.includes(ri)) {
-                cells += `<div class="hcell"></div><div class="road" style="grid-column:span ${cols}">Roadway</div>`;
-            }
-        }
+            return `<div class="grid" style="grid-template-columns:26px repeat(${width}, 1fr)">${cells}</div>`;
+        };
+        const strips = [];
+        for (let c0 = 0; c0 < cols; c0 += MAX_PRINT_COLS) strips.push(stripGrid(c0, Math.min(cols, c0 + MAX_PRINT_COLS)));
         return `<section class="barn">
             ${hideName ? '' : `<h2>${esc(name)} <span class="meta">${assigned}/${total} assigned</span></h2>`}
-            <div class="grid" style="grid-template-columns:26px repeat(${cols}, 1fr)">${cells}</div>
+            ${strips.join('')}
         </section>`;
     };
 
@@ -257,6 +269,8 @@ function buildStallingChartHtml({
         .cell .num{font-size:13px;font-family:ui-monospace,monospace;color:#475569;font-weight:700}
         .cell .num2{font-size:11px;font-family:ui-monospace,monospace;color:#64748b;font-weight:700;margin-top:2px}
         .cell .num3{font-size:10px;font-family:ui-monospace,monospace;color:#64748b;font-weight:600;margin-top:1px}
+        .grid + .grid{margin-top:16px;page-break-inside:avoid}
+        .cell.room.road{background:#fde68a;border-color:#f59e0b;color:#92400e;font-weight:700;font-size:11px;text-transform:uppercase}
         .cell.taken{padding-bottom:6px}
         .cell.taken .name{font-size:14px;font-weight:700;text-align:center;line-height:1.15;word-break:break-word;color:#fff}
         .cell.taken .num2{color:rgba(255,255,255,0.85)}

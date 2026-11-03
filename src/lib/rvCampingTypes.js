@@ -92,3 +92,34 @@ export function paintCampingType(spots, spotId, type) {
 }
 
 export const campingTypeLabel = (t, index = 0) => (t?.label || '').trim() || `Type ${index + 1}`;
+
+// Quantity booked (live bookings only) against each of these camping types, by type id.
+export function bookedQtyByType(types, bookings = []) {
+    const ids = new Set((types || []).map(t => t.id));
+    const out = {};
+    for (const b of bookings || []) {
+        if (!b || b.status === 'cancelled') continue;
+        for (const it of b.items || []) {
+            if (it.type === 'rv' && ids.has(it.refId)) out[it.refId] = (out[it.refId] || 0) + (Number(it.qty) || 0);
+        }
+    }
+    return out;
+}
+
+// Can this camping type be deleted? Not while a live booking points at it. When the area
+// would be left with ONE type it is sold as a plain area again, so a booking for ANY of
+// its types would lose its link — those are checked too.
+export function campingTypeDeleteBlock(types, typeId, bookings = []) {
+    if ((types || []).length <= 1) return { blocked: true, qty: 0, reason: 'An RV area needs at least one camping type.' };
+    const booked = bookedQtyByType(types, bookings);
+    const becomesSingle = types.length - 1 < 2;
+    const checked = becomesSingle ? types : types.filter(t => t.id === typeId);
+    const qty = checked.reduce((n, t) => n + (booked[t.id] || 0), 0);
+    if (qty === 0) return { blocked: false, qty: 0, reason: '' };
+    return {
+        blocked: true, qty,
+        reason: becomesSingle
+            ? `${qty} spot${qty === 1 ? ' is' : 's are'} booked on this area's camping types. With one type left this area is sold as a whole, so cancel or move those bookings first.`
+            : `${qty} spot${qty === 1 ? ' is' : 's are'} booked on this camping type. Cancel or move those bookings first.`,
+    };
+}

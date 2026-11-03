@@ -645,9 +645,19 @@ const AssignBoard = ({
     const moveRowsTo = (rows, label, container, startIdx) => {
         const bookingIds = new Set(rows.map(r => r.booking.id));
         const cleared = clearBookingIds(bookingIds);
+        // Each queue entry is one unit to place. RV bookings that ordered a specific camping
+        // type carry its id, so they only land on spots painted with that type.
         const queue = [];
+        const typeIds = new Set((rvWithSpots || []).flatMap(a => (a.campingTypes || []).map(t => t.id)));
         [...rows].sort((a, b) => b.requested - a.requested).forEach(r => {
-            for (let i = 0; i < r.requested; i++) queue.push(r.booking.id);
+            let typed = 0;
+            if (mode === 'rv') {
+                for (const it of r.booking.items || []) {
+                    if (it.type !== 'rv' || !typeIds.has(it.refId)) continue;
+                    for (let i = 0; i < (Number(it.qty) || 0); i++) { queue.push({ bookingId: r.booking.id, typeId: it.refId }); typed++; }
+                }
+            }
+            for (let i = typed; i < r.requested; i++) queue.push({ bookingId: r.booking.id, typeId: null });
         });
         const total = queue.length;
         const unitsField = mode === 'rv' ? 'spots' : 'stalls';
@@ -656,7 +666,10 @@ const AssignBoard = ({
         const plan = [];
         for (let i = startIdx; i < units.length && queue.length; i++) {
             const u = units[i];
-            if ((u.type || 'stall') === 'stall' && !u.bookingId) plan.push({ id: u.id, bookingId: queue.shift() });
+            if ((u.type || 'stall') !== 'stall' || u.bookingId) continue;
+            const at = queue.findIndex(q => !q.typeId || q.typeId === u.campingTypeId);
+            if (at === -1) continue; // free, but not the camping type anyone here ordered
+            plan.push({ id: u.id, bookingId: queue.splice(at, 1)[0].bookingId });
         }
         if (queue.length > 0) {
             toast({

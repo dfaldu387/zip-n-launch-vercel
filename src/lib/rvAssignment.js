@@ -219,3 +219,15 @@ export function addRvColumn(area) {
     }
     return { spots: rekey(area.id, out), perRow: Math.min(40, perRow + 1) };
 }
+
+// When an area's spot count goes DOWN, drop the extra spots from the saved list — the public
+// stalling chart and the printed chart read the saved list as-is. A spot with an exhibitor on
+// it is never dropped: the list is cut only after the last booked spot.
+export function trimRvSpots(area, count) {
+    const all = area?.spots || [];
+    const target = Math.max(0, Number(count) || 0);
+    if (all.length <= target) return all;
+    let lastBooked = -1;
+    all.forEach((s, i) => { if (s.bookingId) lastBooked = i; });
+    return ensureRvSpots({ ...area, spotCount: Math.max(target, lastBooked + 1) }).spots;
+}

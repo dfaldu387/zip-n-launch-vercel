@@ -54,6 +54,13 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
                                     const unit = units[ri * cols + ci];
                                     if (!unit) return <div key={ci} />;
                                     const type = unit.type || 'stall';
+                                    if (type === 'roadway') {
+                                        return (
+                                            <div key={ci} className="h-14 w-full rounded-sm border border-amber-400/60 bg-amber-200/70 flex items-center justify-center text-[9px] uppercase font-semibold text-amber-800 font-mono">
+                                                Road
+                                            </div>
+                                        );
+                                    }
                                     if (type !== 'stall') {
                                         return (
                                             <div key={ci} className="h-14 w-full rounded-sm border border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center text-[9px] uppercase text-muted-foreground/60 font-mono">

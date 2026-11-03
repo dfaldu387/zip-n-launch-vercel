@@ -62,8 +62,8 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
-import { campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
-import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn } from '@/lib/rvAssignment';
+import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn, trimRvSpots } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
@@ -1685,7 +1685,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 //   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', extraRvFees = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', extraRvFees = [], bookings = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
     const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
@@ -1704,7 +1704,26 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
     // Camping types: edits write the list AND keep spotCount/hookup/power on the area in step.
     const assignedByType = assignedCountByType(rvSpots);
     const saveCampingTypes = (types) => {
-        Object.entries(areaFieldsFromTypes(types)).forEach(([k, v]) => onUpdate(k, v));
+        const fields = areaFieldsFromTypes(types);
+        Object.entries(fields).forEach(([k, v]) => onUpdate(k, v));
+        // Fewer spots now: drop the extras from the saved list too (the public chart reads it as-is).
+        if ((rvArea.spots || []).length > fields.spotCount) onUpdate('spots', trimRvSpots(rvArea, fields.spotCount));
+    };
+    // Delete a camping type — refused while live bookings point at it. Painted spots just lose the paint.
+    const deleteCampingType = (typeId) => {
+        const guard = campingTypeDeleteBlock(campingTypes, typeId, bookings);
+        if (guard.blocked) {
+            toast({ title: "This camping type can't be deleted yet", description: guard.reason, variant: 'destructive' });
+            return;
+        }
+        if (rvSpots.some(s => s.campingTypeId === typeId)) {
+            onUpdate('spots', rvSpots.map(s => {
+                if (s.campingTypeId !== typeId) return s;
+                const { campingTypeId: _c, ...rest } = s;
+                return rest;
+            }));
+        }
+        saveCampingTypes(removeCampingType(campingTypes, typeId));
     };
     const editCampingType = (typeId, patch) => saveCampingTypes(updateCampingType(campingTypes, typeId, patch));
     const campingTypes = getCampingTypes(rvArea);
@@ -1713,6 +1732,11 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
     const [loadRvOpen, setLoadRvOpen] = useState(false);
     const [pendingRv, setPendingRv] = useState(null);
     const pickSavedRv = (row) => {
+        const bookedTypes = Object.values(bookedQtyByType(campingTypes, bookings)).reduce((n, q) => n + q, 0);
+        if (campingTypes.length > 1 && bookedTypes > 0) {
+            toast({ title: 'This area has camping type bookings', description: 'Cancel or move them first, then load a saved layout.', variant: 'destructive' });
+            return;
+        }
         if (rvAreaHasAssignments({ spots: rvSpots })) {
             toast({ title: 'This area has exhibitors on its spots', description: 'Move them to another area first, then load a saved layout.', variant: 'destructive' });
             return;
@@ -1851,7 +1875,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                     <Button type="button" variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => saveCampingTypes(duplicateCampingType(rvArea.id, campingTypes, t.id))}>
                                         <Copy className="h-3.5 w-3.5" /> Duplicate
                                     </Button>
-                                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" disabled={campingTypes.length <= 1} title={campingTypes.length <= 1 ? 'An RV area needs at least one camping type' : 'Delete this camping type'} onClick={() => saveCampingTypes(removeCampingType(campingTypes, t.id))}>
+                                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" disabled={campingTypes.length <= 1} title={campingTypes.length <= 1 ? 'An RV area needs at least one camping type' : 'Delete this camping type'} onClick={() => deleteCampingType(t.id)}>
                                         <Trash2 className="h-3.5 w-3.5" />
                                     </Button>
                                 </div>
@@ -6330,6 +6354,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             otherRvAreas={rvAreas.filter(r => r.id !== rv.id)}
                                             venueName={pd.venueName || ''}
                                             showName={pd.showName || show.project_name || ''}
+                                            bookings={bookings}
                                             moveInDate={moveInDate}
                                             moveOutDate={moveOutDate}
                                             datesLocked={datesLocked}
