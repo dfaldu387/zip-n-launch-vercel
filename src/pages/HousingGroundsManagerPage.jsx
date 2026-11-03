@@ -43,6 +43,8 @@ import HousingShowDetailsStep from '@/components/housing/HousingShowDetailsStep'
 import HousingTermsDialog from '@/components/housing/HousingTermsDialog';
 import SaveBarnLayoutDialog from '@/components/housing/SaveBarnLayoutDialog';
 import LoadBarnLayoutDialog from '@/components/housing/LoadBarnLayoutDialog';
+import { SaveRvLayoutDialog, LoadRvLayoutDialog } from '@/components/housing/RvLayoutDialogs';
+import { applyRvLayout, rvAreaHasAssignments } from '@/lib/savedRvLayouts';
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -60,7 +62,8 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
-import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout } from '@/lib/rvAssignment';
+import { paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
@@ -95,6 +98,8 @@ const STALL_TYPES = [
     { id: 'cattle_pen', name: 'Cattle Pen', icon: Beef, defaultPrice: 65, defaultSize: '12x16' },
     { id: 'sheep_goat_pen', name: 'Sheep / Goat Pen', icon: PawPrint, defaultPrice: 45, defaultSize: '8x10' },
 ];
+
+const CAMPING_TYPE_HEX = { sky: '#0ea5e9', orange: '#f97316', emerald: '#10b981', violet: '#8b5cf6', rose: '#f43f5e', amber: '#f59e0b', teal: '#14b8a6', fuchsia: '#d946ef' };
 
 const RV_HOOKUP_TYPES = [
     { id: 'full', name: 'Full Hookup (water + electric + sewer)' },
@@ -1668,7 +1673,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 //   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
     const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
@@ -1684,12 +1689,46 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
     const rvDuplicates = duplicateRvNumbers(rvSpots);
     const hasCustomSpotNumbers = rvSpots.some(s => s.customNumber);
     const rvPerRow = Math.max(1, Number(rvArea.layoutPerRow) || 10);
-    const [rvTool, setRvTool] = useState('number');
-    const [rvAmp, setRvAmp] = useState('50');
-    const paintAmps = (spotId, current) => {
-        const next = setRvSpotAmps(rvArea, spotId, current === rvAmp ? null : rvAmp);
-        if (next) onUpdate('spots', next);
+    // Camping types: edits write the list AND keep spotCount/hookup/power on the area in step.
+    const assignedByType = assignedCountByType(rvSpots);
+    const saveCampingTypes = (types) => {
+        Object.entries(areaFieldsFromTypes(types)).forEach(([k, v]) => onUpdate(k, v));
     };
+    const editCampingType = (typeId, patch) => saveCampingTypes(updateCampingType(campingTypes, typeId, patch));
+    const campingTypes = getCampingTypes(rvArea);
+    // Saved RV layouts (shared catalog): save this area's shape, or copy one in.
+    const [saveRvOpen, setSaveRvOpen] = useState(false);
+    const [loadRvOpen, setLoadRvOpen] = useState(false);
+    const [pendingRv, setPendingRv] = useState(null);
+    const pickSavedRv = (row) => {
+        if (rvAreaHasAssignments({ spots: rvSpots })) {
+            toast({ title: 'This area has exhibitors on its spots', description: 'Move them to another area first, then load a saved layout.', variant: 'destructive' });
+            return;
+        }
+        setLoadRvOpen(false);
+        setPendingRv(row);
+    };
+    const confirmLoadRv = () => {
+        const patch = applyRvLayout(rvArea, pendingRv?.layout, (i) => newCampingType(rvArea.id, i).id);
+        setPendingRv(null);
+        if (!patch) { toast({ title: 'That layout cannot be used', variant: 'destructive' }); return; }
+        Object.entries(patch).forEach(([k, v]) => onUpdate(k, v));
+        toast({ title: 'Layout loaded', description: `${patch.spotCount} spots and ${patch.campingTypes.length} camping type${patch.campingTypes.length === 1 ? '' : 's'}.` });
+    };
+    const typeById = Object.fromEntries(campingTypes.map(t => [t.id, t]));
+    const [rvTool, setRvTool] = useState('number');
+    const [paintTypeId, setPaintTypeId] = useState(null);
+    const paintType = campingTypes.find(t => t.id === paintTypeId) || campingTypes[0];
+    // Grow the grid: the new spots join the selected camping type's count so the totals stay equal.
+    const growGrid = (kind) => {
+        const grown = kind === 'row' ? addRvRow(rvArea) : addRvColumn(rvArea);
+        const added = grown.spots.length - rvSpots.length;
+        saveCampingTypes(updateCampingType(campingTypes, paintType.id, { count: (Number(paintType.count) || 0) + added }));
+        onUpdate('layoutPerRow', grown.perRow);
+        onUpdate('spots', grown.spots);
+        toast({ title: kind === 'row' ? 'Row added' : 'Column added', description: `${added} new spot${added === 1 ? '' : 's'} added to ${paintType.label || 'the selected camping type'}.` });
+    };
+    const paintSpot = (spotId) => onUpdate('spots', paintCampingType(rvSpots, spotId, paintType));
     const rvRoads = rvArea.layoutRoadsAfter || [];
     const toggleRoad = (rowIndex) => onUpdate('layoutRoadsAfter',
         rvRoads.includes(rowIndex) ? rvRoads.filter(i => i !== rowIndex) : [...rvRoads, rowIndex].sort((x, y) => x - y));
@@ -1782,52 +1821,83 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                         setMoveOutDate={setMoveOutDate}
                         setDatesLocked={setDatesLocked}
                     />
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                        <div className="space-y-1">
-                            <Label className="text-xs"># of Camping Spots</Label>
-                            <Input
-                                type="number"
-                                min={0}
-                                value={rvArea.spotCount || 0}
-                                onChange={(e) => onUpdate('spotCount', parseInt(e.target.value) || 0)}
-                                className="h-8 text-xs"
-                            />
+                    {/* Robert 11-02: one RV area, many camping types — each type is a box. */}
+                    <div className="space-y-3">
+                        {campingTypes.map((t, ti) => (
+                            <div key={t.id} className="rounded-md border p-3 space-y-3" style={{ borderLeftWidth: 4, borderLeftColor: CAMPING_TYPE_HEX[t.color] || CAMPING_TYPE_HEX.sky }}>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-semibold shrink-0">Camping Type {ti + 1}</span>
+                                    <Input
+                                        value={t.label || ''}
+                                        onChange={(e) => editCampingType(t.id, { label: e.target.value })}
+                                        className="h-7 text-xs max-w-[220px]"
+                                        placeholder="Label (e.g. Full Hookup 50A)"
+                                    />
+                                    <Badge variant="outline" className="text-[10px] font-normal ml-auto" title="Spots painted on the grid with this type">
+                                        Assigned on grid: {assignedByType[t.id] || 0} of {t.count || 0}
+                                    </Badge>
+                                    <Button type="button" variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => saveCampingTypes(duplicateCampingType(rvArea.id, campingTypes, t.id))}>
+                                        <Copy className="h-3.5 w-3.5" /> Duplicate
+                                    </Button>
+                                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10" disabled={campingTypes.length <= 1} title={campingTypes.length <= 1 ? 'An RV area needs at least one camping type' : 'Delete this camping type'} onClick={() => saveCampingTypes(removeCampingType(campingTypes, t.id))}>
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                </div>
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                    <div className="space-y-1">
+                                        <Label className="text-xs"># of Camping Spots</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={t.count || 0}
+                                            onChange={(e) => editCampingType(t.id, { count: Math.max(0, parseInt(e.target.value) || 0) })}
+                                            className="h-8 text-xs"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Hookup Type</Label>
+                                        <Select value={t.hookupType || 'full'} onValueChange={(val) => editCampingType(t.id, { hookupType: val })}>
+                                            <SelectTrigger className="h-8 text-xs">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {RV_HOOKUP_TYPES.map(h => (
+                                                    <SelectItem key={h.id} value={h.id} className="text-xs">{h.name}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">Power Type</Label>
+                                        <Select value={t.powerType || '50amp'} onValueChange={(val) => editCampingType(t.id, { powerType: val })}>
+                                            <SelectTrigger className="h-8 text-xs">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {RV_POWER_TYPES.map(h => (
+                                                    <SelectItem key={h.id} value={h.id} className="text-xs">{h.name}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Notes</Label>
+                                    <Textarea
+                                        value={t.notes || ''}
+                                        onChange={(e) => editCampingType(t.id, { notes: e.target.value })}
+                                        className="text-xs min-h-[50px]"
+                                        placeholder="Water hookups, dump station, etc."
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                        <div className="flex items-center justify-between">
+                            <Button type="button" variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => saveCampingTypes([...campingTypes, newCampingType(rvArea.id, campingTypes.length)])}>
+                                <Plus className="h-3.5 w-3.5" /> Add Camping Type
+                            </Button>
+                            <span className="text-xs text-muted-foreground">Total: {campingTypeTotal(campingTypes)} spots in this area</span>
                         </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Hookup Type</Label>
-                            <Select value={rvArea.hookupType || 'full'} onValueChange={(val) => onUpdate('hookupType', val)}>
-                                <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {RV_HOOKUP_TYPES.map(t => (
-                                        <SelectItem key={t.id} value={t.id} className="text-xs">{t.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs">Power Type</Label>
-                            <Select value={rvArea.powerType || '50amp'} onValueChange={(val) => onUpdate('powerType', val)}>
-                                <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {RV_POWER_TYPES.map(t => (
-                                        <SelectItem key={t.id} value={t.id} className="text-xs">{t.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                    <div className="space-y-1">
-                        <Label className="text-xs">Notes</Label>
-                        <Textarea
-                            value={rvArea.notes || ''}
-                            onChange={(e) => onUpdate('notes', e.target.value)}
-                            className="text-xs min-h-[50px]"
-                            placeholder="Water hookups, dump station, etc."
-                        />
                     </div>
 
                     {/* Custom spot numbers — for facilities that label their own sites */}
@@ -1847,6 +1917,10 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                             {showSpotNumbers && (
                                 <div className="rounded-md border border-dashed p-3 space-y-3 text-xs">
                                     <div className="flex flex-wrap items-center justify-end gap-2">
+                                        <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => setSaveRvOpen(true)}>Save layout</Button>
+                                        {!rvArea.layoutLocked && (
+                                            <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLoadRvOpen(true)}>Load saved layout</Button>
+                                        )}
                                         {otherRvAreas.length > 0 && !rvArea.layoutLocked && (
                                             <Select
                                                 value=""
@@ -1908,10 +1982,13 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                                             onChange={(e) => onUpdate('layoutPerRow', Math.min(40, Math.max(1, parseInt(e.target.value) || 1)))}
                                             className="h-7 w-16 text-xs"
                                         />
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => growGrid('row')}><Plus className="h-3 w-3" /> Add row</Button>
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => growGrid('column')}><Plus className="h-3 w-3" /> Add column</Button>
+                                        <span className="text-muted-foreground">New spots join the camping type picked under "Camping type".</span>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-muted-foreground">Click a spot to:</span>
-                                        {[['number', 'Type its number'], ['empty', 'Mark empty'], ['blocked', 'Mark blocked'], ['power', 'Set power']].map(([key, label]) => (
+                                        {[['number', 'Type its number'], ['empty', 'Mark empty'], ['blocked', 'Mark blocked'], ['roadway', 'Mark roadway'], ['power', 'Camping type']].map(([key, label]) => (
                                             <Button
                                                 key={key} type="button" size="sm" className="h-7 text-xs"
                                                 variant={rvTool === key ? 'default' : 'outline'}
@@ -1921,13 +1998,16 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                                     </div>
                                     {rvTool === 'power' && (
                                         <div className="flex flex-wrap items-center gap-2">
-                                            <span className="text-muted-foreground">Power:</span>
-                                            {['30', '50'].map(a => (
-                                                <Button key={a} type="button" size="sm" className="h-7 text-xs"
-                                                    variant={rvAmp === a ? 'default' : 'outline'}
-                                                    onClick={() => setRvAmp(a)}>{a} Amp</Button>
+                                            <span className="text-muted-foreground">Camping type:</span>
+                                            {campingTypes.map((t, ti) => (
+                                                <Button key={t.id} type="button" size="sm" className="h-7 text-xs gap-1.5"
+                                                    variant={paintType?.id === t.id ? 'default' : 'outline'}
+                                                    onClick={() => setPaintTypeId(t.id)}>
+                                                    <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: CAMPING_TYPE_HEX[t.color] }} />
+                                                    {t.label || `Type ${ti + 1}`} ({assignedByType[t.id] || 0}/{t.count || 0})
+                                                </Button>
                                             ))}
-                                            <span className="text-muted-foreground">Click spots to give them this power. Click again to clear.</span>
+                                            <span className="text-muted-foreground">Click spots to paint them with this type. Click again to clear.</span>
                                         </div>
                                     )}
                                     <div className="max-h-80 overflow-auto pb-1">
@@ -1938,15 +2018,15 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                                                         const dup = rvDuplicates.has(String(spot.number).toLowerCase());
                                                         if (rvTool === 'power') {
                                                             if (spot.type) return <div key={spot.id} className="h-24 w-14 shrink-0 rounded-sm border border-dashed bg-muted/30 opacity-50" />;
+                                                            const ct = typeById[spot.campingTypeId];
                                                             return (
                                                                 <button
                                                                     key={spot.id} type="button"
-                                                                    onClick={() => paintAmps(spot.id, spot.amps)}
+                                                                    onClick={() => paintSpot(spot.id)}
+                                                                    style={ct ? { background: CAMPING_TYPE_HEX[ct.color] + '33', borderColor: CAMPING_TYPE_HEX[ct.color] } : undefined}
                                                                     className={cn(
                                                                         'h-24 w-14 shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold flex flex-col items-center justify-center gap-1',
-                                                                        spot.amps === '50' ? 'bg-orange-100 border-orange-400 text-orange-900'
-                                                                            : spot.amps === '30' ? 'bg-sky-100 border-sky-400 text-sky-900'
-                                                                                : 'bg-background border-muted-foreground/40 hover:border-primary',
+                                                                        !ct && 'bg-background border-muted-foreground/40 hover:border-primary',
                                                                     )}
                                                                 ><span>{spot.number}</span>{spot.amps && <span>{spot.amps}A</span>}</button>
                                                             );
@@ -1963,18 +2043,19 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                                                                         'h-24 w-14 shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold',
                                                                         spot.bookingId ? 'bg-blue-600 text-white border-blue-700'
                                                                             : t === 'blocked' ? 'bg-muted text-muted-foreground border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]'
-                                                                                : t === 'empty' ? 'bg-muted/30 border-dashed border-muted-foreground/30 text-muted-foreground/60'
+                                                                                : t === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800 [background-image:repeating-linear-gradient(0deg,transparent,transparent_8px,rgba(180,83,9,0.25)_8px,rgba(180,83,9,0.25)_10px)]'
+                                                                            : t === 'empty' ? 'bg-muted/30 border-dashed border-muted-foreground/30 text-muted-foreground/60'
                                                                                     : 'bg-background border-muted-foreground/40 hover:border-primary',
                                                                     )}
-                                                                >{t === 'blocked' ? 'Blocked' : t === 'empty' ? 'Empty' : spot.number}</button>
+                                                                >{t === 'blocked' ? 'Blocked' : t === 'roadway' ? 'Road' : t === 'empty' ? 'Empty' : spot.number}</button>
                                                             );
                                                         }
                                                         if (spot.type) {
                                                             return (
                                                                 <div key={spot.id} className={cn(
                                                                     'h-24 w-14 shrink-0 rounded-sm border flex items-center justify-center text-[10px] font-mono text-muted-foreground/70',
-                                                                    spot.type === 'blocked' ? 'bg-muted border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]' : 'bg-muted/30 border-dashed border-muted-foreground/30',
-                                                                )}>{spot.type === 'blocked' ? 'Blocked' : ''}</div>
+                                                                    spot.type === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800 [background-image:repeating-linear-gradient(0deg,transparent,transparent_8px,rgba(180,83,9,0.25)_8px,rgba(180,83,9,0.25)_10px)]' : spot.type === 'blocked' ? 'bg-muted border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]' : 'bg-muted/30 border-dashed border-muted-foreground/30',
+                                                                )}>{spot.type === 'blocked' ? 'Blocked' : spot.type === 'roadway' ? 'Road' : ''}</div>
                                                             );
                                                         }
                                                         return (
@@ -2020,6 +2101,24 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], variant = '
                         </div>
                     )}
                   </fieldset>
+                  <SaveRvLayoutDialog open={saveRvOpen} onOpenChange={setSaveRvOpen} rvArea={rvArea} defaultFacility={venueName} defaultLabel={showName} />
+                  <LoadRvLayoutDialog open={loadRvOpen} onOpenChange={setLoadRvOpen} onPick={pickSavedRv} />
+                  <AlertDialog open={!!pendingRv} onOpenChange={(o) => { if (!o) setPendingRv(null); }}>
+                      <AlertDialogContent>
+                          <AlertDialogHeader>
+                              <AlertDialogTitle>Replace this RV area's layout?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                  This area will take the grid and camping types of{' '}
+                                  <span className="font-semibold text-foreground">{pendingRv ? `${pendingRv.facility_name} · ${pendingRv.area_name}` : ''}</span>
+                                  {pendingRv ? ` (${pendingRv.spot_count} spots).` : '.'} Its name, dates and fees stay as they are.
+                              </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={confirmLoadRv}>Replace layout</AlertDialogAction>
+                          </AlertDialogFooter>
+                      </AlertDialogContent>
+                  </AlertDialog>
                 </CardContent>
             )}
             {expanded && variant === 'fees' && (
@@ -6186,6 +6285,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                             onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
                                             onRemove={() => removeRvArea(rv.id)}
                                             otherRvAreas={rvAreas.filter(r => r.id !== rv.id)}
+                                            venueName={pd.venueName || ''}
+                                            showName={pd.showName || show.project_name || ''}
                                             moveInDate={moveInDate}
                                             moveOutDate={moveOutDate}
                                             datesLocked={datesLocked}

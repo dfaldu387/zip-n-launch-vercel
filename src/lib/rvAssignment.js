@@ -74,8 +74,10 @@ export function setRvSpotType(area, spotId, type) {
     if (!spot || spot.bookingId) return null;
     return spots.map(s => {
         if (s.id !== spotId) return s;
-        const { type: _drop, ...rest } = s;
-        return type === 'empty' || type === 'blocked' ? { ...rest, type } : rest;
+        const { type: _drop, campingTypeId: _ct, ...rest } = s;
+        // Empty / Blocked / Roadway spots are not sellable, so they leave their camping type.
+        if (type === 'empty' || type === 'blocked' || type === 'roadway') return { ...rest, type };
+        return s.campingTypeId ? { ...rest, campingTypeId: s.campingTypeId } : rest;
     });
 }
 
@@ -191,4 +193,29 @@ export function unassignBookingRvSpots(rvAreas, bookingId) {
             spot.bookingId === bookingId ? { ...spot, bookingId: null, assignedAt: null } : spot
         ),
     }));
+}
+
+// ── Grid growth (Robert 11-02: add rows / add columns, like the stalling chart) ──
+// Both return { spots, perRow } for the caller to save. Spot ids are positional
+// (`${areaId}::spot::${n}`), so after inserting we re-key every spot by its new
+// position — each spot keeps its own booking, type, amps and custom number.
+const rekey = (areaId, list) => list.map((s, i) => ({ ...s, id: `${areaId}::spot::${i + 1}` }));
+
+// One more row of blank spots at the bottom (as wide as a row).
+export function addRvRow(area) {
+    const { spots } = ensureRvSpots(area);
+    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    const blanks = Array.from({ length: perRow }, () => ({ bookingId: null }));
+    return { spots: rekey(area.id, [...spots, ...blanks]), perRow };
+}
+
+// One more spot at the end of every row. Rows are rebuilt from the current width.
+export function addRvColumn(area) {
+    const { spots } = ensureRvSpots(area);
+    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    const out = [];
+    for (let i = 0; i < spots.length; i += perRow) {
+        out.push(...spots.slice(i, i + perRow), { bookingId: null });
+    }
+    return { spots: rekey(area.id, out), perRow: Math.min(40, perRow + 1) };
 }
