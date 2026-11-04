@@ -86,6 +86,66 @@ describe('grid growth', () => {
     });
 });
 
+import { removeRvRow, removeRvColumn, sellableRvSpotCount } from '@/lib/rvAssignment';
+describe('independent grid (layoutCells)', () => {
+    const area = { id: 'a', spotCount: 6, layoutCells: 6, layoutPerRow: 3, spots: [] };
+    const booked = (a, n, id) => ({ ...a, spots: ensureRvSpots(a).spots.map((s, i) => (i === n ? { ...s, bookingId: id } : s)) });
+    it('keeps the grid size when the camping type total changes', () => {
+        expect(ensureRvSpots({ ...area, spotCount: 44 }).spots).toHaveLength(6);
+        expect(ensureRvSpots({ ...area, spotCount: 2 }).spots).toHaveLength(6);
+    });
+    it('an older area without layoutCells still follows spotCount', () => {
+        const { layoutCells: _l, ...old } = area;
+        expect(ensureRvSpots({ ...old, spotCount: 9 }).spots).toHaveLength(9);
+    });
+    it('keeps painted spots and custom numbers when the total changes', () => {
+        const spots = ensureRvSpots(area).spots.map((s, i) => (i === 1 ? { ...s, campingTypeId: 't1', customNumber: '1001' } : s));
+        const out = ensureRvSpots({ ...area, spots, spotCount: 50 }).spots;
+        expect(out[1]).toMatchObject({ campingTypeId: 't1', number: '1001' });
+    });
+    it('removes the last row and the last column', () => {
+        expect(removeRvRow(area).spots).toHaveLength(3);
+        const col = removeRvColumn(area);
+        expect(col.perRow).toBe(2);
+        expect(col.spots).toHaveLength(4);
+    });
+    it('refuses to remove a row or column with an exhibitor on it', () => {
+        expect(removeRvRow(booked(area, 4, 'bk'))).toBeNull();
+        expect(removeRvColumn(booked(area, 2, 'bk'))).toBeNull();
+    });
+    it('counts only sellable spots: road, empty and blocked leave the total', () => {
+        let spots = ensureRvSpots(area).spots;
+        expect(sellableRvSpotCount(spots)).toBe(6);
+        spots = setRvSpotType({ ...area, spots }, 'a::spot::1', 'roadway');
+        spots = setRvSpotType({ ...area, spots }, 'a::spot::2', 'empty');
+        spots = setRvSpotType({ ...area, spots }, 'a::spot::3', 'blocked');
+        expect(sellableRvSpotCount(spots)).toBe(3);
+        spots = setRvSpotType({ ...area, spots }, 'a::spot::1', null);
+        expect(sellableRvSpotCount(spots)).toBe(4);
+    });
+    it('a spot marked road loses its camping type paint', () => {
+        const painted = ensureRvSpots(area).spots.map((s, i) => (i === 0 ? { ...s, campingTypeId: 't1' } : s));
+        const out = setRvSpotType({ ...area, spots: painted }, 'a::spot::1', 'roadway');
+        expect(out[0].campingTypeId).toBeUndefined();
+    });
+    it('marking a painted spot as road also removes the amps its paint gave it', () => {
+        const painted = ensureRvSpots(area).spots.map((s, i) => (i === 0 ? { ...s, campingTypeId: 't1', amps: '30' } : s));
+        const road = setRvSpotType({ ...area, spots: painted }, 'a::spot::1', 'roadway');
+        expect(road[0].amps).toBeUndefined();
+        const back = setRvSpotType({ ...area, spots: road }, 'a::spot::1', null);
+        expect(back[0].amps).toBeUndefined();
+        expect(back[0].type).toBeUndefined();
+    });
+    it('keeps amps typed on a spot that was never painted', () => {
+        const typed = ensureRvSpots(area).spots.map((s, i) => (i === 0 ? { ...s, amps: '50' } : s));
+        const road = setRvSpotType({ ...area, spots: typed }, 'a::spot::1', 'roadway');
+        expect(road[0].amps).toBe('50');
+    });
+    it('will not remove the only row', () => {
+        expect(removeRvRow({ ...area, layoutCells: 3 })).toBeNull();
+    });
+});
+
 import { extractRvLayout, applyRvLayout, isValidRvLayout } from '@/lib/savedRvLayouts';
 describe('saved RV layouts', () => {
     const area = {
@@ -108,12 +168,15 @@ describe('saved RV layouts', () => {
     it('applies onto another area with fresh type ids and matching totals', () => {
         const target = { id: 'b', name: 'Keep me', spotCount: 1 };
         const out = applyRvLayout(target, extractRvLayout(area), (i) => `b::type::${i}`);
-        expect(out.spotCount).toBe(4);
+        // 4 cells drawn, one is a roadway: the grid keeps 4, the total is the 3 that can be sold.
+        expect(out.layoutCells).toBe(4);
+        expect(out.spotCount).toBe(3);
         expect(out.campingTypes[0].id).toBe('b::type::0');
         expect(out.spots[0]).toMatchObject({ id: 'b::spot::1', campingTypeId: 'b::type::0', bookingId: null });
         expect(out.spots[1].number).toBe('1002');
         expect(out.spots[2].type).toBe('roadway');
-        expect(out.campingTypes.reduce((n, x) => n + x.count, 0)).toBe(4);
+        expect(out.campingTypes.reduce((n, x) => n + x.count, 0)).toBe(3);
+        expect(out.spots).toHaveLength(4);
         expect(out.layoutRoadsAfter).toEqual([0]);
     });
     it('rejects junk', () => {

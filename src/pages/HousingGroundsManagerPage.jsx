@@ -63,7 +63,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
-import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn, trimRvSpots } from '@/lib/rvAssignment';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn, removeRvRow, removeRvColumn, sellableRvSpotCount } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
@@ -86,7 +86,7 @@ import {
 } from '@/lib/barnGrid';
 import { netAfterFees, estimateNetAfterFees, moneyNum } from '@/lib/netRevenue';
 import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee, barnPerStallTotal as computeBarnPerStallTotal, barnPerStallCost as computeBarnPerStallCost } from '@/lib/extraStallFees';
-import { ALL_RV_AREAS, nightlyRateForRvArea, flatRateForRvArea, nightlyCostForRvArea, flatCostForRvArea, scopeLabelForRvFee, rvPriceUnits, expandRvFeesForTypes, syncCampingTypePrices, rvBookingFormInventory } from '@/lib/extraRvFees';
+import { ALL_RV_AREAS, nightlyRateForRvArea, flatRateForRvArea, nightlyCostForRvArea, flatCostForRvArea, scopeLabelForRvFee, rvPriceUnits, expandRvFeesForTypes, splitRvFeeByScope, syncCampingTypePrices, rvBookingFormInventory } from '@/lib/extraRvFees';
 
 // ── Constants ──
 
@@ -1685,7 +1685,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 //   variant="fees"       → only the money (pricing model + price, timing, late/early fees, overflow)
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
-const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', extraRvFees = [], bookings = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
+const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', extraRvFees = [], onAddFee, bookings = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
     const [expanded, setExpanded] = useState(true);
     const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
@@ -1702,12 +1702,23 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
     const hasCustomSpotNumbers = rvSpots.some(s => s.customNumber);
     const rvPerRow = Math.max(1, Number(rvArea.layoutPerRow) || 10);
     // Camping types: edits write the list AND keep spotCount/hookup/power on the area in step.
+    // The grid is NOT touched: its size lives in layoutCells, so typing a type count never adds,
+    // removes or re-figures spots. An older area gets its grid size pinned here on its first edit.
     const assignedByType = assignedCountByType(rvSpots);
-    const saveCampingTypes = (types) => {
+    // The area total (spotCount) is the spots that can really be sold on the grid, never the sum of the typed counts.
+    const sellableNow = variant === 'inventory' ? sellableRvSpotCount(rvSpots) : (Number(rvArea.spotCount) || 0);
+    const saveCampingTypes = (types, spotsNow = rvSpots) => {
         const fields = areaFieldsFromTypes(types);
+        if (variant === 'inventory') {
+            fields.spotCount = sellableRvSpotCount(spotsNow);
+            if (rvArea.layoutCells === undefined || rvArea.layoutCells === null) onUpdate('layoutCells', spotsNow.length);
+        }
         Object.entries(fields).forEach(([k, v]) => onUpdate(k, v));
-        // Fewer spots now: drop the extras from the saved list too (the public chart reads it as-is).
-        if ((rvArea.spots || []).length > fields.spotCount) onUpdate('spots', trimRvSpots(rvArea, fields.spotCount));
+    };
+    // Every change to the grid saves the spots AND the new sellable total together.
+    const writeSpots = (next) => {
+        onUpdate('spots', next);
+        onUpdate('spotCount', sellableRvSpotCount(next));
     };
     // Delete a camping type — refused while live bookings point at it. Painted spots just lose the paint.
     const deleteCampingType = (typeId) => {
@@ -1753,18 +1764,31 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
     };
     const typeById = Object.fromEntries(campingTypes.map(t => [t.id, t]));
     const [rvTool, setRvTool] = useState('number');
+    // How big the spots are drawn in this editor only (Robert 11-03). Never saved: it does not touch the layout, the printed chart or the public chart.
+    const [rvZoom, setRvZoom] = useState('normal');
+    const cellSize = { small: 'h-12 w-8', normal: 'h-24 w-14', large: 'h-32 w-20' }[rvZoom];
     const [paintTypeId, setPaintTypeId] = useState(null);
     const paintType = campingTypes.find(t => t.id === paintTypeId) || campingTypes[0];
-    // Grow the grid: the new spots join the selected camping type's count so the totals stay equal.
-    const growGrid = (kind) => {
-        const grown = kind === 'row' ? addRvRow(rvArea) : addRvColumn(rvArea);
-        const added = grown.spots.length - rvSpots.length;
-        saveCampingTypes(updateCampingType(campingTypes, paintType.id, { count: (Number(paintType.count) || 0) + added }));
+    // Grow or shrink the grid only. Camping type counts are separate and are left as they are.
+    const resizeGrid = (kind) => {
+        const grown = { 'add-row': addRvRow, 'add-column': addRvColumn, 'remove-row': removeRvRow, 'remove-column': removeRvColumn }[kind](rvArea);
+        if (!grown) {
+            toast({ title: "Can't remove that", description: 'An exhibitor is on one of those spots (or the grid is already at its smallest). Move them first.', variant: 'destructive' });
+            return;
+        }
+        onUpdate('layoutCells', grown.spots.length);
         onUpdate('layoutPerRow', grown.perRow);
-        onUpdate('spots', grown.spots);
-        toast({ title: kind === 'row' ? 'Row added' : 'Column added', description: `${added} new spot${added === 1 ? '' : 's'} added to ${paintType.label || 'the selected camping type'}.` });
+        writeSpots(grown.spots);
+        toast({ title: { 'add-row': 'Row added', 'add-column': 'Column added', 'remove-row': 'Row removed', 'remove-column': 'Column removed' }[kind], description: `The grid now has ${grown.spots.length} spots (${sellableRvSpotCount(grown.spots)} can be sold). Camping type counts did not change.` });
     };
-    const paintSpot = (spotId) => onUpdate('spots', paintCampingType(rvSpots, spotId, paintType));
+    // Painting never lowers a typed count, but a type cannot have more painted spots than its count: raise it.
+    const paintSpot = (spotId) => {
+        const next = paintCampingType(rvSpots, spotId, paintType);
+        writeSpots(next);
+        const painted = assignedCountByType(next);
+        const raised = campingTypes.map(t => ((painted[t.id] || 0) > (Number(t.count) || 0) ? { ...t, count: painted[t.id] } : t));
+        if (raised.some((t, i) => t !== campingTypes[i])) saveCampingTypes(raised, next);
+    };
     const rvRoads = rvArea.layoutRoadsAfter || [];
     const toggleRoad = (rowIndex) => onUpdate('layoutRoadsAfter',
         rvRoads.includes(rowIndex) ? rvRoads.filter(i => i !== rowIndex) : [...rvRoads, rowIndex].sort((x, y) => x - y));
@@ -1774,7 +1798,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
             toast({ title: 'That spot is booked', description: 'Move the exhibitor to another spot first.', variant: 'destructive' });
             return;
         }
-        onUpdate('spots', next);
+        writeSpots(next);
     };
     const rvRows = [];
     for (let i = 0; i < rvSpots.length; i += rvPerRow) rvRows.push(rvSpots.slice(i, i + rvPerRow));
@@ -1829,7 +1853,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                             </>
                         )}
                         <Badge variant="outline" className="text-xs">
-                            {rvArea.spotCount || 0} spots
+                            {sellableNow} spots
                         </Badge>
                         {rvArea.isOverflow && (
                             <Badge className="text-xs bg-amber-500 text-white">Overflow</Badge>
@@ -1932,7 +1956,16 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                             <Button type="button" variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => saveCampingTypes([...campingTypes, newCampingType(rvArea.id, campingTypes.length)])}>
                                 <Plus className="h-3.5 w-3.5" /> Add Camping Type
                             </Button>
-                            <span className="text-xs text-muted-foreground">Total: {campingTypeTotal(campingTypes)} spots in this area</span>
+                            <span className="text-xs text-muted-foreground text-right">
+                                Total: {sellableNow} spots in this area
+                                {rvSpots.length > sellableNow && ` (${rvSpots.length - sellableNow} are roadway, empty or blocked)`}
+                                {campingTypeTotal(campingTypes) !== sellableNow && (
+                                    <span className="block text-amber-600">Camping types add up to {campingTypeTotal(campingTypes)}, but the grid has {sellableNow} spots that can be sold.</span>
+                                )}
+                                {campingTypes.length > 1 && sellableNow > Object.values(assignedByType).reduce((n, q) => n + q, 0) && (
+                                    <span className="block">{sellableNow - Object.values(assignedByType).reduce((n, q) => n + q, 0)} not painted with a camping type yet.</span>
+                                )}
+                            </span>
                         </div>
                     </div>
 
@@ -1966,7 +1999,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                     const copy = copyRvLayout(src, rvArea);
                                                     onUpdate('layoutPerRow', copy.layoutPerRow);
                                                     onUpdate('layoutRoadsAfter', copy.layoutRoadsAfter);
-                                                    onUpdate('spots', copy.spots);
+                                                    writeSpots(copy.spots);
                                                     toast({ title: 'Layout copied', description: `Copied from ${src.name || 'the other RV area'}.` });
                                                 }}
                                             >
@@ -2018,9 +2051,11 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                             onChange={(e) => onUpdate('layoutPerRow', Math.min(40, Math.max(1, parseInt(e.target.value) || 1)))}
                                             className="h-7 w-16 text-xs"
                                         />
-                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => growGrid('row')}><Plus className="h-3 w-3" /> Add row</Button>
-                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => growGrid('column')}><Plus className="h-3 w-3" /> Add column</Button>
-                                        <span className="text-muted-foreground">New spots join the camping type picked under "Camping type".</span>
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => resizeGrid('add-row')}><Plus className="h-3 w-3" /> Add row</Button>
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => resizeGrid('add-column')}><Plus className="h-3 w-3" /> Add column</Button>
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => resizeGrid('remove-row')}>Remove last row</Button>
+                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => resizeGrid('remove-column')}>Remove last column</Button>
+                                        <span className="text-muted-foreground">Grid: {rvSpots.length} spots. Camping type counts do not change it. New spots start with no camping type.</span>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-muted-foreground">Click a spot to:</span>
@@ -2046,14 +2081,23 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                             <span className="text-muted-foreground">Click spots to paint them with this type. Click again to clear.</span>
                                         </div>
                                     )}
-                                    <div className="max-h-80 overflow-auto pb-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-muted-foreground">Grid size:</span>
+                                        {[['small', 'Small'], ['normal', 'Normal'], ['large', 'Large']].map(([key, label]) => (
+                                            <Button key={key} type="button" size="sm" className="h-7 text-xs"
+                                                variant={rvZoom === key ? 'default' : 'outline'}
+                                                onClick={() => setRvZoom(key)}>{label}</Button>
+                                        ))}
+                                        <span className="text-muted-foreground">Only changes how big the spots look here.</span>
+                                    </div>
+                                    <div className={cn('overflow-auto pb-1', rvZoom === 'large' ? 'max-h-[32rem]' : rvZoom === 'small' ? 'max-h-60' : 'max-h-80')}>
                                         {rvRows.map((row, ri) => (
                                             <React.Fragment key={ri}>
                                                 <div className="flex gap-1.5">
                                                     {row.map(spot => {
                                                         const dup = rvDuplicates.has(String(spot.number).toLowerCase());
                                                         if (rvTool === 'power') {
-                                                            if (spot.type) return <div key={spot.id} className="h-24 w-14 shrink-0 rounded-sm border border-dashed bg-muted/30 opacity-50" />;
+                                                            if (spot.type) return <div key={spot.id} className={cn(cellSize, 'shrink-0 rounded-sm border border-dashed bg-muted/30 opacity-50')} />;
                                                             const ct = typeById[spot.campingTypeId];
                                                             return (
                                                                 <button
@@ -2061,7 +2105,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                                     onClick={() => paintSpot(spot.id)}
                                                                     style={ct ? { background: CAMPING_TYPE_HEX[ct.color] + '33', borderColor: CAMPING_TYPE_HEX[ct.color] } : undefined}
                                                                     className={cn(
-                                                                        'h-24 w-14 shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold flex flex-col items-center justify-center gap-1',
+                                                                        cellSize, 'shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold flex flex-col items-center justify-center gap-1',
                                                                         !ct && 'bg-background border-muted-foreground/40 hover:border-primary',
                                                                     )}
                                                                 ><span>{spot.number}</span>{spot.amps && <span>{spot.amps}A</span>}</button>
@@ -2076,7 +2120,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                                     title={spot.bookingId ? 'Booked - move the exhibitor first' : (t === rvTool ? 'Click to make it a normal spot' : 'Click to mark ' + rvTool)}
                                                                     onClick={() => setSpotType(spot.id, t === rvTool ? null : rvTool)}
                                                                     className={cn(
-                                                                        'h-24 w-14 shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold',
+                                                                        cellSize, 'shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold',
                                                                         spot.bookingId ? 'bg-blue-600 text-white border-blue-700'
                                                                             : t === 'blocked' ? 'bg-muted text-muted-foreground border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]'
                                                                                 : t === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800 [background-image:repeating-linear-gradient(0deg,transparent,transparent_8px,rgba(180,83,9,0.25)_8px,rgba(180,83,9,0.25)_10px)]'
@@ -2089,7 +2133,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                         if (spot.type) {
                                                             return (
                                                                 <div key={spot.id} className={cn(
-                                                                    'h-24 w-14 shrink-0 rounded-sm border flex items-center justify-center text-[10px] font-mono text-muted-foreground/70',
+                                                                    cellSize, 'shrink-0 rounded-sm border flex items-center justify-center text-[10px] font-mono text-muted-foreground/70',
                                                                     spot.type === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800 [background-image:repeating-linear-gradient(0deg,transparent,transparent_8px,rgba(180,83,9,0.25)_8px,rgba(180,83,9,0.25)_10px)]' : spot.type === 'blocked' ? 'bg-muted border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]' : 'bg-muted/30 border-dashed border-muted-foreground/30',
                                                                 )}>{spot.type === 'blocked' ? 'Blocked' : spot.type === 'roadway' ? 'Road' : ''}</div>
                                                             );
@@ -2101,7 +2145,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                                 title={spot.bookingId ? 'Spot number (booked)' : 'Spot number - click to type your own'}
                                                                 onCommit={(val) => renameSpot(spot.id, val)}
                                                                 className={cn(
-                                                                    'h-24 w-14 shrink-0 rounded-sm border text-center text-[11px] font-mono font-semibold outline-none focus:border-primary focus:bg-primary/10',
+                                                                    cellSize, 'shrink-0 rounded-sm border text-center text-[11px] font-mono font-semibold outline-none focus:border-primary focus:bg-primary/10',
                                                                     spot.bookingId ? 'bg-blue-600 text-white border-blue-700' : 'bg-background border-muted-foreground/40',
                                                                     dup && 'ring-2 ring-amber-500',
                                                                 )}
@@ -2177,7 +2221,9 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                         <span className="ml-auto font-semibold">
                                             {night > 0 || flat > 0
                                                 ? [night > 0 ? `$${night}/night` : null, flat > 0 ? `$${flat} flat` : null].filter(Boolean).join(' + ')
-                                                : <span className="text-amber-600 font-normal">No fee yet</span>}
+                                                : (onAddFee
+                                                    ? <button type="button" className="text-amber-600 font-normal underline" onClick={() => onAddFee([u.id])}>No fee yet - Add fee</button>
+                                                    : <span className="text-amber-600 font-normal">No fee yet</span>)}
                                         </span>
                                     </div>
                                 );
@@ -4655,10 +4701,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         setExtraStallFees(prev => prev.filter(f => f.id !== id));
 
     // ── RV fees (same model as stall fees, just Flat / Per Night only) ──
-    const addExtraRvFee = () => setExtraRvFees(prev => [...prev, {
+    // `scope` is an array of area / camping-type ids when called from a type's "Add fee" button;
+    // the plain Add Fee button passes a click event, so anything else means every RV area.
+    const addExtraRvFee = (scope) => setExtraRvFees(prev => [...prev, {
         id: uuidv4(),
         name: '',
-        appliesTo: ALL_RV_AREAS,
+        appliesTo: Array.isArray(scope) ? scope : ALL_RV_AREAS,
         amount: 0,
         cost: 0,
         unitType: 'per_night',
@@ -4668,7 +4716,12 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         feeLocked: false,
     }]);
     const updateExtraRvFee = (id, field, value) =>
-        setExtraRvFees(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
+        setExtraRvFees(prev => prev.flatMap(f => {
+            if (f.id !== id) return [f];
+            // Ticking 2+ camping types / areas gives each its own fee line (own price).
+            if (field === 'appliesTo') return splitRvFeeByScope(f, value, uuidv4);
+            return [{ ...f, [field]: value }];
+        }));
     const removeExtraRvFee = (id) =>
         setExtraRvFees(prev => prev.filter(f => f.id !== id));
 
@@ -6623,6 +6676,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                                 rvArea={rv}
                                                 variant="fees"
                                                 extraRvFees={extraRvFees}
+                                                onAddFee={addExtraRvFee}
                                                 onUpdate={(field, value) => updateRvArea(rv.id, field, value)}
                                                 onRemove={() => removeRvArea(rv.id)}
                                             />

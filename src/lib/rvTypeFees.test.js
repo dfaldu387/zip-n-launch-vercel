@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-    rvPriceUnits, expandRvFeesForTypes, nightlyRateForRvArea, flatRateForRvArea, scopeLabelForRvFee,
+    rvPriceUnits, expandRvFeesForTypes, nightlyRateForRvArea, flatRateForRvArea, scopeLabelForRvFee, splitRvFeeByScope,
 } from '@/lib/extraRvFees';
 
 // Prices per camping type (Robert 11-02). A single-type area must behave exactly as before.
@@ -114,5 +114,19 @@ describe('rvBookingFormInventory (manager booking form)', () => {
         const fees = [fee({ amount: 45, appliesTo: ['a1'] }), fee({ amount: 15, appliesTo: ['t2'] })];
         const r = rvBookingFormInventory([typed, single], fees);
         expect(r.rvAreas.map(a => [a.id, a.pricePerNight ?? 0, a.spotCount])).toEqual([['t1', 45, 30], ['t2', 60, 20], ['a2', 0, 10]]);
+    });
+});
+
+describe('splitRvFeeByScope', () => {
+    let n = 0;
+    const makeId = () => `new${++n}`;
+    const base = { id: 'f1', name: 'Hookup', amount: 40, cost: 5, unitType: 'per_night', appliesTo: ['t1'] };
+    it('gives each ticked camping type its own fee line, keeping the price', () => {
+        const out = splitRvFeeByScope(base, ['t1', 't2'], makeId);
+        expect(out.map(f => [f.id, f.appliesTo, f.amount, f.cost])).toEqual([['f1', ['t1'], 40, 5], ['new1', ['t2'], 40, 5]]);
+    });
+    it('keeps one fee for a single target or for All RV areas', () => {
+        expect(splitRvFeeByScope(base, ['t2'], makeId)).toHaveLength(1);
+        expect(splitRvFeeByScope(base, 'all', makeId)).toEqual([{ ...base, appliesTo: 'all' }]);
     });
 });

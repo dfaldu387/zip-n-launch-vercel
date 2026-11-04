@@ -80,6 +80,18 @@ export function expandRvFeesForTypes(rvAreas = [], fees = []) {
     });
 }
 
+/**
+ * Robert 11-03: every camping type (or area) gets its OWN fee line. When a fee's
+ * "Applies to" is set to 2+ targets, split it into one fee per target: the first keeps the
+ * original id, the others are copies (same name, amount, cost, unit, dates) with fresh ids.
+ * "All RV areas" and a single target stay one fee. Returns the fees that replace `fee`.
+ */
+export function splitRvFeeByScope(fee, newScope, makeId) {
+    const scope = rvFeeScope({ appliesTo: newScope });
+    if (scope === ALL_RV_AREAS || scope.length < 2) return [{ ...fee, appliesTo: newScope }];
+    return scope.map((id, i) => ({ ...fee, id: i === 0 ? fee.id : makeId(), appliesTo: [id] }));
+}
+
 /** Plain-language scope label for an RV fee, for badges and summaries. */
 export function scopeLabelForRvFee(fee, rvAreas = []) {
     const scope = rvFeeScope(fee);

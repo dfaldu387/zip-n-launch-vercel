@@ -7,12 +7,15 @@
 
 import { sequenceFrom } from '@/lib/numberSequence';
 
-// Turn an RV area's spotCount into a spots[] array, preserving what is already
+// Turn an RV area's grid into a spots[] array, preserving what is already
 // pinned to a spot. Spots are matched by their stable id — the visible number can
 // be typed over (`customNumber`, e.g. 1001), so it is not a safe key. A spot with
 // nothing typed is named R1, R2, … by its position.
+// The grid size is `layoutCells` once the area has one (Robert 11-03: the camping type
+// counts must not resize the grid). Older areas have none yet, so they follow spotCount.
 export function ensureRvSpots(area) {
-    const count = Math.max(0, Number(area?.spotCount) || 0);
+    const hasGrid = area?.layoutCells !== undefined && area?.layoutCells !== null && area?.layoutCells !== '';
+    const count = Math.max(0, Number(hasGrid ? area.layoutCells : area?.spotCount) || 0);
     const priorList = area?.spots || [];
     const byId = new Map(priorList.map(s => [s.id, s]));
     // Older saves may not carry the deterministic id; fall back to the default name.
@@ -51,11 +54,13 @@ export function setRvCustomNumber(area, spotId, value) {
 }
 
 // Number every spot from a start value: "1001" → 1001, 1002…  "A101" → A101, A102…
+// Roadway / Empty / Blocked spots are skipped, so the real spots count up with no gaps.
 export function fillRvSequence(area, start) {
     const labelAt = sequenceFrom(start);
     if (!labelAt) return null;
     const { spots } = ensureRvSpots(area);
-    return ensureRvSpots({ ...area, spots: spots.map((s, k) => ({ ...s, customNumber: labelAt(k) })) }).spots;
+    let k = 0;
+    return ensureRvSpots({ ...area, spots: spots.map(s => (s.type ? s : { ...s, customNumber: labelAt(k++) })) }).spots;
 }
 
 // Forget every typed number.
@@ -74,10 +79,16 @@ export function setRvSpotType(area, spotId, type) {
     if (!spot || spot.bookingId) return null;
     return spots.map(s => {
         if (s.id !== spotId) return s;
-        const { type: _drop, campingTypeId: _ct, ...rest } = s;
-        // Empty / Blocked / Roadway spots are not sellable, so they leave their camping type.
-        if (type === 'empty' || type === 'blocked' || type === 'roadway') return { ...rest, type };
-        return s.campingTypeId ? { ...rest, campingTypeId: s.campingTypeId } : rest;
+        const { type: _drop, ...rest } = s;
+        // Empty / Blocked / Roadway spots are not sellable, so they leave their camping type —
+        // and the 30A / 50A that the paint gave them (otherwise it shows on a spot with no type).
+        if (type === 'empty' || type === 'blocked' || type === 'roadway') {
+            const { campingTypeId: _ct, ...noType } = rest;
+            if (!s.campingTypeId) return { ...noType, type };
+            const { amps: _a, ...clean } = noType;
+            return { ...clean, type };
+        }
+        return rest;
     });
 }
 
@@ -113,6 +124,10 @@ export function copyRvLayout(source, target) {
         spots,
     };
 }
+
+// Spots that can really be sold: every grid spot except Roadway, Empty and Blocked ones.
+// This is the area's total (header badge, booking cap, public chart) — not the typed type counts.
+export const sellableRvSpotCount = (spots = []) => spots.filter(s => !s.type).length;
 
 // Numbers used by more than one spot (ignoring case).
 export function duplicateRvNumbers(spots = []) {
@@ -229,5 +244,31 @@ export function trimRvSpots(area, count) {
     if (all.length <= target) return all;
     let lastBooked = -1;
     all.forEach((s, i) => { if (s.bookingId) lastBooked = i; });
-    return ensureRvSpots({ ...area, spotCount: Math.max(target, lastBooked + 1) }).spots;
+    const keep = Math.max(target, lastBooked + 1);
+    return ensureRvSpots({ ...area, spotCount: keep, layoutCells: keep }).spots;
+}
+
+// Take the last row off the grid. Refused (null) when an exhibitor sits on one of its spots.
+export function removeRvRow(area) {
+    const { spots } = ensureRvSpots(area);
+    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    if (spots.length <= perRow) return null;
+    const lastRow = spots.length % perRow || perRow;
+    const kept = spots.slice(0, spots.length - lastRow);
+    if (spots.slice(kept.length).some(s => s.bookingId)) return null;
+    return { spots: rekey(area.id, kept), perRow };
+}
+
+// Take the last spot off every row. Refused (null) when an exhibitor sits on one of them.
+export function removeRvColumn(area) {
+    const { spots } = ensureRvSpots(area);
+    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    if (perRow <= 1) return null;
+    const kept = [];
+    for (let i = 0; i < spots.length; i += perRow) {
+        const row = spots.slice(i, i + perRow);
+        if (row.length === perRow && row[perRow - 1].bookingId) return null;
+        kept.push(...(row.length === perRow ? row.slice(0, perRow - 1) : row));
+    }
+    return { spots: rekey(area.id, kept), perRow: perRow - 1 };
 }

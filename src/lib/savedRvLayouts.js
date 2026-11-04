@@ -54,8 +54,9 @@ export function applyRvLayout(area, layout, makeId) {
         hookupType: t.hookupType || 'full', powerType: t.powerType || '50amp',
         notes: String(t.notes || ''), color: t.color || CAMPING_TYPE_COLORS[i % CAMPING_TYPE_COLORS.length],
     }));
-    // Counts must add up to the number of spots drawn; fix any drift on the last type.
-    const drift = layout.cells.length - types.reduce((n, t) => n + t.count, 0);
+    // Counts must add up to the spots that can be sold (not Road / Empty / Blocked); fix any drift on the last type.
+    const sellable = layout.cells.filter(c => !SPOT_TYPES.has(c.type)).length;
+    const drift = sellable - types.reduce((n, t) => n + t.count, 0);
     types[types.length - 1].count = Math.max(0, types[types.length - 1].count + drift);
     const spots = layout.cells.map((c, i) => ({
         id: `${area.id}::spot::${i + 1}`,
@@ -67,7 +68,8 @@ export function applyRvLayout(area, layout, makeId) {
     }));
     const patch = {
         campingTypes: types,
-        spotCount: layout.cells.length,
+        spotCount: sellable,
+        layoutCells: layout.cells.length,
         hookupType: types[0].hookupType,
         powerType: types[0].powerType,
         notes: types[0].notes,

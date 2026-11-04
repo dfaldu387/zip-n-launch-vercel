@@ -69,6 +69,14 @@ describe('custom RV numbers', () => {
         expect(fillRvSequence(area(), 'abc')).toBeNull();
     });
 
+    it('fill skips road / empty / blocked spots so real spots have no gaps', () => {
+        const spots = ensureRvSpots(area()).spots.map((s, i) => (i === 1 ? { ...s, type: 'roadway' } : s));
+        const out = fillRvSequence({ ...area(), spots }, '1001');
+        expect(out).toHaveLength(4);
+        expect([out[0].number, out[2].number, out[3].number]).toEqual(['1001', '1002', '1003']);
+        expect(out[1].customNumber).toBeUndefined();
+    });
+
     it('reset drops every typed number', () => {
         const filled = fillRvSequence(area(), '1001');
         expect(nums(clearRvCustomNumbers({ ...area(), spots: filled }))).toEqual(['R1', 'R2', 'R3', 'R4']);
