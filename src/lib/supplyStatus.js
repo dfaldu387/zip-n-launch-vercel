@@ -93,6 +93,38 @@ export function computeItemStageUpdates(order, targetKey, { allowBackward = true
     return { nextItemStatuses, anyChanged, anyAdvancedToDelivered, skippedBackward, target };
 }
 
+// Status-tab match that looks at the ITEM lines, not the whole order — Robert:
+// "pending + grass hay should only show orders where the grass is still
+// pending." itemNames (optional) narrows it to the picked supplies. Orders with
+// no supply lines fall back to the order-level stage.
+export const orderHasItemAtStage = (order, stageKey, itemNames = null) => {
+    const wanted = itemNames?.length ? new Set(itemNames) : null;
+    const supplyItems = (order?.items || []).filter(it => it?.type === 'supply' && it.refId && (!wanted || wanted.has(baseItemName(it.name))));
+    if (supplyItems.length === 0) {
+        if (wanted) return false;
+        return SUPPLY_STAGES[stageIndexOf(order)].key === stageKey;
+    }
+    return supplyItems.some(it => getItemStatus(order, it.refId).status === stageKey);
+};
+
+// "2 of 4 delivered" — how many supply lines on the order are delivered.
+// partial = some, but not all, delivered (the order badge says "Partial").
+export const getDeliveryProgress = (order) => {
+    const supplyItems = (order?.items || []).filter(it => it?.type === 'supply' && it.refId);
+    const total = supplyItems.length;
+    const delivered = supplyItems.filter(it => getItemStatus(order, it.refId).status === 'delivered').length;
+    return { delivered, total, partial: delivered > 0 && delivered < total };
+};
+
+// True while any (picked) supply item on the order is not yet delivered — used
+// to float orders that still need delivery to the top of the list.
+export const orderHasOutstandingItem = (order, itemNames = null) => {
+    const wanted = itemNames?.length ? new Set(itemNames) : null;
+    const supplyItems = (order?.items || []).filter(it => it?.type === 'supply' && it.refId && (!wanted || wanted.has(baseItemName(it.name))));
+    if (supplyItems.length === 0) return !wanted && !isDelivered(order);
+    return supplyItems.some(it => getItemStatus(order, it.refId).status !== 'delivered');
+};
+
 export const getSupplyStage = (order) => SUPPLY_STAGES[stageIndexOf(order)];
 
 // Most recent stage timestamp across every supply item on the order — for

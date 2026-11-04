@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeItemStageUpdates, stageIndexOf, isDelivered, buildLoadSheet, buildSupplyByBarn } from './supplyStatus';
+import { computeItemStageUpdates, stageIndexOf, isDelivered, buildLoadSheet, buildSupplyByBarn, orderHasItemAtStage, orderHasOutstandingItem, getDeliveryProgress } from './supplyStatus';
 
 // Regression tests for the bulk Load Sheet "Mark as Out for Delivery" bug: an
 // order with one item already Delivered and a sibling item still behind still
@@ -22,6 +22,41 @@ describe('stageIndexOf / isDelivered — mixed-stage order', () => {
     it('reads as NOT delivered overall when one item is still behind, even though another is Delivered', () => {
         // This is why a mixed order gets swept into "All Undelivered Orders".
         expect(isDelivered(mixedOrder)).toBe(false);
+    });
+});
+
+describe('orderHasItemAtStage — item-level status tabs', () => {
+    it('matches on the picked item, not the slowest item of the order', () => {
+        // hay is received, shavings is delivered.
+        expect(orderHasItemAtStage(mixedOrder, 'delivered', ['Shavings'])).toBe(true);
+        expect(orderHasItemAtStage(mixedOrder, 'delivered', ['Hay'])).toBe(false);
+        expect(orderHasItemAtStage(mixedOrder, 'received', ['Hay'])).toBe(true);
+    });
+    it('with no item picked, matches if any item is at that stage', () => {
+        expect(orderHasItemAtStage(mixedOrder, 'delivered')).toBe(true);
+        expect(orderHasItemAtStage(mixedOrder, 'received')).toBe(true);
+        expect(orderHasItemAtStage(mixedOrder, 'new')).toBe(false);
+    });
+});
+
+describe('getDeliveryProgress', () => {
+    it('reports partial when some, not all, items are delivered', () => {
+        expect(getDeliveryProgress(mixedOrder)).toEqual({ delivered: 1, total: 2, partial: true });
+    });
+    it('is not partial when nothing or everything is delivered', () => {
+        const none = { items: mixedOrder.items, itemStatuses: {} };
+        expect(getDeliveryProgress(none).partial).toBe(false);
+        const all = { items: mixedOrder.items, itemStatuses: { hay: { status: 'delivered' }, shavings: { status: 'delivered' } } };
+        expect(getDeliveryProgress(all)).toEqual({ delivered: 2, total: 2, partial: false });
+    });
+});
+
+describe('orderHasOutstandingItem', () => {
+    it('only looks at the picked item', () => {
+        // hay is received (outstanding), shavings is delivered.
+        expect(orderHasOutstandingItem(mixedOrder, ['Hay'])).toBe(true);
+        expect(orderHasOutstandingItem(mixedOrder, ['Shavings'])).toBe(false);
+        expect(orderHasOutstandingItem(mixedOrder)).toBe(true);
     });
 });
 

@@ -69,7 +69,7 @@ import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator'
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
 import { getBookingRef } from '@/lib/bookingRef';
 import { printSupplyBarnReport } from '@/lib/supplyBarnReportPrint';
-import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, buildSupplyByBarn, unitLookup, computeItemStageUpdates } from '@/lib/supplyStatus';
+import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, buildSupplyByBarn, unitLookup, computeItemStageUpdates, orderHasItemAtStage, orderHasOutstandingItem, getDeliveryProgress, getItemStage } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { newDeliverySecret } from '@/lib/deliveryLink';
 import { sendStallInvoice } from '@/lib/housingCheckout';
@@ -3140,6 +3140,7 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
     const { toast } = useToast();
     const current = stageIndexOf(order);
     const delivered = isDelivered(order);
+    const progress = getDeliveryProgress(order);
     const total = order.totalAmount ?? order.amount ?? 0;
     const items = order.items || [];
     const [isNotifying, setIsNotifying] = useState(false);
@@ -3173,9 +3174,15 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
                         <div className="min-w-0">
                             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1 flex-wrap">
                                 <Clock className="h-3.5 w-3.5" /> {fmtOrderedAt(order.createdAt)}
-                                <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
-                                    {SUPPLY_STAGES[current].label}
-                                </Badge>
+                                {progress.partial ? (
+                                    <Badge className="bg-teal-600 text-white text-[10px]" title="Some items are delivered, some are not yet">
+                                        Partial · {progress.delivered} of {progress.total} delivered
+                                    </Badge>
+                                ) : (
+                                    <Badge className={cn(SUPPLY_STAGES[current].color, 'text-white text-[10px]')}>
+                                        {SUPPLY_STAGES[current].label}
+                                    </Badge>
+                                )}
                                 {SOURCE_BADGE[order.sourceType] && (
                                     <Badge className={cn(SOURCE_BADGE[order.sourceType].className, 'text-white text-[10px]')}>
                                         {SOURCE_BADGE[order.sourceType].label}
@@ -3258,9 +3265,19 @@ const SupplyOrderCard = ({ order, onFulfill, showName, collapsed = false, onTogg
                 </div>
 
                 {collapsed ? (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                        {items.length} item{items.length !== 1 ? 's' : ''} — click to expand
-                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        {items.map((it, i) => {
+                            const stage = it.refId ? getItemStage(order, it.refId) : SUPPLY_STAGES[current];
+                            return (
+                                <span key={it.refId || i} className="flex items-center gap-1.5">
+                                    <span className={cn('h-2 w-2 rounded-full', stage.color)} />
+                                    <span className="text-foreground">{baseItemName(it.name)}</span>
+                                    <span>{stage.label}</span>
+                                </span>
+                            );
+                        })}
+                        <button type="button" onClick={onToggleCollapse} className="underline hover:text-foreground">Expand</button>
+                    </div>
                 ) : (
                     <div className="mt-3 border-t pt-2">
                         {items.map((it, i) => (
@@ -3304,39 +3321,64 @@ const useUnifiedOrderListControls = (orders, itemFilter) => {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [barnFilter, setBarnFilter] = useState('all');
+    const [sortBy, setSortBy] = useState('outstanding');
     const [collapsedIds, setCollapsedIds] = useState(() => new Set());
 
+    // Barn and item dropdowns narrow each other: with Grass Hay picked, only
+    // barns that have Grass Hay orders are listed, and with a barn picked, only
+    // items ordered in that barn are listed.
     const barnOptions = useMemo(() => {
         const set = new Set();
         for (const o of orders) {
+            if (itemFilter.length > 0 && !(o.items || []).some(it => itemFilter.includes(baseItemName(it?.name)))) continue;
             String(o.barnName || '').split(',').map(s => s.trim()).filter(Boolean).forEach(b => set.add(b));
         }
         return [...set].sort();
-    }, [orders]);
+    }, [orders, itemFilter]);
 
     const itemOptions = useMemo(() => {
-        const set = new Set();
+        const set = new Set(itemFilter);
         for (const o of orders) {
+            if (barnFilter !== 'all' && !String(o.barnName || '').split(',').map(s => s.trim()).includes(barnFilter)) continue;
             for (const it of (o.items || [])) if (it?.name) set.add(baseItemName(it.name));
         }
         return [...set].sort();
-    }, [orders]);
+    }, [orders, barnFilter, itemFilter]);
+
+    // A picked barn that no longer has the picked item would leave an empty list.
+    useEffect(() => {
+        if (barnFilter !== 'all' && !barnOptions.includes(barnFilter)) setBarnFilter('all');
+    }, [barnOptions, barnFilter]);
 
     const filtered = useMemo(() => {
         let list = orders.filter(o => orderMatchesSearch(o, search));
-        if (statusFilter !== 'all') list = list.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === statusFilter);
+        if (statusFilter !== 'all') list = list.filter(o => orderHasItemAtStage(o, statusFilter, itemFilter));
         if (barnFilter !== 'all') list = list.filter(o => String(o.barnName || '').split(',').map(s => s.trim()).includes(barnFilter));
         if (itemFilter.length > 0) list = list.filter(o => (o.items || []).some(it => itemFilter.includes(baseItemName(it?.name))));
-        return sortOrdersBy(list, 'newest');
-    }, [orders, search, statusFilter, barnFilter, itemFilter]);
+        if (sortBy === 'oldest' || sortBy === 'newest') return sortOrdersBy(list, sortBy);
+        if (sortBy === 'barn') {
+            return [...list].sort((a, b) => String(a.barnName || '~').localeCompare(String(b.barnName || '~'), undefined, { numeric: true })
+                || String(a.stallNumber || '').localeCompare(String(b.stallNumber || ''), undefined, { numeric: true }));
+        }
+        if (sortBy === 'name') {
+            return [...list].sort((a, b) => String(a.exhibitorName || '').localeCompare(String(b.exhibitorName || '')));
+        }
+        // Default: still-to-deliver orders first, oldest purchase first (most
+        // overdue on top); finished orders drop to the bottom, newest first.
+        const open = list.filter(o => orderHasOutstandingItem(o, itemFilter));
+        const done = list.filter(o => !orderHasOutstandingItem(o, itemFilter));
+        return [...sortOrdersBy(open, 'oldest'), ...sortOrdersBy(done, 'newest')];
+    }, [orders, search, statusFilter, barnFilter, itemFilter, sortBy]);
 
     const toggleCollapse = (id) => setCollapsedIds(prev => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id); else next.add(id);
         return next;
     });
+    const collapseAll = () => setCollapsedIds(new Set(filtered.map(o => o.id)));
+    const expandAll = () => setCollapsedIds(new Set());
 
-    return { search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse };
+    return { collapseAll, expandAll, search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, sortBy, setSortBy, barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse };
 };
 
 const STATUS_TAB_LABELS = { new: 'Pending', received: 'Ready to Load', out_for_delivery: 'Out for Delivery', delivered: 'Delivered' };
@@ -3345,8 +3387,10 @@ const STATUS_TAB_LABELS = { new: 'Pending', received: 'Ready to Load', out_for_d
 // Ready to Load (5) / Out for Delivery (6) / Delivered (12)". Counts stay
 // based on the FULL list, not the filtered view, so the numbers don't shift
 // as you filter by them.
-const StatusTabs = ({ orders, statusFilter, onStatusFilter }) => {
-    const countAt = (key) => (key === 'all' ? orders.length : orders.filter(o => SUPPLY_STAGES[stageIndexOf(o)].key === key).length);
+const StatusTabs = ({ orders, statusFilter, onStatusFilter, itemFilter = [], barnFilter = 'all' }) => {
+    const inBarn = (o) => barnFilter === 'all' || String(o.barnName || '').split(',').map(s => s.trim()).includes(barnFilter);
+    const hasPickedItem = (o) => itemFilter.length === 0 || (o.items || []).some(it => itemFilter.includes(baseItemName(it?.name)));
+    const countAt = (key) => orders.filter(o => inBarn(o) && hasPickedItem(o) && (key === 'all' || orderHasItemAtStage(o, key, itemFilter))).length;
     const tabs = [{ key: 'all', label: 'All Orders' }, ...SUPPLY_STAGES.map(s => ({ key: s.key, label: STATUS_TAB_LABELS[s.key] }))];
     return (
         <div className="flex flex-wrap gap-1.5">
@@ -3369,7 +3413,15 @@ const StatusTabs = ({ orders, statusFilter, onStatusFilter }) => {
     );
 };
 
-const SupplyFilterBar = ({ search, onSearch, barnFilter, onBarnFilter, barnOptions, itemFilter, onItemFilter, itemOptions }) => (
+const SORT_OPTIONS = [
+    { value: 'outstanding', label: 'Needs delivery first' },
+    { value: 'oldest', label: 'Oldest order first' },
+    { value: 'newest', label: 'Newest order first' },
+    { value: 'barn', label: 'Barn / stall' },
+    { value: 'name', label: 'Customer name' },
+];
+
+const SupplyFilterBar = ({ search, onSearch, barnFilter, onBarnFilter, barnOptions, itemFilter, onItemFilter, itemOptions, sortBy, onSortBy }) => (
     <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -3414,16 +3466,22 @@ const SupplyFilterBar = ({ search, onSearch, barnFilter, onBarnFilter, barnOptio
                 ))}
             </DropdownMenuContent>
         </DropdownMenu>
+        <Select value={sortBy} onValueChange={onSortBy}>
+            <SelectTrigger className="h-9 w-[14rem] text-sm" title="Sort orders"><SelectValue /></SelectTrigger>
+            <SelectContent>
+                {SORT_OPTIONS.map(s => <SelectItem key={s.value} value={s.value}>Sort: {s.label}</SelectItem>)}
+            </SelectContent>
+        </Select>
     </div>
 );
 
 // One merged table-style list for Pre-Show + At-Show orders together — each
 // row carries its own Pre-Show/At-Show badge (see SOURCE_BADGE) instead of
 // living under two separate section headers.
-const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName, selectedIds, onToggleSelect, unitOf, itemFilter, setItemFilter }) => {
+const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, isLive, showName, selectedIds, onToggleSelect, onSelectMany, unitOf, itemFilter, setItemFilter }) => {
     const {
-        search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter,
-        barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse,
+        search, setSearch, statusFilter, setStatusFilter, barnFilter, setBarnFilter, sortBy, setSortBy,
+        barnOptions, itemOptions, filtered, collapsedIds, toggleCollapse, collapseAll, expandAll,
     } = useUnifiedOrderListControls(orders, itemFilter);
 
     if (orders.length === 0) {
@@ -3443,7 +3501,7 @@ const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, 
     return (
         <div className="space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
-                <StatusTabs orders={orders} statusFilter={statusFilter} onStatusFilter={setStatusFilter} />
+                <StatusTabs orders={orders} statusFilter={statusFilter} onStatusFilter={setStatusFilter} itemFilter={itemFilter} barnFilter={barnFilter} />
                 <div className="flex items-center gap-2">
                     {isLive && (
                         <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -3459,7 +3517,24 @@ const UnifiedSupplyOrdersPanel = ({ orders, onFulfill, onRefresh, isRefreshing, 
                 search={search} onSearch={setSearch}
                 barnFilter={barnFilter} onBarnFilter={setBarnFilter} barnOptions={barnOptions}
                 itemFilter={itemFilter} onItemFilter={setItemFilter} itemOptions={itemOptions}
+                sortBy={sortBy} onSortBy={setSortBy}
             />
+            <div className="flex items-center flex-wrap gap-1.5">
+                {onSelectMany && (
+                    <>
+                        <Button variant="outline" size="sm" className="h-8 text-xs" disabled={filtered.length === 0}
+                            onClick={() => onSelectMany(filtered.map(o => o.id), true)}>
+                            Select all ({filtered.length})
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-8 text-xs" disabled={filtered.length === 0}
+                            onClick={() => onSelectMany(filtered.map(o => o.id), false)}>
+                            Deselect all
+                        </Button>
+                    </>
+                )}
+                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={expandAll}>Expand all</Button>
+                <Button variant="outline" size="sm" className="h-8 text-xs" onClick={collapseAll}>Collapse all</Button>
+            </div>
             <div className="hidden md:flex items-center gap-3 px-4 text-[10px] font-semibold uppercase text-muted-foreground">
                 <span className="flex-1">Order / Customer</span>
                 <span className="w-24 shrink-0">Location</span>
@@ -4264,6 +4339,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const toggleLoadSheetId = (id) => setLoadSheetIds(prev => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+    });
+    // Select all / Deselect all — only touches the orders passed in (the ones
+    // currently visible), so orders hidden by a filter keep their checkmark.
+    const setLoadSheetIdsMany = (ids, on) => setLoadSheetIds(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => (on ? next.add(id) : next.delete(id)));
         return next;
     });
 
@@ -6956,6 +7038,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 showName={show.project_name}
                                 selectedIds={loadSheetIds}
                                 onToggleSelect={toggleLoadSheetId}
+                                onSelectMany={setLoadSheetIdsMany}
                                 unitOf={supplyUnitOf}
                                 itemFilter={supplyItemFilter}
                                 setItemFilter={setSupplyItemFilter}
