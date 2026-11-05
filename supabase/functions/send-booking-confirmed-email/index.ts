@@ -24,6 +24,29 @@ const escapeHtml = (value: unknown): string =>
 
 const money = (n: unknown): string => `$${(Number(n) || 0).toFixed(2)}`;
 
+// Same wording as formatNightDates in src/lib/stallNights.js:
+// ['2026-11-06','2026-11-07'] -> "Nov 6 & 7"; 3+ in a row -> "Nov 6–8".
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const nightsText = (dates: unknown): string => {
+  const list = [...new Set(Array.isArray(dates) ? (dates as string[]) : [])].filter(Boolean).sort();
+  const parts = list.map((d) => d.split("-").map(Number)); // [y, m, d]
+  const dayNum = (p: number[]) => Math.round(Date.UTC(p[0], p[1] - 1, p[2]) / 86400000);
+  const runs: number[][][] = [];
+  for (const p of parts) {
+    const last = runs[runs.length - 1];
+    if (last && dayNum(p) - dayNum(last[last.length - 1]) === 1) last.push(p);
+    else runs.push([p]);
+  }
+  const md = (p: number[]) => `${MONTHS[p[1] - 1]} ${p[2]}`;
+  return runs.map((run) => {
+    const first = run[0];
+    const end = run[run.length - 1];
+    if (run.length === 1) return md(first);
+    const endText = first[1] === end[1] ? String(end[2]) : md(end);
+    return `${md(first)}${run.length === 2 ? " & " : "–"}${endText}`;
+  }).join(", ");
+};
+
 interface BookingConfirmedEmailRequest {
   showId: string;
   bookingId: string;
@@ -111,6 +134,7 @@ const handler = async (req: Request): Promise<Response> => {
         <td style="padding: 10px 0; border-bottom: 1px solid #e6ebf1;">
           <p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">${escapeHtml(item.name)}</p>
           ${item.detail ? `<p style="margin: 2px 0 0; color: #6b7280; font-size: 12px;">${escapeHtml(item.detail)}</p>` : ""}
+          ${nightsText(item.nightDates) ? `<p style="margin: 2px 0 0; color: #6b7280; font-size: 12px;">Nights: ${escapeHtml(nightsText(item.nightDates))}</p>` : ""}
         </td>
         <td style="padding: 10px 0; border-bottom: 1px solid #e6ebf1; text-align: right; white-space: nowrap;">
           <p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">${money(item.amount)}</p>

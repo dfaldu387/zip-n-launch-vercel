@@ -17,6 +17,7 @@ import { Search, Download, Printer, ArrowUpDown, ArrowUp, ArrowDown, ClipboardLi
 import { getRequestedStallCount, getAssignedStallsForBooking } from '@/lib/stallAssignment';
 import { ensureAllRvSpots, getAssignedRvSpotsForBooking } from '@/lib/rvAssignment';
 import { computeBookingTotal } from '@/lib/bookingPricing';
+import { formatNightDates } from '@/lib/stallNights';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { getSupplyStage, getSupplyLastUpdate, getItemStatus, SUPPLY_STAGES } from '@/lib/supplyStatus';
 
@@ -170,6 +171,17 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
         departureLabel: fmtDate(booking.departureDate),
         departureYear: String(booking.departureDate || '').slice(0, 4),
         nights: countNights(booking.arrivalDate, booking.departureDate, booking.nights),
+        // One line per stall / RV item: flat vs nightly, how many, and which nights.
+        // Old bookings have no nightDates, so a nightly item reads "full stay".
+        stayLines: (Array.isArray(booking.items) ? booking.items : [])
+            .filter(it => (it.type === 'stall' || it.type === 'rv') && (Number(it.qty) || 0) > 0)
+            .map(it => ({
+                kind: it.type === 'rv' ? 'RV' : 'Stall',
+                name: String(it.name || '').replace(/\s*[×x]\s*\d+\s*$/, ''),
+                qty: Number(it.qty) || 0,
+                flat: it.feeType === 'flat',
+                nightsText: it.feeType === 'flat' ? '' : formatNightDates(it.nightDates),
+            })),
         stalls: requested,
         assignedCount: assigned.length,
         stallNumbersArr: assigned.map(s => s.number),
@@ -895,6 +907,21 @@ const MasterListRow = ({
                                     )}
                                 </div>
                             </div>
+
+                            {/* What was booked and for which nights — full width so it reads on one line each. */}
+                            {r.stayLines.length > 0 && (
+                                <div className="rounded-md border bg-background/60 p-2.5 space-y-1">
+                                    <p className="font-semibold text-foreground">Booked Stalls &amp; RV — Nights</p>
+                                    {r.stayLines.map((l, i) => (
+                                        <p key={i} className="flex flex-wrap items-center gap-x-2">
+                                            <span className="font-medium">{l.qty} × {l.name}</span>
+                                            <Badge variant="secondary" className="text-[10px]">
+                                                {l.flat ? 'Flat · full stay' : l.nightsText ? `Nights: ${l.nightsText}` : 'Nightly · full stay'}
+                                            </Badge>
+                                        </p>
+                                    ))}
+                                </div>
+                            )}
 
                             {/* Notes | Supply Fulfillment (middle) | Activity Log. Fulfillment has one row
                                 per line item, each with its own stage, since a delivery can reach the

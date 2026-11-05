@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import { format, parseISO } from 'date-fns';
+import { formatNightDates } from '@/lib/stallNights';
 import {
     Loader2, ArrowLeft, Calendar, Phone, Mail, Hash, Home, Car,
     DollarSign, AlertCircle, Copy, RefreshCw, CheckCircle2, XCircle,
@@ -251,7 +252,12 @@ const BookingStatusPage = () => {
                                         <div className="space-y-1 mb-2 text-sm">
                                             {stallItems.map((it, i) => (
                                                 <div key={`st-${i}`} className="flex justify-between">
-                                                    <span>🏠 {it.name}</span>
+                                                    <span>
+                                                        🏠 {it.name}
+                                                        {it.nightDates?.length > 0 && (
+                                                            <span className="block text-xs text-muted-foreground pl-6">Nights: {formatNightDates(it.nightDates)}</span>
+                                                        )}
+                                                    </span>
                                                     <span className="font-semibold tabular-nums">{money(it.amount)}</span>
                                                 </div>
                                             ))}
@@ -336,7 +342,12 @@ const BookingStatusPage = () => {
                                         </p>
                                         {rvItems.map((it, i) => (
                                             <div key={`rv-${i}`} className="flex justify-between">
-                                                <span>🚐 {it.name}</span>
+                                                <span>
+                                                    🚐 {it.name}
+                                                    {it.nightDates?.length > 0 && (
+                                                        <span className="block text-xs text-muted-foreground pl-6">Nights: {formatNightDates(it.nightDates)}</span>
+                                                    )}
+                                                </span>
                                                 <span className="font-semibold tabular-nums">{money(it.amount)}</span>
                                             </div>
                                         ))}

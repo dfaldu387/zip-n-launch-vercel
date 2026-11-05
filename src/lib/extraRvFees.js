@@ -224,13 +224,14 @@ export function rvsByAreaFromSelection(selection) {
  * @param {object} [args.nightsByArea] { [rvAreaId]: nightCount }
  * @returns {{items: Array, subtotal: number}}
  */
-export function buildRvAreaOptionItems({ rvAreas = [], rvSelection = {}, extraRvFees = [], nights = 1, nightsByArea = {} }) {
+export function buildRvAreaOptionItems({ rvAreas = [], rvSelection = {}, extraRvFees = [], nights = 1, nightsByArea = {}, nightDatesByArea = {} }) {
     return buildBarnStallOptionItems({
         barns: rvAreas,
         stallSelection: rvSelection,
         extraStallFees: extraRvFees,
         nights,
         nightsByBarn: nightsByArea,
+        nightDatesByBarn: nightDatesByArea,
         itemType: 'rv',
     });
 }

@@ -30,7 +30,7 @@ import {
     groupRvAreasForBooking, allocatePooledRvSpots, ALL_RV_GROUP_ID,
     expandPublicRvInventory,
 } from '@/lib/extraRvFees';
-import { nightsInRange } from '@/lib/stallNights';
+import { nightsInRange, formatNightDates } from '@/lib/stallNights';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -878,6 +878,9 @@ const Step3_Review = ({ orderSummary, details, onSubmit, isSubmitting }) => {
                             <div className="flex-1">
                                 <p className="font-medium">{item.name}</p>
                                 <p className="text-xs text-muted-foreground">{item.detail}</p>
+                                {item.nightDates?.length > 0 && (
+                                    <p className="text-xs text-muted-foreground">Nights: {formatNightDates(item.nightDates)}</p>
+                                )}
                             </div>
                             <p className="font-semibold tabular-nums">{money(item.amount)}</p>
                         </div>
@@ -1099,13 +1102,18 @@ const PublicBookingPage = () => {
         // the pooled quantity (see groupBarnsForBooking / allocatePooledStalls).
         const { pooledGroup } = groupBarnsForBooking(inventory.barns, inventory.extraStallFees);
         const nightsByBarn = {};
+        const nightDatesByBarn = {};
         for (const [key, dates] of Object.entries(selection.barnNights || {})) {
             if (key === ALL_BARNS_GROUP_ID && pooledGroup) {
                 for (const memberId of Object.keys(stallsByBarn)) {
-                    if (pooledGroup.members.some(m => m.id === memberId)) nightsByBarn[memberId] = dates.length;
+                    if (pooledGroup.members.some(m => m.id === memberId)) {
+                        nightsByBarn[memberId] = dates.length;
+                        nightDatesByBarn[memberId] = dates;
+                    }
                 }
             } else {
                 nightsByBarn[key] = dates.length;
+                nightDatesByBarn[key] = dates;
             }
         }
         const barnStalls = buildBarnStallOptionItems({
@@ -1114,6 +1122,7 @@ const PublicBookingPage = () => {
             extraStallFees: inventory.extraStallFees,
             nights,
             nightsByBarn,
+            nightDatesByBarn,
         });
         // Display only: a member of the pooled "All Barns" group shows as "All
         // Barns" to the exhibitor, matching the Select Items row they actually
@@ -1149,13 +1158,18 @@ const PublicBookingPage = () => {
         // above for why the pooled key gets expanded onto real member areas.
         const { pooledGroup: pooledRvGroup } = groupRvAreasForBooking(inventory.rvAreas, inventory.extraRvFees);
         const nightsByArea = {};
+        const nightDatesByArea = {};
         for (const [key, dates] of Object.entries(selection.rvNights || {})) {
             if (key === ALL_RV_GROUP_ID && pooledRvGroup) {
                 for (const memberId of Object.keys(rvsByArea)) {
-                    if (pooledRvGroup.members.some(m => m.id === memberId)) nightsByArea[memberId] = dates.length;
+                    if (pooledRvGroup.members.some(m => m.id === memberId)) {
+                        nightsByArea[memberId] = dates.length;
+                        nightDatesByArea[memberId] = dates;
+                    }
                 }
             } else {
                 nightsByArea[key] = dates.length;
+                nightDatesByArea[key] = dates;
             }
         }
         const rvAreaItems = buildRvAreaOptionItems({
@@ -1164,6 +1178,7 @@ const PublicBookingPage = () => {
             extraRvFees: inventory.extraRvFees,
             nights,
             nightsByArea,
+            nightDatesByArea,
         });
         for (const item of rvAreaItems.items) {
             item.options = selection.rvOptions?.[item.refId] || [];
@@ -1565,7 +1580,12 @@ const PublicBookingPage = () => {
                                         <div className="space-y-1 text-sm border rounded-md divide-y">
                                             {confirmation.payload.items.map((it, i) => (
                                                 <div key={i} className="flex justify-between p-2">
-                                                    <span>{it.name}</span>
+                                                    <span>
+                                                        {it.name}
+                                                        {it.nightDates?.length > 0 && (
+                                                            <span className="block text-xs text-muted-foreground">Nights: {formatNightDates(it.nightDates)}</span>
+                                                        )}
+                                                    </span>
                                                     <span className="font-semibold tabular-nums">{money(it.amount)}</span>
                                                 </div>
                                             ))}

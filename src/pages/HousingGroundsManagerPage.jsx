@@ -6226,7 +6226,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             ],
         },
         {
-            id: 'supplies', label: 'Hay, Shavings & Barn Services', icon: ShoppingCart,
+            id: 'supplies', label: 'Delivery Services', icon: ShoppingCart,
             count: preShowDeliveryOrders.length + liveSupplyOrders.length,
             items: [
                 { value: 'supplyorders', label: `Hay & Shavings (${preShowDeliveryOrders.length + liveSupplyOrders.length})` },

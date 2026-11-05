@@ -2,8 +2,26 @@ import { describe, it, expect } from 'vitest';
 import {
     buildExtraStallFeeItems, buildBarnStallItems, stallsByBarnFromSelection,
     feeScope, feeAppliesToBarn, nightlyRateForBarn, flatRateForBarn, scopeLabelForFee, ALL_BARNS,
-    groupBarnsForBooking, allocatePooledStalls, ALL_BARNS_GROUP_ID,
+    groupBarnsForBooking, allocatePooledStalls, ALL_BARNS_GROUP_ID, buildBarnStallOptionItems,
 } from './extraStallFees';
+
+describe('buildBarnStallOptionItems nightDates', () => {
+    const barns = [{ id: 'b1', name: 'Barn', pricePerNight: 10 }];
+    it('saves the picked nights (sorted) on the nightly item only', () => {
+        const { items } = buildBarnStallOptionItems({
+            barns, stallSelection: { b1: { flat: 1, night: 3 } }, nights: 4,
+            nightsByBarn: { b1: 2 }, nightDatesByBarn: { b1: ['2026-11-07', '2026-11-06'] },
+        });
+        const night = items.find(i => i.feeType === 'per_night');
+        expect(night.nightDates).toEqual(['2026-11-06', '2026-11-07']);
+        expect(night.amount).toBe(60);
+        expect(items.find(i => i.feeType === 'flat').nightDates).toBeUndefined();
+    });
+    it('omits nightDates when no nights were picked (full stay)', () => {
+        const { items } = buildBarnStallOptionItems({ barns, stallSelection: { b1: { night: 1 } }, nights: 4 });
+        expect(items[0].nightDates).toBeUndefined();
+    });
+});
 
 const CIRCUIT = { id: 'f1', name: 'Circuit Fee', appliesTo: 'all', amount: 200, unitType: 'per_stall' };
 const OFFICE = { id: 'f2', name: 'Office Fee', appliesTo: 'barnA', amount: 40, unitType: 'flat' };

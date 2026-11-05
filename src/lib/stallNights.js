@@ -11,6 +11,31 @@ import { parseISO, addDays, differenceInCalendarDays, format } from 'date-fns';
  * matching calcNights in PublicBookingPage.jsx. Used to build the "which
  * nights do you need this stall" checkbox list.
  */
+/**
+ * Human text for a list of night dates: ['2026-11-06','2026-11-07'] → "Nov 6 & 7",
+ * 3+ in a row → "Nov 6–8", gaps → "Nov 6, Nov 9". Returns '' for no dates.
+ * (The email function keeps its own copy of this — no shared imports there.)
+ */
+export function formatNightDates(dates) {
+    const list = [...new Set(Array.isArray(dates) ? dates : [])].filter(Boolean).sort();
+    if (list.length === 0) return '';
+    const parsed = list.map((d) => parseISO(d));
+    const runs = [];
+    for (const d of parsed) {
+        const last = runs[runs.length - 1];
+        if (last && differenceInCalendarDays(d, last[last.length - 1]) === 1) last.push(d);
+        else runs.push([d]);
+    }
+    const fmtRun = (run) => {
+        const first = run[0];
+        const end = run[run.length - 1];
+        if (run.length === 1) return format(first, 'MMM d');
+        const endText = first.getMonth() === end.getMonth() ? format(end, 'd') : format(end, 'MMM d');
+        return `${format(first, 'MMM d')}${run.length === 2 ? ' & ' : '–'}${endText}`;
+    };
+    return runs.map(fmtRun).join(', ');
+}
+
 export function nightsInRange(start, end) {
     if (!start || !end) return [];
     try {

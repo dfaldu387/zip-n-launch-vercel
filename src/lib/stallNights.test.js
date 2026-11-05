@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { nightsInRange } from './stallNights';
+import { nightsInRange, formatNightDates } from './stallNights';
+
+describe('formatNightDates', () => {
+    it('formats pairs, runs, gaps and month changes', () => {
+        expect(formatNightDates(['2026-11-07', '2026-11-06'])).toBe('Nov 6 & 7');
+        expect(formatNightDates(['2026-11-06', '2026-11-07', '2026-11-08'])).toBe('Nov 6–8');
+        expect(formatNightDates(['2026-11-06', '2026-11-09'])).toBe('Nov 6, Nov 9');
+        expect(formatNightDates(['2026-11-30', '2026-12-01'])).toBe('Nov 30 & Dec 1');
+        expect(formatNightDates(['2026-11-06'])).toBe('Nov 6');
+        expect(formatNightDates(undefined)).toBe('');
+    });
+});
 
 describe('nightsInRange', () => {
     it('lists every night before departure, not including move-out day', () => {

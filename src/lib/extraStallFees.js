@@ -365,7 +365,7 @@ export function stallsByBarnFromSelection(selection) {
  * @param {string} [args.itemType]      Line item `type` — 'stall' for barns, 'rv' for RV areas
  * @returns {{items: Array, subtotal: number}}
  */
-export function buildBarnStallOptionItems({ barns = [], stallSelection = {}, extraStallFees = [], nights = 1, nightsByBarn = {}, itemType = 'stall' }) {
+export function buildBarnStallOptionItems({ barns = [], stallSelection = {}, extraStallFees = [], nights = 1, nightsByBarn = {}, nightDatesByBarn = {}, itemType = 'stall' }) {
     const items = [];
     let subtotal = 0;
     const fallbackNights = Math.max(1, Number(nights) || 1);
@@ -406,6 +406,11 @@ export function buildBarnStallOptionItems({ barns = [], stallSelection = {}, ext
                 detail: `${money(nightlyRate)}/night × ${n} night${n !== 1 ? 's' : ''} × ${nightQty}`,
                 qty: nightQty,
                 nights: n,
+                // The actual nights picked ('yyyy-MM-dd'), so receipts, emails
+                // and the assign board can show WHICH nights. Absent = full stay.
+                ...(Array.isArray(nightDatesByBarn[barn.id]) && nightDatesByBarn[barn.id].length > 0
+                    ? { nightDates: [...nightDatesByBarn[barn.id]].sort() }
+                    : {}),
                 unitPrice: nightlyRate,
                 amount,
             });

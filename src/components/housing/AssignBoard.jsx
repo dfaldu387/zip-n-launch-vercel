@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
+import { nightsInRange, formatNightDates } from '@/lib/stallNights';
 import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe, Search, Eye } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
@@ -120,6 +121,29 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
     });
     const [groupPickerOpen, setGroupPickerOpen] = useState(false);
     const done = assigned >= requested;
+    // Which nights this exhibitor booked (Robert: partial stays vs full stays). Flat items
+    // are always the full stay; a nightly item with fewer picked nights than the show's
+    // stay is "Partial". Old bookings have no saved dates, so they read as full stay.
+    const stay = useMemo(() => {
+        const type = unitWord === 'spot' ? 'rv' : 'stall';
+        const fullNights = nightsInRange(booking.arrivalDate, booking.departureDate).length;
+        const parts = [];
+        let partial = false;
+        for (const it of Array.isArray(booking.items) ? booking.items : []) {
+            const qty = Number(it.qty) || 0;
+            if (it.type !== type || qty <= 0) continue;
+            if (it.feeType === 'flat') { parts.push(`${qty} flat`); continue; }
+            const dates = Array.isArray(it.nightDates) ? it.nightDates : [];
+            if (dates.length > 0) {
+                const isPartial = fullNights > 0 && dates.length < fullNights;
+                if (isPartial) partial = true;
+                parts.push(`${qty} · ${formatNightDates(dates)}`);
+            } else {
+                parts.push(`${qty} nightly`);
+            }
+        }
+        return { text: parts.join(' | '), partial, any: parts.length > 0 };
+    }, [booking, unitWord]);
     const current = (booking.stallGroup || '').trim();
     const value = current === NO_GROUP ? NO_GROUP : (current || '__auto__');
     return (
@@ -143,6 +167,12 @@ const BookingChip = ({ booking, color, assigned, requested, selected, onSelect, 
                         {booking.trainerName ? `${booking.trainerName} · ` : ''}
                         <span className="font-medium text-foreground/80 tabular-nums">{requested} {unitWord}{requested === 1 ? '' : 's'}</span>
                     </p>
+                    {stay.any && (
+                        <p className={cn('text-[10px] truncate', stay.partial ? 'text-amber-600 font-medium' : 'text-muted-foreground')}
+                            title={stay.text}>
+                            {stay.partial ? 'Partial · ' : 'Full stay · '}{stay.text}
+                        </p>
+                    )}
                 </div>
                 {/* Move / remove just THIS exhibitor's own stalls (not the whole group) —
                     only shown once they hold at least one, same rule as the group card. */}
