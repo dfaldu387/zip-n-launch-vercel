@@ -39,6 +39,7 @@ interface EmailContent {
   total: number;
   stableWith?: string;
   stallNumber?: string;
+  barnName?: string;
 }
 
 // A receipt is only sent right after an order is placed. The anonymous order
@@ -88,7 +89,7 @@ const shell = (accent: string, heading: string, body: string) => `
 `;
 
 const deliveryTarget = (r: EmailContent) =>
-  `${escapeHtml(r.stableWith)}${r.stallNumber ? ` (Stall ${escapeHtml(r.stallNumber)})` : ""}`;
+  `${escapeHtml(r.stableWith)}${r.barnName || r.stallNumber ? ` (${[r.barnName ? escapeHtml(r.barnName) : "", r.stallNumber ? `Stall ${escapeHtml(r.stallNumber)}` : ""].filter(Boolean).join(", ")})` : ""}`;
 
 const receiptBody = (r: EmailContent) => `
   <p>Hi <strong>${escapeHtml(r.customerName)}</strong>,</p>
@@ -241,6 +242,7 @@ const handler = async (req: Request): Promise<Response> => {
         : isDelivered && payload.total !== undefined ? Number(payload.total) : savedTotal,
       stableWith: booking.stableWith || booking.trainerName || "",
       stallNumber: booking.stallNumber || "",
+      barnName: booking.barnName || "",
     };
 
     const subject = isDelivered

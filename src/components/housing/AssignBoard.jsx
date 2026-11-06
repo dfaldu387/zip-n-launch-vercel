@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { nightsInRange, formatNightDates } from '@/lib/stallNights';
+import { nightsInRange, formatNightDates, nightlyStallInfo } from '@/lib/stallNights';
 import { GripVertical, Home, Car, Check, MousePointerClick, X, Printer, ZoomIn, ZoomOut, Maximize2, PanelLeftClose, PanelLeftOpen, Users, Layers, Download, Loader2, Move, Trash2, ChevronDown, ChevronRight, Globe, Search, Eye } from 'lucide-react';
 import {
     getRequestedStallCount, getAssignedStallsForBooking,
@@ -258,7 +258,7 @@ const outlineBorders = (sides, color) => {
 const UnitCell = ({
     unit, color, ownerName, isSelectedOwner, onClickUnit,
     groupOutline, groupColor, groupName, showGroupTag, size, cellText,
-    spot, flashing, flashKey,
+    spot, flashing, flashKey, partialNights,
 }) => {
     const type = unit.type || 'stall';       // RV spots have no type → assignable
     const assignable = type === 'stall';
@@ -302,7 +302,7 @@ const UnitCell = ({
             onClick={() => onClickUnit(unit)}
             data-bid={taken ? unit.bookingId : undefined}
             title={taken
-                ? `${unit.number} · ${ownerName}${groupName ? ` · ${groupName}` : ''}`
+                ? `${unit.number} · ${ownerName}${groupName ? ` · ${groupName}` : ''}${partialNights ? ` · Nightly${partialNights.dates?.length ? ': ' + partialNights.text : ''}` : ''}`
                 : `${unit.number} · available — click or drop to assign`}
             className={cn(
                 'relative shrink-0 flex flex-col items-center justify-center border rounded-none -ml-px -mt-px font-mono font-semibold cursor-pointer select-none transition-all overflow-hidden',
@@ -335,6 +335,12 @@ const UnitCell = ({
             <span className={cn('px-0.5 text-center leading-tight truncate max-w-full', showGroupTag && 'mt-1.5')}>
                 {cellText?.lines?.length ? cellText.lines[0].text : (cellText?.num ?? unit.number)}
             </span>
+            {/* Partial (nightly) stay: the nights, in amber, so it stands out from full stays. */}
+            {taken && partialNights && size !== 'sm' && (
+                <span className="absolute bottom-0 inset-x-0 bg-slate-900/90 text-amber-300 text-[8px] leading-[11px] py-px font-sans font-bold text-center truncate px-0.5">
+                    {partialNights.text}
+                </span>
+            )}
             {/* RV power rating, set per spot in the RV editor. */}
             {unit.amps && size !== 'sm' && (
                 <span className={cn(S.sub, 'opacity-80 leading-none')}>{unit.amps}A</span>
@@ -461,6 +467,7 @@ const AssignBoard = ({
 
     // RV areas materialized into individual spots (kept stable across reloads).
     const rvWithSpots = useMemo(() => ensureAllRvSpots(rvAreas), [rvAreas]);
+    const partialByStall = useMemo(() => nightlyStallInfo(bookings, barns), [bookings, barns]);
 
     // One stable color per booking (same order as the print chart), so a person
     // reads the same color across the Stalls view, RV view and printout.
@@ -1312,6 +1319,7 @@ const AssignBoard = ({
                                 layerIndex={layerIndex}
                                 Icon={cfg.Icon}
                                 bookingById={bookingById}
+                                partialByStall={partialByStall}
                                 colorByBooking={colorByBooking}
                                 colorByGroup={colorByGroup}
                                 groupIdByBooking={groupIdByBooking}
@@ -1656,7 +1664,7 @@ const PublishPreview = ({ draft, barns, rvAreas, bookings }) => {
 // — when "Fit" is on — scaled down until the whole thing fits the page width.
 const ContainerChart = ({
     container, isStalls, size, fit, layer, layerIndex, Icon,
-    bookingById, colorByBooking, colorByGroup, groupIdByBooking, groupById,
+    bookingById, colorByBooking, colorByGroup, groupIdByBooking, groupById, partialByStall,
     selectedBookingId, selectedGroup, hoverIds, flashIds, flashKey, onClickUnit, onSetLabel, onResetLabels, onFillRow,
     collapsed, onToggleCollapsed,
 }) => {
@@ -1838,6 +1846,7 @@ const ContainerChart = ({
                                             spot={hoverIds && unit.bookingId ? (hoverIds.has(unit.bookingId) ? 'on' : 'dim') : null}
                                             flashing={!!(flashIds && unit.bookingId && flashIds.has(unit.bookingId))}
                                             flashKey={flashKey}
+                                            partialNights={isStalls ? partialByStall?.[unit.id] : undefined}
                                             groupOutline={sides}
                                             groupColor={gid ? colorByGroup[gid] : undefined}
                                             groupName={gid ? groupById[gid]?.name : undefined}

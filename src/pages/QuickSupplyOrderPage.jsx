@@ -4,7 +4,7 @@ import { Helmet } from 'react-helmet-async';
 import { motion } from 'framer-motion';
 import {
     Loader2, ShoppingCart, User, Phone, Mail, Plus, Minus, Info,
-    ArrowLeft, PartyPopper, Hash, Copy, Lock, CalendarClock, Clock, CheckCircle2,
+    ArrowLeft, MapPin, PartyPopper, Hash, Copy, Lock, CalendarClock, Clock, CheckCircle2,
 } from 'lucide-react';
 
 import Navigation from '@/components/Navigation';
@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { startStallCheckout } from '@/lib/housingCheckout';
+import StallPickerDialog from '@/components/StallPickerDialog';
 
 // ───────────────────────── Helpers ─────────────────────────
 
@@ -73,6 +74,7 @@ const QuickSupplyOrderPage = () => {
     const [quantities, setQuantities] = useState({});
     const [details, setDetails] = useState({
         stableWith: '',
+        barnName: '',
         stallNumber: '',
         name: '',
         phone: '',
@@ -102,6 +104,25 @@ const QuickSupplyOrderPage = () => {
         };
         if (showId) loadShow();
     }, [showId, toast]);
+
+    // Barn names for the dropdown. They come from the public stalling chart (only
+    // when the organizer published it). If there are none, the Barn field stays a
+    // plain text box so ordering still works.
+    const [chartBarns, setChartBarns] = useState([]);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const barnNames = useMemo(() => chartBarns.map(b => b.name).filter(Boolean), [chartBarns]);
+    const pickableBarns = useMemo(() => chartBarns.filter(b => (b.stalls || []).length > 0), [chartBarns]);
+    useEffect(() => {
+        if (!showId) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const { data } = await supabase.rpc('get_public_stalling_chart', { p_show_id: showId });
+                if (!cancelled) setChartBarns(data?.barns || []);
+            } catch { /* no chart published - keep the text box */ }
+        })();
+        return () => { cancelled = true; };
+    }, [showId]);
 
     // How this show sells online: 'at_booking' (pre-pay now) or 'invoice_after' —
     // same setting the stall/RV booking page reads, so a supply order lines up
@@ -201,6 +222,7 @@ const QuickSupplyOrderPage = () => {
                 // admin booking rows still show who this belongs to.
                 stableWith: details.stableWith,
                 trainerName: details.stableWith,
+                barnName: details.barnName.trim(),
                 stallNumber: details.stallNumber.trim(),
                 items: orderSummary.lineItems,
                 amount: orderSummary.subtotal,
@@ -369,6 +391,12 @@ const QuickSupplyOrderPage = () => {
                                             <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Stable With / Under</p>
                                             <p>{confirmation.payload.stableWith}</p>
                                         </div>
+                                        {confirmation.payload.barnName && (
+                                            <div>
+                                                <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Barn</p>
+                                                <p>{confirmation.payload.barnName}</p>
+                                            </div>
+                                        )}
                                         {confirmation.payload.stallNumber && (
                                             <div>
                                                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Stall Number</p>
@@ -478,6 +506,17 @@ const QuickSupplyOrderPage = () => {
                             <p className="text-muted-foreground">{show.name} · delivered to your stalls during the show</p>
                         </div>
 
+                        {pickableBarns.length > 0 && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full mb-6 border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                                onClick={() => setPickerOpen(true)}
+                            >
+                                <MapPin className="h-4 w-4 mr-2" /> Order from Stalling Chart
+                            </Button>
+                        )}
+
                         {/* Supplies */}
                         <Card className="mb-6">
                             <CardHeader className="pb-3">
@@ -519,24 +558,6 @@ const QuickSupplyOrderPage = () => {
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-4">
-                                <div>
-                                    <Label>Stable With / Under *</Label>
-                                    <Input
-                                        value={details.stableWith}
-                                        onChange={(e) => setDetails(d => ({ ...d, stableWith: e.target.value }))}
-                                        placeholder="Trainer or barn name"
-                                    />
-                                    <p className="text-xs text-muted-foreground mt-1">If not applicable, enter N/A.</p>
-                                </div>
-                                <div>
-                                    <Label>Stall Number</Label>
-                                    <Input
-                                        value={details.stallNumber}
-                                        onChange={(e) => setDetails(d => ({ ...d, stallNumber: e.target.value }))}
-                                        placeholder="e.g., B12 (optional)"
-                                    />
-                                    <p className="text-xs text-muted-foreground mt-1">Optional — helps the facility team know where to deliver.</p>
-                                </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <Label>Your Name *</Label>
@@ -577,6 +598,46 @@ const QuickSupplyOrderPage = () => {
                                             ? <span className="text-destructive">Please enter a valid email address.</span>
                                             : "We'll email your receipt and let you know when your order is delivered."}
                                     </p>
+                                </div>
+                                <div>
+                                    <Label>Stable With / Under *</Label>
+                                    <Input
+                                        value={details.stableWith}
+                                        onChange={(e) => setDetails(d => ({ ...d, stableWith: e.target.value }))}
+                                        placeholder="Trainer or barn name"
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">If not applicable, enter N/A.</p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <Label>Barn</Label>
+                                        {barnNames.length > 0 ? (
+                                            <select
+                                                value={details.barnName}
+                                                onChange={(e) => setDetails(d => ({ ...d, barnName: e.target.value }))}
+                                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                            >
+                                                <option value="">Select a barn</option>
+                                                {barnNames.map(n => <option key={n} value={n}>{n}</option>)}
+                                            </select>
+                                        ) : (
+                                            <Input
+                                                value={details.barnName}
+                                                onChange={(e) => setDetails(d => ({ ...d, barnName: e.target.value }))}
+                                                placeholder="Barn name"
+                                            />
+                                        )}
+                                        <p className="text-xs text-muted-foreground mt-1">Helps the facility team find your barn.</p>
+                                    </div>
+                                    <div>
+                                        <Label>Stall Number</Label>
+                                        <Input
+                                            value={details.stallNumber}
+                                            onChange={(e) => setDetails(d => ({ ...d, stallNumber: e.target.value }))}
+                                            placeholder="e.g., B12 (optional)"
+                                        />
+                                        <p className="text-xs text-muted-foreground mt-1">Optional - where to deliver.</p>
+                                    </div>
                                 </div>
                             </CardContent>
                         </Card>
@@ -621,6 +682,22 @@ const QuickSupplyOrderPage = () => {
                         </Card>
                     </motion.div>
                 </main>
+                <StallPickerDialog
+                    open={pickerOpen}
+                    onOpenChange={setPickerOpen}
+                    barns={pickableBarns}
+                    onPick={(p) => {
+                        // Fill barn + stall (+ trainer only if the chart published it).
+                        // Name, phone and email stay for the customer to type.
+                        setDetails(d => ({
+                            ...d,
+                            barnName: p.barnName || d.barnName,
+                            stallNumber: p.stallNumber || d.stallNumber,
+                            stableWith: p.stableWith || d.stableWith,
+                        }));
+                        setPickerOpen(false);
+                    }}
+                />
             </div>
         </>
     );

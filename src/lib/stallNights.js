@@ -47,3 +47,41 @@ export function nightsInRange(start, end) {
         return [];
     }
 }
+
+/**
+ * Which assigned stalls are NIGHTLY (priced per night), and for which nights.
+ * Stalls only remember their booking, not which booking line they came from, so
+ * for each booking we hand out its flat stalls first and then its nightly lines,
+ * in the order the stalls sit in the barns. Flat stalls are not returned.
+ * Returns { [stallId]: { dates, text, partial } }. `text` is the nights ("Nov 6 & 7")
+ * or just "Nightly" when the booking saved no dates (older bookings).
+ */
+export function nightlyStallInfo(bookings, barns) {
+    const byId = Object.fromEntries((bookings || []).map((b) => [b.id, b]));
+    const stallsOf = {};
+    for (const barn of barns || []) {
+        for (const s of barn.stalls || []) {
+            if ((s.type || 'stall') !== 'stall' || !s.bookingId) continue;
+            (stallsOf[s.bookingId] ||= []).push(s.id);
+        }
+    }
+    const out = {};
+    for (const [bid, ids] of Object.entries(stallsOf)) {
+        const b = byId[bid];
+        if (!b) continue;
+        const full = nightsInRange(b.arrivalDate, b.departureDate).length;
+        const items = (Array.isArray(b.items) ? b.items : []).filter((it) => it.type === 'stall' && (Number(it.qty) || 0) > 0);
+        const slots = [];
+        for (const it of items.filter((i) => i.feeType === 'flat')) {
+            for (let i = 0; i < Number(it.qty); i++) slots.push(null);
+        }
+        for (const it of items.filter((i) => i.feeType !== 'flat')) {
+            const dates = Array.isArray(it.nightDates) ? it.nightDates : [];
+            const partial = full > 0 && dates.length > 0 && dates.length < full;
+            const info = { dates, partial, text: dates.length > 0 ? formatNightDates(dates) : 'Nightly' };
+            for (let i = 0; i < Number(it.qty); i++) slots.push(info);
+        }
+        ids.forEach((id, i) => { if (slots[i]) out[id] = slots[i]; });
+    }
+    return out;
+}
