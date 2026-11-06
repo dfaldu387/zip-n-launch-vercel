@@ -687,13 +687,15 @@ const QuickSupplyOrderPage = () => {
                     onOpenChange={setPickerOpen}
                     barns={pickableBarns}
                     onPick={(p) => {
-                        // Fill barn + stall (+ trainer only if the chart published it).
-                        // Name, phone and email stay for the customer to type.
+                        // Fill barn, stall, trainer and name (the last two only if the chart
+                        // published them). Phone and email stay for the customer to type -
+                        // that keeps other people's contact details private.
                         setDetails(d => ({
                             ...d,
                             barnName: p.barnName || d.barnName,
                             stallNumber: p.stallNumber || d.stallNumber,
                             stableWith: p.stableWith || d.stableWith,
+                            name: p.name || d.name,
                         }));
                         setPickerOpen(false);
                     }}

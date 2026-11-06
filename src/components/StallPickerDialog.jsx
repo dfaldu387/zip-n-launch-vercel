@@ -7,7 +7,8 @@ import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
 
 // Pop-up map used by the Order Hay & Shavings page. The customer picks a barn,
 // optionally searches, and clicks a booked stall. We hand back the barn name,
-// stall number and the trainer/group (only when the organizer published it).
+// stall number, trainer/group and exhibitor name (each only when the organizer
+// published it on the chart). Phone and email are never sent here.
 // Data comes from the public stalling chart, so it never shows more than that.
 
 const StallPickerDialog = ({ open, onOpenChange, barns, onPick }) => {
@@ -80,6 +81,7 @@ const StallPickerDialog = ({ open, onOpenChange, barns, onPick }) => {
                                                 barnName: barn.name,
                                                 stallNumber: u.number,
                                                 stableWith: u.trainer || '',
+                                                name: u.exhibitor || '',
                                             })}
                                             className={cn(
                                                 'h-14 w-full rounded-sm border flex flex-col items-center justify-center overflow-hidden px-0.5 font-mono text-[9px] transition',
