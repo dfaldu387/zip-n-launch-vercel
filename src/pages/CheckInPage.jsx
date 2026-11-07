@@ -21,6 +21,7 @@ import { stampModuleStatusOnSave } from '@/lib/moduleStatusService';
 import { getAssignedStallsForBooking, unassignBookingStalls } from '@/lib/stallAssignment';
 import { computeBookingTotal } from '@/lib/bookingPricing';
 import { cn } from '@/lib/utils';
+import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 
 const money = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -134,10 +135,8 @@ const BookingCard = ({ booking, barns, extraStallFees, onUpdateStatus, isSaving 
                     {horseList.length > 0 && (
                         <div className="flex items-center gap-2 text-sm">
                             <span className="text-muted-foreground font-semibold">🐎 Horses:</span>
-                            <div className="flex flex-wrap gap-1">
-                                {horseList.map((h, i) => (
-                                    <Badge key={i} variant="secondary" className="text-xs">{h}</Badge>
-                                ))}
+                            <div className="flex flex-wrap items-center gap-1">
+                                <HorseChips names={horseList} owner={booking.exhibitorName || ''} chipClassName="text-xs" buttonClassName="text-xs px-2.5 py-1" />
                             </div>
                         </div>
                     )}
@@ -155,16 +154,16 @@ const BookingCard = ({ booking, barns, extraStallFees, onUpdateStatus, isSaving 
                             {stalls.length === 0 ? (
                                 <p className="text-xs text-muted-foreground italic">No stalls assigned</p>
                             ) : (
-                                <div className="flex flex-wrap gap-1.5">
-                                    {stalls.map(s => (
-                                        <Badge
-                                            key={s.id}
-                                            className="bg-emerald-600 text-white font-mono text-sm px-2 py-1"
-                                            title={`${s.barnName} · Stall ${s.number}`}
-                                        >
-                                            {s.number}
-                                        </Badge>
-                                    ))}
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <AssignedChips
+                                        numbers={stalls.map(s => s.number)}
+                                        places={stalls.map(s => ({ place: s.barnName || '', number: s.number }))}
+                                        color="bg-emerald-600"
+                                        noun="Stalls"
+                                        owner={booking.exhibitorName || ''}
+                                        chipClassName="text-sm px-2 py-1"
+                                        buttonClassName="text-xs px-2.5 py-1"
+                                    />
                                 </div>
                             )}
                         </div>

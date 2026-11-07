@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Loader2, Home, Car, ArrowLeft, MapPin } from 'lucide-react';
+import { Loader2, Home, Car, ArrowLeft, MapPin, Search, X } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,16 @@ const PALETTE = [
 
 const ROOM_LABELS = { office: 'Office', feed: 'Feed', wash: 'Wash', tack: 'Tack' };
 
-const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, roadsAfter = [], Icon = Home }) => {
+// Search helpers. Only stall #, exhibitor and trainer/group are searchable — the
+// same fields this page already shows — so no private details can leak via search.
+const unitMatches = (u, q) => {
+    if (!q || (u.type || 'stall') !== 'stall') return false;
+    return [u.number, u.exhibitor, u.trainer].some(v => v != null && String(v).toLowerCase().includes(q));
+};
+const countMatches = (units, q) => (units || []).filter(u => unitMatches(u, q)).length;
+
+const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, roadsAfter = [], Icon = Home, query = '', wholeMatch = false }) => {
+    const searching = !!query && !wholeMatch;
     const cols = gridCols({ layoutCols, stallCount });
     const rowCount = Math.ceil(units.length / cols);
     const { rowLabels: defRows, colLabels: defCols } = computeGridLabels(units, cols);
@@ -69,11 +78,16 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
                                         );
                                     }
                                     const color = unit.taken ? (colorByGroup[unit.groupKey || unit.id] || '#2563eb') : null;
+                                    const isHit = searching && unitMatches(unit, query);
                                     return (
                                         <div
                                             key={ci}
                                             title={`${unit.number}${unit.exhibitor ? ' · ' + unit.exhibitor : ''}${unit.trainer ? ' · ' + unit.trainer : ''}`}
-                                            className="h-14 w-full rounded-sm border flex flex-col items-center justify-center overflow-hidden px-0.5 font-mono"
+                                            className={cn(
+                                                'h-14 w-full rounded-sm border flex flex-col items-center justify-center overflow-hidden px-0.5 font-mono transition-opacity',
+                                                searching && !isHit && 'opacity-25',
+                                                isHit && 'ring-2 ring-offset-1 ring-yellow-400 z-10',
+                                            )}
                                             style={color ? { background: color, borderColor: color, color: '#fff' } : { background: 'var(--background)' }}
                                         >
                                             {unit.trainer && <span className="text-[9px] font-semibold leading-tight truncate max-w-full">{unit.trainer}</span>}
@@ -121,6 +135,8 @@ const PublicStallingChartPage = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
     const [view, setView] = useState('stalls');
+    const [search, setSearch] = useState('');
+    const query = search.trim().toLowerCase();
 
     useEffect(() => {
         const load = async () => {
@@ -179,6 +195,19 @@ const PublicStallingChartPage = () => {
     const showToggle = hasBarns && hasRv;
     const activeView = showToggle ? view : (hasRv && !hasBarns ? 'rv' : 'stalls');
 
+    // Search: a barn / RV area whose NAME matches shows in full; otherwise a card
+    // shows only if it holds a matching stall number, exhibitor or trainer.
+    const nameHit = (n) => !!query && String(n || '').toLowerCase().includes(query);
+    const barnsShown = (data.barns || []).filter(b => !query || nameHit(b.name) || countMatches(b.stalls, query) > 0);
+    const rvShown = rvAreasWithSpots.filter(a => !query || nameHit(a.name) || countMatches(a.spots, query) > 0);
+    const stallHitCount = (data.barns || []).reduce((n, b) => n + (nameHit(b.name) ? 0 : countMatches(b.stalls, query)), 0);
+    const rvHitCount = rvAreasWithSpots.reduce((n, a) => n + (nameHit(a.name) ? 0 : countMatches(a.spots, query)), 0);
+    const shownCount = activeView === 'rv' ? rvShown.length : barnsShown.length;
+    const hitCount = activeView === 'rv' ? rvHitCount : stallHitCount;
+    const otherHits = activeView === 'rv'
+        ? (stallHitCount + (data.barns || []).filter(b => nameHit(b.name)).length)
+        : (rvHitCount + rvAreasWithSpots.filter(a => nameHit(a.name)).length);
+
     return (
         <div className="min-h-screen py-10 px-4 sm:px-6">
             <div className="max-w-5xl mx-auto space-y-6">
@@ -208,9 +237,40 @@ const PublicStallingChartPage = () => {
                     <p className="text-muted-foreground">Nothing to show yet.</p>
                 )}
 
-                {activeView === 'stalls' && (data.barns || []).map(barn => (
+                {(hasBarns || hasRv) && (
+                    <div className="space-y-1.5">
+                        <div className="relative max-w-md">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                            <input
+                                type="text"
+                                value={search}
+                                onChange={e => setSearch(e.target.value)}
+                                placeholder={activeView === 'rv' ? 'Search RV area, spot # or name…' : 'Search barn, stall # or name…'}
+                                aria-label="Search the chart"
+                                className="w-full h-10 rounded-md border bg-background pl-9 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                            />
+                            {search && (
+                                <button type="button" onClick={() => setSearch('')} aria-label="Clear search"
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground">
+                                    <X className="h-4 w-4" />
+                                </button>
+                            )}
+                        </div>
+                        {query && (
+                            <p className="text-sm text-muted-foreground">
+                                {shownCount === 0
+                                    ? `No matches here${otherHits > 0 ? ` — but there are matches in ${activeView === 'rv' ? 'Stalls' : 'RV / Camping'}. Switch the view above.` : '.'}`
+                                    : `${hitCount > 0 ? `${hitCount} match${hitCount === 1 ? '' : 'es'} highlighted` : 'Showing matching area'} · ${shownCount} ${activeView === 'rv' ? 'RV area' : 'barn'}${shownCount === 1 ? '' : 's'}`}
+                            </p>
+                        )}
+                    </div>
+                )}
+
+                {activeView === 'stalls' && barnsShown.map(barn => (
                     <motion.div key={barn.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                         <UnitGrid
+                            query={query}
+                            wholeMatch={nameHit(barn.name)}
                             name={barn.name}
                             units={barn.stalls || []}
                             layoutCols={barn.layoutCols}
@@ -222,9 +282,11 @@ const PublicStallingChartPage = () => {
                     </motion.div>
                 ))}
 
-                {activeView === 'rv' && rvAreasWithSpots.map(area => (
+                {activeView === 'rv' && rvShown.map(area => (
                     <motion.div key={area.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                         <UnitGrid
+                            query={query}
+                            wholeMatch={nameHit(area.name)}
                             name={area.name}
                             units={area.spots || []}
                             layoutCols={area.layoutPerRow || Math.min(Math.max(1, area.spotCount || 1), 10)}

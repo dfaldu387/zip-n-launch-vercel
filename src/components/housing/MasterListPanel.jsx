@@ -19,6 +19,7 @@ import { ensureAllRvSpots, getAssignedRvSpotsForBooking } from '@/lib/rvAssignme
 import { computeBookingTotal } from '@/lib/bookingPricing';
 import { formatNightDates } from '@/lib/stallNights';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
+import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getSupplyStage, getSupplyLastUpdate, getItemStatus, SUPPLY_STAGES } from '@/lib/supplyStatus';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -185,10 +186,12 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
         stalls: requested,
         assignedCount: assigned.length,
         stallNumbersArr: assigned.map(s => s.number),
+        stallPlaces: assigned.map(s => ({ place: s.barnName || '', number: s.number })),
         stallNumbers: assigned.map(s => s.number).join(', '),
         rv: getRvCount(booking),
         rvAssignedCount: rvSpots.length,
         rvSpotNumbersArr: rvSpots.map(s => s.number),
+        rvPlaces: rvSpots.map(s => ({ place: s.areaName || '', number: s.number })),
         rvSpotNumbers: rvSpots.map(s => s.number).join(', '),
         supplies,
         supplyCount: supplies.reduce((n, s) => n + s.qty, 0),
@@ -566,12 +569,7 @@ const MasterListRow = ({
                                 <Badge variant="outline" className="text-[10px] border-rose-400 text-rose-500">Unassigned</Badge>
                             ) : (
                                 <>
-                                    {r.stallNumbersArr.slice(0, 8).map((num, i) => (
-                                        <Badge key={i} className="bg-emerald-600 text-white text-[10px] font-mono">{num}</Badge>
-                                    ))}
-                                    {r.stallNumbersArr.length > 8 && (
-                                        <Badge variant="outline" className="text-[10px]">+{r.stallNumbersArr.length - 8}</Badge>
-                                    )}
+                                    <AssignedChips numbers={r.stallNumbersArr} places={r.stallPlaces} color="bg-emerald-600" noun="Stalls" owner={r.name} />
                                     {partial && (
                                         <span className="text-[10px] text-amber-600 font-medium">• {r.stalls - r.assignedCount} left</span>
                                     )}
@@ -586,9 +584,7 @@ const MasterListRow = ({
                             {r.rvAssignedCount === 0 ? (
                                 <Badge variant="outline" className="text-[10px] border-rose-400 text-rose-500">Unassigned</Badge>
                             ) : (
-                                r.rvSpotNumbersArr.map((num, i) => (
-                                    <Badge key={i} className="bg-violet-600 text-white text-[10px] font-mono">{num}</Badge>
-                                ))
+                                <AssignedChips numbers={r.rvSpotNumbersArr} places={r.rvPlaces} color="bg-violet-600" noun="RV" owner={r.name} />
                             )}
                         </div>
                     ) : <span className="text-muted-foreground flex justify-center">—</span>}
@@ -829,7 +825,9 @@ const MasterListRow = ({
 
                                 <div className="space-y-1 min-w-0">
                                     <p className="font-semibold text-foreground">Horses ({r.horses})</p>
-                                    {r.horseNamesArr.length
+                                    {r.horseNamesArr.length > 6
+                                        ? <div className="flex flex-wrap items-center gap-1"><HorseChips names={r.horseNamesArr} owner={r.name} chipClassName="text-[11px]" /></div>
+                                    : r.horseNamesArr.length
                                         ? <ol className="space-y-0.5">
                                             {r.horseNamesArr.map((h, i) => <li key={i}>{i + 1}. {h}</li>)}
                                         </ol>
@@ -840,9 +838,7 @@ const MasterListRow = ({
                                     <p className="font-semibold text-foreground">Stalls ({r.assignedCount}{r.stalls ? ` of ${r.stalls}` : ''})</p>
                                     <div className="flex flex-wrap gap-1">
                                         {r.stallNumbersArr.length
-                                            ? r.stallNumbersArr.map((num, i) => (
-                                                <Badge key={i} className="bg-emerald-600 text-white text-[10px] font-mono">{num}</Badge>
-                                            ))
+                                            ? <AssignedChips numbers={r.stallNumbersArr} places={r.stallPlaces} color="bg-emerald-600" noun="Stalls" owner={r.name} />
                                             : <span className="italic text-muted-foreground">Unassigned</span>}
                                     </div>
                                     <p className="text-muted-foreground">
@@ -858,9 +854,7 @@ const MasterListRow = ({
                                     {r.rv > 0 ? (
                                         <div className="flex flex-wrap gap-1">
                                             {r.rvSpotNumbersArr.length
-                                                ? r.rvSpotNumbersArr.map((num, i) => (
-                                                    <Badge key={i} className="bg-violet-600 text-white text-[10px] font-mono">{num}</Badge>
-                                                ))
+                                                ? <AssignedChips numbers={r.rvSpotNumbersArr} places={r.rvPlaces} color="bg-violet-600" noun="RV" owner={r.name} />
                                                 : <span className="italic text-muted-foreground">Unassigned</span>}
                                         </div>
                                     ) : <p className="italic text-muted-foreground">No RV booked</p>}

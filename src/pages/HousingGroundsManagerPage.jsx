@@ -61,6 +61,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
+import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
 import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn, removeRvRow, removeRvColumn, sellableRvSpotCount } from '@/lib/rvAssignment';
@@ -155,6 +156,24 @@ const STAT_COLOR_PALETTE = [
 // Read-only look for a disabled fieldset: keep values dark enough to read (the base
 // inputs fade to 50% and the fieldset fades again, which made them nearly invisible).
 const READONLY_FIELDS = 'opacity-100 [&_input:disabled]:opacity-100 [&_textarea:disabled]:opacity-100 [&_[role=combobox]:disabled]:opacity-100 [&_input:disabled]:bg-muted/50 [&_textarea:disabled]:bg-muted/50 [&_[role=combobox]:disabled]:bg-muted/50 [&_input:disabled]:text-foreground [&_textarea:disabled]:text-foreground [&_[role=combobox]:disabled]:text-foreground';
+
+// Open/close arrow for a card. It is NOT a <button>: in Published / Locked mode the whole
+// section sits in a disabled <fieldset>, which disables every real button inside it, and
+// opening a card to read it must still work then. Opening never edits anything.
+const ExpandArrow = ({ expanded, title, onToggle }) => (
+    <div
+        role="button"
+        tabIndex={0}
+        title={title}
+        aria-label={title}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md cursor-pointer hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+        {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+    </div>
+);
 
 // True while the setup is Published or Locked. Lets deep components hide their own
 // lock buttons instead of showing a second, confusing "Locked" state.
@@ -995,7 +1014,8 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     const fileInputRef = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [paintType, setPaintType] = useState('stall');
-    const [expanded, setExpanded] = useState(true);
+    // Starts closed so a long page is easy to scan; open it with the arrow.
+    const [expanded, setExpanded] = useState(false);
     const [showLayout, setShowLayout] = useState(false);
     // Custom numbering: true = click a box to type its number; false = click to paint its type.
     const [editingNumbers, setEditingNumbers] = useState(true);
@@ -1187,15 +1207,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
             <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-1">
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 shrink-0"
-                            title={expanded ? 'Minimize barn' : 'Open barn'}
-                            onClick={() => setExpanded(!expanded)}
-                        >
-                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </Button>
+                        <ExpandArrow expanded={expanded} title={expanded ? 'Minimize barn' : 'Open barn'} onToggle={() => setExpanded(!expanded)} />
                         <TypeIcon className="h-4 w-4 text-primary shrink-0" />
                         <Input
                             value={barn.name}
@@ -1686,7 +1698,8 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
 // The Inventory tab builds the spots; the Fees tab prices them — they never mix.
 
 const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName = '', showName = '', extraRvFees = [], onAddFee, bookings = [], variant = 'inventory', moveInDate, moveOutDate, datesLocked, setMoveInDate, setMoveOutDate, setDatesLocked }) => {
-    const [expanded, setExpanded] = useState(true);
+    // Starts closed (Robert/Denish 11-07) so a long page is easy to scan; open it with the arrow.
+    const [expanded, setExpanded] = useState(false);
     const { toast } = useToast();
     // Inventory and fees lock independently: locking the area in the Inventory tab
     // must not freeze its price in the Fees tab, and vice-versa.
@@ -1820,15 +1833,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
             <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-1">
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 shrink-0"
-                            title={expanded ? 'Minimize area' : 'Open area'}
-                            onClick={() => setExpanded(!expanded)}
-                        >
-                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </Button>
+                        <ExpandArrow expanded={expanded} title={expanded ? 'Minimize area' : 'Open area'} onToggle={() => setExpanded(!expanded)} />
                         <Car className={cn('h-4 w-4 shrink-0', rvArea.isOverflow ? 'text-amber-600' : 'text-cyan-600')} />
                         {variant === 'inventory' ? (
                             <Input
@@ -2625,17 +2630,14 @@ const BookingRow = ({
                         {assignedStalls.length === 0 && requestedStalls > 0 && (
                             <Badge variant="outline" className="text-[10px] text-muted-foreground">unassigned</Badge>
                         )}
-                        {assignedStalls.slice(0, 6).map(s => (
-                            <Badge
-                                key={s.id}
-                                className="bg-emerald-600 text-white text-[10px] font-mono"
-                                title={`${s.barnName} · Stall ${s.number}`}
-                            >
-                                {s.number}
-                            </Badge>
-                        ))}
-                        {assignedStalls.length > 6 && (
-                            <Badge variant="outline" className="text-[10px]">+{assignedStalls.length - 6}</Badge>
+                        {assignedStalls.length > 0 && (
+                            <AssignedChips
+                                numbers={assignedStalls.map(s => s.number)}
+                                places={assignedStalls.map(s => ({ place: s.barnName || '', number: s.number }))}
+                                color="bg-emerald-600"
+                                noun="Stalls"
+                                owner={booking.exhibitorName || ''}
+                            />
                         )}
                     </div>
                 ) : isEditing ? (
@@ -2832,15 +2834,21 @@ const BookingRow = ({
                 <div className="grid gap-2 sm:grid-cols-3">
                     <div>
                         <p className="font-medium text-muted-foreground mb-0.5">Horses ({horseCount})</p>
-                        <p>{horseNames.length ? horseNames.join(', ') : <span className="italic text-muted-foreground">None listed</span>}</p>
+                        {horseNames.length > 6
+                            ? <div className="flex flex-wrap items-center gap-1"><HorseChips names={horseNames} owner={booking.exhibitorName || ''} chipClassName="text-[10px]" /></div>
+                            : <p>{horseNames.length ? horseNames.join(', ') : <span className="italic text-muted-foreground">None listed</span>}</p>}
                     </div>
                     <div>
                         <p className="font-medium text-muted-foreground mb-0.5">Stalls ({assignedStalls.length}{requestedStalls ? ` of ${requestedStalls}` : ''})</p>
                         <div className="flex flex-wrap gap-1">
                             {assignedStalls.length
-                                ? assignedStalls.map(s => (
-                                    <Badge key={s.id} className="bg-emerald-600 text-white text-[10px] font-mono" title={`${s.barnName} · Stall ${s.number}`}>{s.number}</Badge>
-                                ))
+                                ? <AssignedChips
+                                    numbers={assignedStalls.map(s => s.number)}
+                                    places={assignedStalls.map(s => ({ place: s.barnName || '', number: s.number }))}
+                                    color="bg-emerald-600"
+                                    noun="Stalls"
+                                    owner={booking.exhibitorName || ''}
+                                />
                                 : <span className="italic text-muted-foreground">Unassigned</span>}
                         </div>
                     </div>
