@@ -80,7 +80,7 @@ export function assignedCountByType(spots = []) {
 // Paint one grid spot with a camping type (click the same type again to clear it).
 // The spot's amps follow the type's power so the stalling board / printed chart,
 // which read spot.amps, keep showing 30A / 50A.
-const AMPS_BY_POWER = { '30amp': '30', '50amp': '50' };
+const AMPS_BY_POWER = { '30amp': '30', '50amp': '50', '30_50amp': '30/50' };
 export function paintCampingType(spots, spotId, type) {
     return spots.map(s => {
         if (s.id !== spotId) return s;

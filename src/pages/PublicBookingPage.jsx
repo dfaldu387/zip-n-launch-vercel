@@ -57,6 +57,7 @@ const HOOKUP_LABELS = {
 const POWER_LABELS = {
     '50amp': '50 Amp',
     '30amp': '30 Amp',
+    '30_50amp': '30/50 Amp',
     '35amp': '35 Amp',
     '25amp': '25 Amp',
     'none': 'No Power',

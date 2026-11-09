@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
-import { gridCols, gridRows, numberingMode, renumberStalls, NUMBERING_CONTINUOUS } from '@/lib/barnGrid';
+import { gridCols, gridRows, numberingMode, renumberStalls, NUMBERING_CONTINUOUS, EMPTY_COLORS } from '@/lib/barnGrid';
 
 export const LAYOUT_VERSION = 1;
 const CELL_TYPES = new Set(['stall', 'aisle', 'empty', 'blocked', 'office', 'feed', 'wash', 'tack']);
@@ -27,6 +27,9 @@ export function extractBarnLayout(barn) {
         cells: stalls.map(s => ({
             type: s.type || 'stall',
             ...(s.customNumber ? { customNumber: String(s.customNumber) } : {}),
+            // Colour-coded Empty boxes travel with the layout.
+            ...(s.type === 'empty' && s.color ? { color: String(s.color) } : {}),
+            ...(s.type === 'empty' && s.label ? { label: String(s.label) } : {}),
         })),
     };
 }
@@ -102,12 +105,17 @@ export function applyBarnLayout(barn, layout, makeId) {
     const mode = layout.numberingMode || NUMBERING_CONTINUOUS;
     const rowLabels = Array.isArray(layout.rowLabels) ? layout.rowLabels.map(v => String(v ?? '')) : [];
     const colLabels = Array.isArray(layout.colLabels) ? layout.colLabels.map(v => String(v ?? '')) : [];
-    const cells = layout.cells.map(c => ({
-        id: makeId(),
-        bookingId: null,
-        type: CELL_TYPES.has(c.type) ? c.type : 'stall',
-        ...(c.customNumber ? { customNumber: String(c.customNumber) } : {}),
-    }));
+    const cells = layout.cells.map(c => {
+        const type = CELL_TYPES.has(c.type) ? c.type : 'stall';
+        return {
+            id: makeId(),
+            bookingId: null,
+            type,
+            ...(c.customNumber ? { customNumber: String(c.customNumber) } : {}),
+            ...(type === 'empty' && EMPTY_COLORS.some(k => k.id === c.color) ? { color: c.color } : {}),
+            ...(type === 'empty' && c.label ? { label: String(c.label).slice(0, 40) } : {}),
+        };
+    });
     const nextBarn = { ...barn, layoutCols: cols, numberingMode: mode, rowLabels, colLabels };
     const stalls = renumberStalls(cells, nextBarn, cols);
     return {

@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { cn } from '@/lib/utils';
 import { searchBarnLayouts, deleteBarnLayout, isValidLayout } from '@/lib/savedBarnLayouts';
+import { cellAppearance } from '@/lib/barnGrid';
 
 const TYPE_CLS = {
     stall: 'bg-background border border-muted-foreground/40',
@@ -33,7 +34,11 @@ const LayoutPreview = ({ layout }) => {
         <div className="max-h-24 max-w-[14rem] overflow-hidden rounded border bg-muted/30 p-1">
             <div className="grid gap-px" style={{ gridTemplateColumns: `repeat(${cols}, ${size}px)` }}>
                 {layout.cells.map((c, i) => (
-                    <div key={i} style={{ width: size, height: size }} className={cn('rounded-[1px]', TYPE_CLS[c.type] || TYPE_CLS.stall)} />
+                    <div
+                        key={i}
+                        style={{ width: size, height: size, ...(cellAppearance(c)?.fill ? { background: cellAppearance(c).fill } : {}) }}
+                        className={cn('rounded-[1px]', TYPE_CLS[c.type] || TYPE_CLS.stall)}
+                    />
                 ))}
             </div>
         </div>

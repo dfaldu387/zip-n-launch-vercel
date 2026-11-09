@@ -10,7 +10,7 @@
 // its name, matching the on-screen board.
 
 import { ensureAllRvSpots } from '@/lib/rvAssignment';
-import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
+import { gridCols, computeGridLabels, labelValue, cellAppearance, isWalkway } from '@/lib/barnGrid';
 import { buildLayerIndex, layerCell, layerById, layerLegend } from '@/lib/stallLayers';
 
 // Ordered so the first 12 colours are all clearly distinct (no two greens / teals /
@@ -108,6 +108,14 @@ function buildStallingChartHtml({
         if (type !== 'stall') {
             // Blocked shows its number; office/feed/wash/tack show their name; aisle &
             // empty print blank so walkways don't clutter the chart.
+            // A colour-coded Empty box prints as a block of colour with its word in the middle
+            // (overflow visible so a long word spans its neighbours).
+            const look = cellAppearance(unit);
+            if (look) {
+                const fillCss = look.fill ? `background:${look.fill};border-color:${look.fill};` : '';
+                const inkCss = look.ink ? `color:${look.ink};` : '';
+                return `<div class="cell room painted" style="${fillCss}${inkCss}${look.label ? 'z-index:1;' : ''}">${look.label ? `<span class="plabel">${esc(look.label)}</span>` : ''}</div>`;
+            }
             const label = type === 'blocked' ? esc(unit.number) : esc(ROOM_LABELS[type] || '');
             return `<div class="cell room">${label}</div>`;
         }
@@ -151,10 +159,7 @@ function buildStallingChartHtml({
         // the same as on screen — a band of tall blank boxes just wastes the page.
         const isWalkwayRow = (ri) => {
             const row = units.slice(ri * cols, ri * cols + cols);
-            return row.length > 0 && row.every(u => {
-                const t = u?.type || 'stall';
-                return t === 'aisle' || t === 'empty';
-            });
+            return row.length > 0 && row.every(isWalkway);
         };
         // One grid for columns [c0, c1). A very wide barn (say 100 columns) is cut into
         // several strips of at most MAX_PRINT_COLS columns, stacked down the page, so
@@ -279,6 +284,8 @@ function buildStallingChartHtml({
         .cell.taken.pale .num2{color:#475569}
         .cell.taken.pale .num3{color:#475569}
         .cell.free{background:#f8fafc}
+        .cell.room.painted{overflow:visible;border-radius:0;font-family:inherit;text-transform:none}
+        .cell.room.painted .plabel{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);white-space:nowrap;font-size:12px;font-weight:700}
         .cell.room{background:#f1f5f9;color:#94a3b8;font-size:11px;justify-content:center;font-family:ui-monospace,monospace;text-transform:uppercase}
         .footer{text-align:center;margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#64748b}
         @media print{ body{padding:0} .barn{margin-bottom:16px} }

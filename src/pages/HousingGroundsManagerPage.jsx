@@ -64,7 +64,7 @@ const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
-import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn, removeRvRow, removeRvColumn, sellableRvSpotCount } from '@/lib/rvAssignment';
+import { unassignBookingRvSpots, ensureAllRvSpots, getRequestedRvCount, getAssignedRvSpotsForBooking, ensureRvSpots, setRvCustomNumber, fillRvSequence, clearRvCustomNumbers, duplicateRvNumbers, setRvSpotType, setRvSpotAmps, copyRvLayout, addRvRow, addRvColumn, removeRvRow, removeRvColumn, sellableRvSpotCount, paintRvEmpty, setRvSpotLabel } from '@/lib/rvAssignment';
 import { beddingItemsOf } from '@/lib/stallLayers';
 import { downloadInvoicePdf, computeBookingTotal } from '@/lib/invoiceGenerator';
 import { getBookingDisplayStatus, pairStallUnits, stallUnitPrice } from '@/lib/bookingPricing';
@@ -84,6 +84,7 @@ import {
     computeGridLabels, labelValue,
     insertRowAt, deleteRowAt, insertColAt, deleteColAt, resizeGrid,
     bookedInRow, bookedInCol,
+    EMPTY_COLORS, cellAppearance, paintEmptyCell, setCellLabel, clearEmptyLook,
 } from '@/lib/barnGrid';
 import { netAfterFees, estimateNetAfterFees, moneyNum } from '@/lib/netRevenue';
 import { ALL_BARNS, feeScope, feeAppliesToBarn, nightlyRateForBarn, nightlyCostForBarn, flatRateForBarn, flatCostForBarn, scopeLabelForFee, barnPerStallTotal as computeBarnPerStallTotal, barnPerStallCost as computeBarnPerStallCost } from '@/lib/extraStallFees';
@@ -113,8 +114,11 @@ const RV_HOOKUP_TYPES = [
 const RV_POWER_TYPES = [
     { id: '50amp', name: '50 Amp' },
     { id: '30amp', name: '30 Amp' },
-    { id: '35amp', name: '35 Amp' },
+    { id: '30_50amp', name: '30/50 Amp' },
     { id: '25amp', name: '25 Amp' },
+    // Retired (Robert 11-09): shows are told "30/50 Amp" now. Kept only so camping types saved
+    // with it still read correctly; it is not offered when picking a power type.
+    { id: '35amp', name: '35 Amp', legacy: true },
     { id: 'none', name: 'No Power' },
 ];
 
@@ -661,10 +665,37 @@ const CELL_TYPES = [
 ];
 const CELL_TYPE_MAP = Object.fromEntries(CELL_TYPES.map(t => [t.id, t]));
 const ROOM_TYPES = new Set(['office', 'feed', 'wash', 'tack']);
+// What the paint palette offers. Office / Feed / Wash / Tack are no longer needed (Robert
+// 11-09): colour an Empty box and type a word on it instead. Boxes saved with the old types
+// still draw correctly (see cellAppearance) and can be repainted.
+const PAINT_TYPES = CELL_TYPES.filter(t => !ROOM_TYPES.has(t.id));
+
+// "Zoom" slider for a grid (Robert 11-09: slide the boxes bigger and smaller instead of
+// Small / Medium / Large). Only changes how big the grid is DRAWN in this editor.
+const ZOOM_MIN = 40;
+const ZOOM_MAX = 200;
+const GridZoomBar = ({ zoom, setZoom, onFit, className }) => (
+    <div className={cn('flex items-center gap-2', className)}>
+        <span className="text-xs text-muted-foreground shrink-0">Zoom</span>
+        <Button type="button" variant="outline" size="icon" className="h-7 w-7 shrink-0" title="Smaller"
+            disabled={zoom <= ZOOM_MIN} onClick={() => setZoom(Math.max(ZOOM_MIN, zoom - 10))}><Minus className="h-3.5 w-3.5" /></Button>
+        <input
+            type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={5} value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
+            className="flex-1 min-w-[6rem] max-w-xs accent-primary cursor-pointer"
+            aria-label="Make the grid boxes smaller or bigger"
+        />
+        <Button type="button" variant="outline" size="icon" className="h-7 w-7 shrink-0" title="Bigger"
+            disabled={zoom >= ZOOM_MAX} onClick={() => setZoom(Math.min(ZOOM_MAX, zoom + 10))}><Plus className="h-3.5 w-3.5" /></Button>
+        <span className="text-xs font-mono w-10 text-right shrink-0">{zoom}%</span>
+        {onFit && <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs shrink-0" title="Shrink or grow the grid so the whole width fits on screen" onClick={onFit}>Fit width</Button>}
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs shrink-0" disabled={zoom === 100} onClick={() => setZoom(100)}>100%</Button>
+    </div>
+);
 
 // A grid header cell you can type into (row / column label). Holds a local buffer
 // and commits on blur or Enter, so we don't re-render the whole barn per keystroke.
-const GridLabelInput = ({ value, onCommit, className, title, disabled }) => {
+const GridLabelInput = ({ value, onCommit, className, title, disabled, placeholder }) => {
     const [v, setV] = useState(value);
     React.useEffect(() => { setV(value); }, [value]);
     if (disabled) {
@@ -674,6 +705,8 @@ const GridLabelInput = ({ value, onCommit, className, title, disabled }) => {
         <input
             value={v}
             title={title}
+            placeholder={placeholder}
+            maxLength={40}
             onChange={(e) => setV(e.target.value)}
             onBlur={() => { if (v !== value) onCommit(v); }}
             onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
@@ -712,7 +745,19 @@ const StallMap = ({
     onInsertRow = null, onDeleteRow = null, onInsertCol = null, onDeleteCol = null,
     // Custom numbering: when given, stall/blocked boxes hold a typeable number instead of painting.
     onRenameStall = null, duplicateNumbers = null,
+    // Type a word on a colour-coded Empty box (Arena, Restroom…). When given, Empty boxes hold a typeable label.
+    onLabelCell = null,
 }) => {
+    // Zoom: scales the drawn grid only (CSS zoom keeps clicks and scrolling exact).
+    const [zoom, setZoom] = React.useState(100);
+    const fitWidth = () => {
+        const el = scrollRef.current;
+        const inner = el?.firstElementChild;
+        if (!el || !inner) return;
+        const natural = inner.getBoundingClientRect().width / (zoom / 100);
+        if (!natural) return;
+        setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.floor((el.clientWidth / natural) * 100))));
+    };
     // Drag-to-paint: hold the pointer down and sweep across boxes to paint many.
     const paintingRef = React.useRef(false);
     React.useEffect(() => {
@@ -739,7 +784,7 @@ const StallMap = ({
         ro.observe(el);
         if (el.firstElementChild) ro.observe(el.firstElementChild);
         return () => ro.disconnect();
-    }, [syncScroll, stalls?.length, cols]);
+    }, [syncScroll, stalls?.length, cols, zoom]);
     const slideBy = (dir) => {
         const el = scrollRef.current;
         if (el) el.scrollBy({ left: dir * Math.max(200, el.clientWidth * 0.7), behavior: 'smooth' });
@@ -821,6 +866,7 @@ const StallMap = ({
 
     return (
         <div className="space-y-2 w-full max-w-full min-w-0">
+            <GridZoomBar zoom={zoom} setZoom={setZoom} onFit={fitWidth} />
             {scrollInfo.max > 0 && (
                 <div className="flex items-center gap-2">
                     <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs shrink-0"
@@ -840,7 +886,7 @@ const StallMap = ({
                 </div>
             )}
             <div ref={scrollRef} onScroll={syncScroll} className="overflow-x-auto w-full max-w-full">
-                <div className={cn('inline-flex flex-col rounded-md border bg-background/60 p-3', tight ? 'gap-0' : 'gap-1.5')}>
+                <div style={zoom !== 100 ? { zoom: zoom / 100 } : undefined} className={cn('inline-flex flex-col rounded-md border bg-background/60 p-3', tight ? 'gap-0' : 'gap-1.5')}>
                     {/* Column handles — insert a column here / remove this column */}
                     {canEditGrid && (
                         <div className={cn('flex items-stretch', tight ? 'gap-0' : 'gap-1.5')}>
@@ -924,10 +970,13 @@ const StallMap = ({
                                     // cancel would otherwise keep showing those boxes as sold.
                                     const isBooked = isStall && isStallHeld(stall, liveBookingIds);
                                     const typeInfo = CELL_TYPE_MAP[type] || CELL_TYPE_MAP.stall;
-                                    const label = isPhysical ? stall.number : (ROOM_TYPES.has(type) ? typeInfo.label : '');
+                                    const label = isPhysical ? stall.number : '';
+                                    // Colour-coded Empty box (or an old Office / Feed / Wash / Tack box).
+                                    const look = cellAppearance(stall);
+                                    const labelable = !!onLabelCell && type === 'empty';
                                     const showCenter = useCenterAisle && ci === leftCount;
                                     // Typing numbers replaces painting for the whole map.
-                                    const paintable = !!onCellClick && !onRenameStall;
+                                    const paintable = !!onCellClick && !onRenameStall && !onLabelCell;
                                     const typeable = !!onRenameStall && isPhysical;
                                     const isDuplicate = isPhysical && !!stall.number && !!duplicateNumbers?.has(String(stall.number).toLowerCase());
                                     return (
@@ -941,19 +990,32 @@ const StallMap = ({
                                             <div
                                                 onPointerDown={paintable ? (e) => { e.preventDefault(); paintingRef.current = true; onCellClick(stall.id); } : undefined}
                                                 onPointerEnter={paintable ? () => { if (paintingRef.current) onCellClick(stall.id); } : undefined}
-                                                title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : typeInfo.label)}
+                                                title={isStall ? `${stall.number}${isBooked ? ' · booked' : ' · available'}` : (type === 'blocked' ? `${stall.number} · blocked` : (look?.label || typeInfo.label))}
+                                                style={look?.fill ? { background: look.fill, borderColor: look.fill } : undefined}
                                                 className={cn(
-                                                    'flex items-center justify-center border text-[9px] font-mono font-semibold h-9 w-12 select-none',
+                                                    'relative flex items-center justify-center border text-[9px] font-mono font-semibold h-9 w-12 select-none',
+                                                    look && 'border-solid',
+                                                    look?.label && 'z-[2]',
                                                     // Tight: square corners + overlap borders so stalls read as one clean grid (fewer lines).
                                                     tight ? 'rounded-none' : 'rounded-md',
                                                     tight && ci > 0 && '-ml-px',
                                                     tight && ri > 0 && '-mt-px',
                                                     paintable && 'cursor-pointer hover:ring-2 hover:ring-primary/40 hover:z-10',
                                                     isDuplicate && 'ring-2 ring-amber-500 z-10',
-                                                    isBooked ? 'bg-blue-600 text-white border-blue-700' : typeInfo.cls
+                                                    isBooked ? 'bg-blue-600 text-white border-blue-700' : (look ? '' : typeInfo.cls)
                                                 )}
                                             >
-                                                {typeable ? (
+                                                {labelable ? (
+                                                    <GridLabelInput
+                                                        value={stall.label || ''}
+                                                        onCommit={(val) => onLabelCell(stall.id, val)}
+                                                        title="Type a word for this area (Arena, Restroom…) and press Enter"
+                                                        className="h-full w-full min-w-0 bg-transparent text-center text-[9px] font-semibold text-inherit outline-none cursor-text placeholder:text-muted-foreground/40 hover:bg-primary/10 focus:absolute focus:left-1/2 focus:top-0 focus:-translate-x-1/2 focus:z-30 focus:w-40 focus:bg-background focus:text-foreground focus:border focus:border-primary focus:rounded-sm"
+                                                        placeholder="label"
+                                                    />
+                                                ) : look?.label ? (
+                                                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap font-sans text-[11px] font-semibold" style={{ color: look.ink || undefined }}>{look.label}</span>
+                                                ) : typeable ? (
                                                     <GridLabelInput
                                                         value={stall.number || ''}
                                                         onCommit={(val) => onRenameStall(stall.id, val)}
@@ -996,10 +1058,7 @@ const StallMap = ({
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-blue-600 border border-blue-700" /> Booked</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-muted-foreground/40 bg-background" /> Stall</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-orange-400" /> Aisle</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-amber-300 bg-amber-100" /> Office</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-100" /> Feed</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-sky-300 bg-sky-100" /> Wash</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm border border-purple-300 bg-purple-100" /> Tack</span>
+                <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm" style={{ background: 'linear-gradient(135deg,#bbf7d0 50%,#bfdbfe 50%)' }} /> Colour-coded Empty (Arena, Restroom…)</span>
             </div>
         </div>
     );
@@ -1014,6 +1073,10 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     const fileInputRef = useRef(null);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [paintType, setPaintType] = useState('stall');
+    // Empty boxes can be coloured and named (Robert 11-09). Colour = paint with a colour;
+    // label = click an Empty box and type a word on it.
+    const [emptyColor, setEmptyColor] = useState('gray');
+    const [emptyTool, setEmptyTool] = useState('color');
     // Starts closed so a long page is easy to scan; open it with the arrow.
     const [expanded, setExpanded] = useState(false);
     const [showLayout, setShowLayout] = useState(false);
@@ -1144,18 +1207,25 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
     // Paint a box's type, then renumber so stall numbers stay continuous and the
     // stall count reflects only the boxes that are actually stalls.
     const paintCell = (cellId) => {
-        const updated = (barn.stalls || []).map(s => {
-            if (s.id !== cellId) return s;
-            const next = { ...s, type: paintType };
-            if (paintType !== 'stall') next.bookingId = null; // rooms/blocked can't hold a booking
-            return next;
-        });
+        const updated = paintType === 'empty'
+            // Empty takes the chosen colour ('none' = a plain empty box).
+            ? paintEmptyCell(barn.stalls || [], cellId, emptyColor === 'none' ? null : emptyColor)
+            : (barn.stalls || []).map(s => {
+                if (s.id !== cellId) return s;
+                // Any other type forgets the colour and word an Empty box carried.
+                const next = { ...clearEmptyLook(s), type: paintType };
+                if (paintType !== 'stall') next.bookingId = null; // rooms/blocked can't hold a booking
+                return next;
+            });
         const newStalls = renumberStalls(updated, barn, gridCols(barn));
         onUpdateFields({
             stalls: newStalls,
             stallCount: newStalls.filter(s => (s.type || 'stall') === 'stall').length,
         });
     };
+
+    // Type a word on an Empty box. Only a picture: no numbers or stall counts change.
+    const labelCell = (cellId, text) => onUpdateFields({ stalls: setCellLabel(barn.stalls || [], cellId, text) });
 
     // Aisle walkways drawn between columns/rows — toggling never touches stalls.
     const toggleAisle = (field, index) => {
@@ -1409,15 +1479,17 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                 <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
                                     <div className="space-y-1">
                                         <Label className="text-xs">Rows (top → bottom)</Label>
-                                        <div className="flex items-center gap-1">
-                                            <Button
-                                                type="button" variant="outline" size="sm"
-                                                className="h-8 px-2 shrink-0 gap-1"
-                                                disabled={locked || rows <= 1}
-                                                title="Remove the bottom row"
-                                                onClick={() => stepRows(-1)}
-                                            >
-                                                <Minus className="h-3.5 w-3.5" />
+                                        <div className="flex flex-wrap items-center gap-1">
+                                            {/* Add or remove a row on the TOP or the BOTTOM (Robert 11-09). Adding on top pushes everything down. */}
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked} title="Add a row at the top — everything moves down one row"
+                                                onClick={() => applyPatch(insertRowAt(barn, 0))}>
+                                                <Plus className="h-3.5 w-3.5" /> Top
+                                            </Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked || rows <= 1} title="Remove the top row"
+                                                onClick={() => askDeleteRow(0)}>
+                                                <Minus className="h-3.5 w-3.5" /> Top
                                             </Button>
                                             <Input
                                                 type="number"
@@ -1427,13 +1499,14 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                                 onChange={(e) => setGrid(e.target.value, cols)}
                                                 className="h-8 text-xs w-14 text-center"
                                             />
-                                            <Button
-                                                type="button" variant="outline" size="sm"
-                                                className="h-8 px-2 shrink-0 gap-1 text-xs"
-                                                disabled={locked}
-                                                title="Add a row at the bottom — nothing above it moves"
-                                                onClick={() => stepRows(1)}
-                                            >
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked || rows <= 1} title="Remove the bottom row"
+                                                onClick={() => stepRows(-1)}>
+                                                <Minus className="h-3.5 w-3.5" /> Bottom
+                                            </Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked} title="Add a row at the bottom — nothing above it moves"
+                                                onClick={() => stepRows(1)}>
                                                 <Plus className="h-3.5 w-3.5" /> Bottom
                                             </Button>
                                         </div>
@@ -1441,15 +1514,17 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                     <span className="pb-2 text-muted-foreground">×</span>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Columns (left → right)</Label>
-                                        <div className="flex items-center gap-1">
-                                            <Button
-                                                type="button" variant="outline" size="sm"
-                                                className="h-8 px-2 shrink-0"
-                                                disabled={locked || cols <= 1}
-                                                title="Remove the rightmost column"
-                                                onClick={() => stepCols(-1)}
-                                            >
-                                                <Minus className="h-3.5 w-3.5" />
+                                        <div className="flex flex-wrap items-center gap-1">
+                                            {/* Add or remove a column on the LEFT or the RIGHT. Adding on the left pushes everything right. */}
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked} title="Add a column on the left — everything moves right one column"
+                                                onClick={() => applyPatch(insertColAt(barn, 0))}>
+                                                <Plus className="h-3.5 w-3.5" /> Left
+                                            </Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked || cols <= 1} title="Remove the leftmost column"
+                                                onClick={() => askDeleteCol(0)}>
+                                                <Minus className="h-3.5 w-3.5" /> Left
                                             </Button>
                                             <Input
                                                 type="number"
@@ -1459,13 +1534,14 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                                 onChange={(e) => setGrid(rows, e.target.value)}
                                                 className="h-8 text-xs w-14 text-center"
                                             />
-                                            <Button
-                                                type="button" variant="outline" size="sm"
-                                                className="h-8 px-2 shrink-0 gap-1 text-xs"
-                                                disabled={locked}
-                                                title="Add a column on the right — nothing to its left moves"
-                                                onClick={() => stepCols(1)}
-                                            >
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked || cols <= 1} title="Remove the rightmost column"
+                                                onClick={() => stepCols(-1)}>
+                                                <Minus className="h-3.5 w-3.5" /> Right
+                                            </Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0 gap-1 text-xs"
+                                                disabled={locked} title="Add a column on the right — nothing to its left moves"
+                                                onClick={() => stepCols(1)}>
                                                 <Plus className="h-3.5 w-3.5" /> Right
                                             </Button>
                                         </div>
@@ -1607,7 +1683,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                         {!(isCustomNumbering && editingNumbers) && (
                                         <div className="flex flex-wrap items-center gap-1.5">
                                             <span className="text-xs text-muted-foreground mr-1">Click a box to set it as:</span>
-                                            {CELL_TYPES.map(t => (
+                                            {PAINT_TYPES.map(t => (
                                                 <Button
                                                     key={t.id}
                                                     type="button"
@@ -1620,6 +1696,38 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                                 </Button>
                                             ))}
                                         </div>
+                                        )}
+
+                                        {/* Empty boxes can be colour-coded and named — draw the arena, restrooms, vet clinic… around the barn. */}
+                                        {!(isCustomNumbering && editingNumbers) && paintType === 'empty' && (
+                                            <div className="rounded-md border border-dashed bg-background/60 p-2 space-y-2">
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    <span className="text-xs text-muted-foreground mr-1">Click a box to:</span>
+                                                    <Button type="button" size="sm" className="h-7 text-xs" variant={emptyTool === 'color' ? 'default' : 'outline'} onClick={() => setEmptyTool('color')}>Paint with a colour</Button>
+                                                    <Button type="button" size="sm" className="h-7 text-xs" variant={emptyTool === 'label' ? 'default' : 'outline'} onClick={() => setEmptyTool('label')}>Type a label</Button>
+                                                </div>
+                                                {emptyTool === 'color' ? (
+                                                    <div className="flex flex-wrap items-center gap-1.5">
+                                                        <span className="text-xs text-muted-foreground mr-1">Colour:</span>
+                                                        <button
+                                                            type="button" title="No colour (plain empty box)"
+                                                            onClick={() => setEmptyColor('none')}
+                                                            className={cn('h-6 w-6 rounded-sm border border-dashed border-muted-foreground/50 text-[9px] text-muted-foreground', emptyColor === 'none' && 'ring-2 ring-primary ring-offset-1')}
+                                                        >none</button>
+                                                        {EMPTY_COLORS.map(c => (
+                                                            <button
+                                                                key={c.id} type="button" title={c.name}
+                                                                onClick={() => setEmptyColor(c.id)}
+                                                                style={{ background: c.hex }}
+                                                                className={cn('h-6 w-6 rounded-sm border border-black/10', emptyColor === c.id && 'ring-2 ring-primary ring-offset-1')}
+                                                            />
+                                                        ))}
+                                                        <span className="text-[11px] text-muted-foreground">Drag across boxes to colour a whole area, then switch to “Type a label” and write one word in the middle.</span>
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-[11px] text-muted-foreground">Click a coloured Empty box, type a word (Arena, Restroom, Vet Clinic…) and press Enter. Only Empty boxes take a label.</p>
+                                                )}
+                                            </div>
                                         )}
 
                                         <p className="text-[11px] text-muted-foreground">
@@ -1641,6 +1749,7 @@ const BarnCard = ({ barn, onUpdate, onUpdateFields, onRemove, onDuplicate, showI
                                     tight={!showAisles}
                                     onCellClick={locked ? undefined : paintCell}
                                     onRenameStall={locked || !isCustomNumbering || !editingNumbers ? undefined : renameStall}
+                                    onLabelCell={locked || paintType !== 'empty' || emptyTool !== 'label' || (isCustomNumbering && editingNumbers) ? undefined : labelCell}
                                     duplicateNumbers={duplicateNumbers}
                                     aisleCols={barn.aisleCols || []}
                                     aisleRows={barn.aisleRows || []}
@@ -1778,21 +1887,42 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
     const typeById = Object.fromEntries(campingTypes.map(t => [t.id, t]));
     const [rvTool, setRvTool] = useState('number');
     // How big the spots are drawn in this editor only (Robert 11-03). Never saved: it does not touch the layout, the printed chart or the public chart.
-    const [rvZoom, setRvZoom] = useState('normal');
-    const cellSize = { small: 'h-12 w-8', normal: 'h-24 w-14', large: 'h-32 w-20' }[rvZoom];
+    // A slider now (Robert 11-09): 40% to 200%, 100% = the old Normal size.
+    const [rvZoom, setRvZoom] = useState(100);
+    const cellSize = 'h-24 w-14';
+    // Colour-coded Empty spots, like the barn map: pick a colour, drag across spots, then type a word.
+    const [rvEmptyColor, setRvEmptyColor] = useState('gray');
+    const rvScrollRef = useRef(null);
+    const fitRvWidth = () => {
+        const el = rvScrollRef.current;
+        const inner = el?.firstElementChild;
+        if (!el || !inner) return;
+        const natural = inner.getBoundingClientRect().width / (rvZoom / 100);
+        if (natural) setRvZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.floor((el.clientWidth / natural) * 100))));
+    };
+    const rvPaintingRef = useRef(false);
+    useEffect(() => {
+        const stop = () => { rvPaintingRef.current = false; };
+        window.addEventListener('pointerup', stop);
+        return () => window.removeEventListener('pointerup', stop);
+    }, []);
     const [paintTypeId, setPaintTypeId] = useState(null);
     const paintType = campingTypes.find(t => t.id === paintTypeId) || campingTypes[0];
     // Grow or shrink the grid only. Camping type counts are separate and are left as they are.
     const resizeGrid = (kind) => {
-        const grown = { 'add-row': addRvRow, 'add-column': addRvColumn, 'remove-row': removeRvRow, 'remove-column': removeRvColumn }[kind](rvArea);
+        // kind = 'add-row-top', 'remove-column-left', … (side defaults to bottom / right).
+        const [verb, what, side] = kind.split('-');
+        const fn = { 'add-row': addRvRow, 'add-column': addRvColumn, 'remove-row': removeRvRow, 'remove-column': removeRvColumn }[`${verb}-${what}`];
+        const grown = fn(rvArea, side);
         if (!grown) {
             toast({ title: "Can't remove that", description: 'An exhibitor is on one of those spots (or the grid is already at its smallest). Move them first.', variant: 'destructive' });
             return;
         }
         onUpdate('layoutCells', grown.spots.length);
         onUpdate('layoutPerRow', grown.perRow);
+        onUpdate('layoutRoadsAfter', grown.roadsAfter || []);
         writeSpots(grown.spots);
-        toast({ title: { 'add-row': 'Row added', 'add-column': 'Column added', 'remove-row': 'Row removed', 'remove-column': 'Column removed' }[kind], description: `The grid now has ${grown.spots.length} spots (${sellableRvSpotCount(grown.spots)} can be sold). Camping type counts did not change.` });
+        toast({ title: `${what === 'row' ? 'Row' : 'Column'} ${verb === 'add' ? 'added' : 'removed'}${side ? ` (${side})` : ''}`, description: `The grid now has ${grown.spots.length} spots (${sellableRvSpotCount(grown.spots)} can be sold). Camping type counts did not change.` });
     };
     // Painting never lowers a typed count, but a type cannot have more painted spots than its count: raise it.
     const paintSpot = (spotId) => {
@@ -1805,6 +1935,16 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
     const rvRoads = rvArea.layoutRoadsAfter || [];
     const toggleRoad = (rowIndex) => onUpdate('layoutRoadsAfter',
         rvRoads.includes(rowIndex) ? rvRoads.filter(i => i !== rowIndex) : [...rvRoads, rowIndex].sort((x, y) => x - y));
+    // Paint a spot as a colour-coded Empty one. Drag-safe: a booked spot is skipped quietly while sweeping.
+    const paintEmptySpot = (spot, announce = false) => {
+        if (spot.bookingId) {
+            if (announce) toast({ title: 'That spot is booked', description: 'Move the exhibitor to another spot first.', variant: 'destructive' });
+            return;
+        }
+        const next = paintRvEmpty(rvArea, spot.id, rvEmptyColor === 'none' ? null : rvEmptyColor);
+        if (next) writeSpots(next);
+    };
+    const labelSpot = (spotId, text) => onUpdate('spots', setRvSpotLabel(rvArea, spotId, text));
     const setSpotType = (spotId, type) => {
         const next = setRvSpotType(rvArea, spotId, type);
         if (!next) {
@@ -1939,7 +2079,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                {RV_POWER_TYPES.map(h => (
+                                                {RV_POWER_TYPES.filter(h => !h.legacy || h.id === t.powerType).map(h => (
                                                     <SelectItem key={h.id} value={h.id} className="text-xs">{h.name}</SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -2056,15 +2196,28 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                             onChange={(e) => onUpdate('layoutPerRow', Math.min(40, Math.max(1, parseInt(e.target.value) || 1)))}
                                             className="h-7 w-16 text-xs"
                                         />
-                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => resizeGrid('add-row')}><Plus className="h-3 w-3" /> Add row</Button>
-                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => resizeGrid('add-column')}><Plus className="h-3 w-3" /> Add column</Button>
-                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => resizeGrid('remove-row')}>Remove last row</Button>
-                                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => resizeGrid('remove-column')}>Remove last column</Button>
                                         <span className="text-muted-foreground">Grid: {rvSpots.length} spots. Camping type counts do not change it. New spots start with no camping type.</span>
+                                    </div>
+                                    {/* Add or remove a row / column on any of the four sides (Robert 11-09), like the barn map. */}
+                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                                        <div className="flex flex-wrap items-center gap-1">
+                                            <span className="text-muted-foreground mr-1">Rows:</span>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Add a row at the top — everything moves down" onClick={() => resizeGrid('add-row-top')}><Plus className="h-3 w-3" /> Top</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Add a row at the bottom" onClick={() => resizeGrid('add-row-bottom')}><Plus className="h-3 w-3" /> Bottom</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Remove the top row" onClick={() => resizeGrid('remove-row-top')}><Minus className="h-3 w-3" /> Top</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Remove the bottom row" onClick={() => resizeGrid('remove-row-bottom')}><Minus className="h-3 w-3" /> Bottom</Button>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-1">
+                                            <span className="text-muted-foreground mr-1">Columns:</span>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Add a column on the left — everything moves right" onClick={() => resizeGrid('add-column-left')}><Plus className="h-3 w-3" /> Left</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Add a column on the right" onClick={() => resizeGrid('add-column-right')}><Plus className="h-3 w-3" /> Right</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Remove the leftmost column" onClick={() => resizeGrid('remove-column-left')}><Minus className="h-3 w-3" /> Left</Button>
+                                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" title="Remove the rightmost column" onClick={() => resizeGrid('remove-column-right')}><Minus className="h-3 w-3" /> Right</Button>
+                                        </div>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-muted-foreground">Click a spot to:</span>
-                                        {[['number', 'Type its number'], ['empty', 'Mark empty'], ['blocked', 'Mark blocked'], ['roadway', 'Mark roadway'], ['power', 'Camping type']].map(([key, label]) => (
+                                        {[['number', 'Type its number'], ['empty', 'Colour an empty area'], ['label', 'Type a label'], ['clear', 'Make a normal spot'], ['blocked', 'Mark blocked'], ['roadway', 'Mark roadway'], ['power', 'Camping type']].map(([key, label]) => (
                                             <Button
                                                 key={key} type="button" size="sm" className="h-7 text-xs"
                                                 variant={rvTool === key ? 'default' : 'outline'}
@@ -2086,16 +2239,24 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                             <span className="text-muted-foreground">Click spots to paint them with this type. Click again to clear.</span>
                                         </div>
                                     )}
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-muted-foreground">Grid size:</span>
-                                        {[['small', 'Small'], ['normal', 'Normal'], ['large', 'Large']].map(([key, label]) => (
-                                            <Button key={key} type="button" size="sm" className="h-7 text-xs"
-                                                variant={rvZoom === key ? 'default' : 'outline'}
-                                                onClick={() => setRvZoom(key)}>{label}</Button>
-                                        ))}
-                                        <span className="text-muted-foreground">Only changes how big the spots look here.</span>
-                                    </div>
-                                    <div className={cn('overflow-auto pb-1', rvZoom === 'large' ? 'max-h-[32rem]' : rvZoom === 'small' ? 'max-h-60' : 'max-h-80')}>
+                                    {rvTool === 'empty' && (
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className="text-muted-foreground mr-1">Colour:</span>
+                                            <button type="button" title="No colour (plain empty spot)" onClick={() => setRvEmptyColor('none')}
+                                                className={cn('h-6 w-6 rounded-sm border border-dashed border-muted-foreground/50 text-[9px] text-muted-foreground', rvEmptyColor === 'none' && 'ring-2 ring-primary ring-offset-1')}>none</button>
+                                            {EMPTY_COLORS.map(c => (
+                                                <button key={c.id} type="button" title={c.name} onClick={() => setRvEmptyColor(c.id)} style={{ background: c.hex }}
+                                                    className={cn('h-6 w-6 rounded-sm border border-black/10', rvEmptyColor === c.id && 'ring-2 ring-primary ring-offset-1')} />
+                                            ))}
+                                            <span className="text-muted-foreground">Drag across spots to colour a whole area, then pick “Type a label” and write one word in the middle. Empty spots are never sold.</span>
+                                        </div>
+                                    )}
+                                    {rvTool === 'label' && <p className="text-muted-foreground">Click a coloured empty spot, type a word (Arena, Restroom…) and press Enter. Only empty spots take a label.</p>}
+                                    {/* Slider instead of Small / Normal / Large (Robert 11-09). Only changes how big the spots look here. */}
+                                    <GridZoomBar zoom={rvZoom} setZoom={setRvZoom} onFit={fitRvWidth} />
+                                    {/* No inner scroll box: the grid grows down the page so the whole chart is visible. */}
+                                    <div ref={rvScrollRef} className="overflow-x-auto pb-1">
+                                      <div style={rvZoom !== 100 ? { zoom: rvZoom / 100 } : undefined} className="inline-block min-w-full">
                                         {rvRows.map((row, ri) => (
                                             <React.Fragment key={ri}>
                                                 <div className="flex gap-1.5">
@@ -2116,8 +2277,58 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                                 ><span>{spot.number}</span>{spot.amps && <span>{spot.amps}A</span>}</button>
                                                             );
                                                         }
+                                                        const look = cellAppearance(spot);
+                                                        if (rvTool === 'empty') {
+                                                            // Colour tool: click or drag to paint a spot as a coloured Empty one.
+                                                            return (
+                                                                <button
+                                                                    key={spot.id} type="button"
+                                                                    title={spot.bookingId ? 'Booked - move the exhibitor first' : 'Click or drag to colour'}
+                                                                    onPointerDown={(e) => { e.preventDefault(); rvPaintingRef.current = true; paintEmptySpot(spot, true); }}
+                                                                    onPointerEnter={() => { if (rvPaintingRef.current) paintEmptySpot(spot); }}
+                                                                    style={look?.fill && !spot.bookingId ? { background: look.fill, borderColor: look.fill } : undefined}
+                                                                    className={cn(
+                                                                        'relative', cellSize, 'shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold select-none touch-none',
+                                                                        spot.bookingId ? 'bg-blue-600 text-white border-blue-700'
+                                                                            : spot.type === 'blocked' ? 'bg-muted text-muted-foreground border-muted-foreground/40'
+                                                                                : spot.type === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800'
+                                                                                    : spot.type === 'empty' ? (look?.fill ? '' : 'bg-muted/30 border-dashed border-muted-foreground/30 text-muted-foreground/60')
+                                                                                        : 'bg-background border-muted-foreground/40 hover:border-primary',
+                                                                    )}
+                                                                >{spot.type === 'blocked' ? 'Blocked' : spot.type === 'roadway' ? 'Road' : spot.type === 'empty' ? (look?.label ? <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap font-sans text-[11px] font-semibold" style={{ color: look.ink || undefined }}>{look.label}</span> : '') : spot.number}</button>
+                                                            );
+                                                        }
+                                                        if (rvTool === 'label') {
+                                                            if (spot.type === 'empty') {
+                                                                return (
+                                                                    <div key={spot.id} style={look?.fill ? { background: look.fill, borderColor: look.fill } : undefined}
+                                                                        className={cn('relative', cellSize, 'shrink-0 rounded-sm border', !look?.fill && 'bg-muted/30 border-dashed border-muted-foreground/30')}>
+                                                                        <GridLabelInput
+                                                                            value={spot.label || ''}
+                                                                            onCommit={(val) => labelSpot(spot.id, val)}
+                                                                            title="Type a word for this area and press Enter"
+                                                                            placeholder="label"
+                                                                            className="h-full w-full min-w-0 bg-transparent text-center text-[10px] font-semibold outline-none cursor-text placeholder:text-muted-foreground/40 hover:bg-primary/10 focus:absolute focus:left-1/2 focus:top-1/2 focus:-translate-x-1/2 focus:-translate-y-1/2 focus:z-30 focus:h-8 focus:w-40 focus:bg-background focus:border focus:border-primary focus:rounded-sm"
+                                                                        />
+                                                                    </div>
+                                                                );
+                                                            }
+                                                            return <div key={spot.id} className={cn(cellSize, 'shrink-0 rounded-sm border border-dashed bg-muted/30 opacity-50')} />;
+                                                        }
+                                                        if (rvTool === 'clear') {
+                                                            return (
+                                                                <button
+                                                                    key={spot.id} type="button"
+                                                                    title={spot.bookingId ? 'Booked - move the exhibitor first' : (spot.type ? 'Click to make it a normal spot' : 'Already a normal spot')}
+                                                                    disabled={!spot.type}
+                                                                    onClick={() => setSpotType(spot.id, null)}
+                                                                    style={look?.fill ? { background: look.fill, borderColor: look.fill } : undefined}
+                                                                    className={cn(cellSize, 'shrink-0 rounded-sm border text-center text-[10px] font-mono font-semibold', spot.type ? 'hover:ring-2 hover:ring-primary/40' : 'bg-background border-muted-foreground/40 opacity-60')}
+                                                                >{spot.type ? (look?.label || (spot.type === 'blocked' ? 'Blocked' : spot.type === 'roadway' ? 'Road' : '')) : spot.number}</button>
+                                                            );
+                                                        }
                                                         if (rvTool !== 'number') {
-                                                            // Empty / Blocked tool: spots become buttons you click to flip.
+                                                            // Blocked / Roadway tool: spots become buttons you click to flip.
                                                             const t = spot.type;
                                                             return (
                                                                 <button
@@ -2137,10 +2348,13 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                         }
                                                         if (spot.type) {
                                                             return (
-                                                                <div key={spot.id} className={cn(
-                                                                    cellSize, 'shrink-0 rounded-sm border flex items-center justify-center text-[10px] font-mono text-muted-foreground/70',
-                                                                    spot.type === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800 [background-image:repeating-linear-gradient(0deg,transparent,transparent_8px,rgba(180,83,9,0.25)_8px,rgba(180,83,9,0.25)_10px)]' : spot.type === 'blocked' ? 'bg-muted border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]' : 'bg-muted/30 border-dashed border-muted-foreground/30',
-                                                                )}>{spot.type === 'blocked' ? 'Blocked' : spot.type === 'roadway' ? 'Road' : ''}</div>
+                                                                <div key={spot.id}
+                                                                    style={look?.fill ? { background: look.fill, borderColor: look.fill } : undefined}
+                                                                    className={cn(
+                                                                    'relative', cellSize, 'shrink-0 rounded-sm border flex items-center justify-center text-[10px] font-mono text-muted-foreground/70',
+                                                                    look?.fill && 'border-solid',
+                                                                    spot.type === 'roadway' ? 'bg-amber-200/70 border-amber-400/60 text-amber-800 [background-image:repeating-linear-gradient(0deg,transparent,transparent_8px,rgba(180,83,9,0.25)_8px,rgba(180,83,9,0.25)_10px)]' : spot.type === 'blocked' ? 'bg-muted border-muted-foreground/40 [background-image:repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(0,0,0,0.12)_5px,rgba(0,0,0,0.12)_6px)]' : (look?.fill ? '' : 'bg-muted/30 border-dashed border-muted-foreground/30'),
+                                                                )}>{spot.type === 'blocked' ? 'Blocked' : spot.type === 'roadway' ? 'Road' : (look?.label ? <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap font-sans text-[11px] font-semibold" style={{ color: look.ink || undefined }}>{look.label}</span> : '')}</div>
                                                             );
                                                         }
                                                         return (
@@ -2174,6 +2388,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                                 ))}
                                             </React.Fragment>
                                         ))}
+                                      </div>
                                     </div>
                                     </fieldset>
                                     {rvDuplicates.size > 0 && (
@@ -5791,7 +6006,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     // Computed from existing data; no DB calls. Drives the Analytics tab.
     const analytics = useMemo(() => {
         const ACTIVE_STATUSES = new Set(['confirmed', 'checked_in', 'checked_out']);
-        const POWER_AMPS = { '50amp': 50, '30amp': 30, '35amp': 35, '25amp': 25, 'none': 0 };
+        // A 30/50 site can supply up to 50 amps, so it counts as 50 here.
+        const POWER_AMPS = { '50amp': 50, '30amp': 30, '30_50amp': 50, '35amp': 35, '25amp': 25, 'none': 0 };
 
         // Same stall-focused set as the Bookings tab and the top stat bar — live
         // at-show hay/shavings reorders aren't stall/RV bookings and shouldn't

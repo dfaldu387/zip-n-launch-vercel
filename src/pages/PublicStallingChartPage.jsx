@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
+import { gridCols, computeGridLabels, labelValue, cellAppearance } from '@/lib/barnGrid';
 
 // Read-only public stalling / RV chart — a simplified, wayfinding-focused view of
 // the same grid the organizer builds in Assign Stalls. What each box shows (and
@@ -71,6 +71,21 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
                                         );
                                     }
                                     if (type !== 'stall') {
+                                        // Colour-coded Empty box: a block of colour with its word in the middle.
+                                        const look = cellAppearance(unit);
+                                        if (look) {
+                                            return (
+                                                <div
+                                                    key={ci}
+                                                    className={cn('relative h-14 w-full border', look.label && 'z-[1]')}
+                                                    style={{ background: look.fill || undefined, borderColor: look.fill || undefined }}
+                                                >
+                                                    {look.label && (
+                                                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap text-[11px] font-semibold" style={{ color: look.ink || undefined }}>{look.label}</span>
+                                                    )}
+                                                </div>
+                                            );
+                                        }
                                         return (
                                             <div key={ci} className="h-14 w-full rounded-sm border border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center text-[9px] uppercase text-muted-foreground/60 font-mono">
                                                 {type === 'blocked' ? unit.number : (ROOM_LABELS[type] || '')}

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { buildLayerIndex, layerCell, beddingItemsOf, spread, stallsOfBooking } from '@/lib/stallLayers';
 import { getRequestedStallCount } from '@/lib/stallAssignment';
-import { gridCols, computeGridLabels, labelValue } from '@/lib/barnGrid';
+import { gridCols, computeGridLabels, labelValue, cellAppearance, isWalkway } from '@/lib/barnGrid';
 
 // Read-only barn map for the Hay & Shavings tab (Robert: "turn this into an
 // interactive map" for stall deliveries). Same colours as Assign Stalls — one
@@ -28,10 +28,7 @@ const outlineShadow = (sides, color) => {
     return p.length ? p.join(', ') : null;
 };
 
-const isWalkwayRow = (row) => row.length > 0 && row.every(u => {
-    const t = u.type || 'stall';
-    return t === 'aisle' || t === 'empty';
-});
+const isWalkwayRow = (row) => row.length > 0 && row.every(isWalkway);
 
 const SupplyDeliveryMap = ({ bookings = [], barns = [], supplies = [], orders = [], onMarkDelivered, renderOrder }) => {
     // Same rules as Assign Stalls, so a person sees the same colours on both screens.
@@ -361,6 +358,17 @@ const BarnMap = ({ barn, product, amountByStall, onOpenBooking, deliveredBooking
                                     const idx = ri * c + ci;
                                     const type = unit.type || 'stall';
                                     if (type !== 'stall') {
+                                        const look = cellAppearance(unit);
+                                        if (look) {
+                                            return (
+                                                <div key={unit.id} className={cn('relative border -ml-px -mt-px select-none', CELL, look.label && 'z-[1]')}
+                                                    style={{ background: look.fill || undefined, borderColor: look.fill || undefined }}>
+                                                    {look.label && (
+                                                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap text-[10px] font-semibold" style={{ color: look.ink || undefined }}>{look.label}</span>
+                                                    )}
+                                                </div>
+                                            );
+                                        }
                                         const quiet = type === 'aisle' || type === 'empty';
                                         return (
                                             <div key={unit.id} className={cn(

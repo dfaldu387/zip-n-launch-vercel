@@ -22,7 +22,7 @@ import {
 } from '@/lib/rvAssignment';
 import { printStallingChartPdf, downloadStallingChartPdf } from '@/lib/stallingChartPrint';
 import { ConfirmationDialog } from '@/components/ConfirmationDialog';
-import { gridCols, computeGridLabels, labelValue, renumberStalls } from '@/lib/barnGrid';
+import { gridCols, computeGridLabels, labelValue, renumberStalls, cellAppearance, isWalkway } from '@/lib/barnGrid';
 import { STALL_LAYERS, PUBLIC_LAYER_IDS, buildLayerIndex, layerCell, layerLegend, layerById } from '@/lib/stallLayers';
 
 // ── Assignment Board (Stalls AND RV) ──
@@ -274,6 +274,25 @@ const UnitCell = ({
     if (!assignable) {
         // Office / feed / wash / tack keep their name. Aisle and empty print nothing —
         // a quiet grey box, not the word "aisl" repeated across the row.
+        const look = cellAppearance(unit);
+        if (look) {
+            // Colour-coded Empty box (or an old Office / Feed / Wash / Tack box): a solid
+            // block of colour. The label may be wider than one box, so it spills over its
+            // neighbours; boxes of the same colour have no line between them.
+            return (
+                <div
+                    className={cn('relative shrink-0 border rounded-none -ml-px -mt-px select-none', S.cell, look.label && 'z-[1]')}
+                    style={{ background: look.fill || undefined, borderColor: look.fill || undefined }}
+                    title={look.label || undefined}
+                >
+                    {look.label && (
+                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center whitespace-nowrap text-[10px] font-semibold" style={{ color: look.ink || undefined }}>
+                            {look.label}
+                        </span>
+                    )}
+                </div>
+            );
+        }
         const quiet = type === 'aisle' || type === 'empty';
         return (
             <div className={cn(
@@ -1713,10 +1732,8 @@ const ContainerChart = ({
 
     // Rows that hold nothing but aisle / empty boxes collapse into one thin walkway
     // strip. Ten grey boxes reading "aisl" is noise, not information.
-    const isWalkwayRow = (row) => row.length > 0 && row.every(u => {
-        const t = u.type || 'stall';
-        return t === 'aisle' || t === 'empty';
-    });
+    // A colour-coded / labelled Empty box is a drawn area, so it keeps its own row.
+    const isWalkwayRow = (row) => row.length > 0 && row.every(isWalkway);
 
     // Rows the organizer can drop a whole group into (rows with at least one free stall).
     const rowChoices = useMemo(() => {

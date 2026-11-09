@@ -180,7 +180,14 @@ export const gridRows = (barn) => {
 };
 
 const isStall = (u) => u && (u.type || 'stall') === 'stall';
-const isWalkway = (u) => { const t = (u?.type || 'stall'); return t === 'aisle' || t === 'empty'; };
+// A colour-coded or labelled Empty box is a drawn area (Arena, Restroom…), not a walkway,
+// so a row made only of them must not collapse into a thin aisle strip.
+export const isWalkway = (u) => {
+    const t = (u?.type || 'stall');
+    if (t === 'aisle') return true;
+    if (t !== 'empty') return false;
+    return !u.color && !String(u.label ?? '').trim();
+};
 
 // Plain-language summary of the grid, for the "10 stall rows · 3 aisle rows" line.
 export const describeGrid = (stalls = [], cols = 1) => {
@@ -232,9 +239,86 @@ export const computeGridLabels = (units, cols) => {
 export const labelValue = (custom, defaults, i) =>
     (custom && custom[i] != null && custom[i] !== '') ? custom[i] : (defaults[i] ?? '');
 
+// ── Colour-coded Empty boxes (Robert 11-09) ──
+// An Empty box can be given a colour and a word ("Arena", "Restroom", "Vet Clinic") so
+// the organizer can draw the buildings and lots around the barn without special box
+// types. It is only a picture: an Empty box never holds a stall, never gets a number and
+// never changes any count. The colour and label live on the box as `color` / `label`.
+export const EMPTY_COLORS = [
+    { id: 'gray', name: 'Light gray', hex: '#e5e7eb', ink: '#374151' },
+    { id: 'green', name: 'Light green', hex: '#bbf7d0', ink: '#14532d' },
+    { id: 'blue', name: 'Light blue', hex: '#bfdbfe', ink: '#1e3a8a' },
+    { id: 'yellow', name: 'Light yellow', hex: '#fef08a', ink: '#713f12' },
+    { id: 'orange', name: 'Light orange', hex: '#fed7aa', ink: '#7c2d12' },
+    { id: 'red', name: 'Light red', hex: '#fecaca', ink: '#7f1d1d' },
+    { id: 'purple', name: 'Light purple', hex: '#e9d5ff', ink: '#581c87' },
+    { id: 'pink', name: 'Light pink', hex: '#fbcfe8', ink: '#831843' },
+    { id: 'teal', name: 'Light teal', hex: '#99f6e4', ink: '#134e4a' },
+    { id: 'brown', name: 'Tan', hex: '#e7d3b7', ink: '#44331a' },
+];
+const EMPTY_COLOR_MAP = Object.fromEntries(EMPTY_COLORS.map(c => [c.id, c]));
+
+// Boxes from the old Office / Feed / Wash / Tack types keep working: they draw as a
+// coloured, labelled box exactly like a painted Empty box.
+const LEGACY_ROOMS = {
+    office: { label: 'Office', color: 'yellow' },
+    feed: { label: 'Feed', color: 'green' },
+    wash: { label: 'Wash', color: 'blue' },
+    tack: { label: 'Tack', color: 'purple' },
+};
+
+// How a non-stall box should look: { fill, ink, label } or null for a plain box
+// (stall, aisle, blocked, or an Empty box with no colour). One answer for the editor,
+// the Assign board, the public chart and the printed chart.
+export const cellAppearance = (cell) => {
+    const type = cell?.type || 'stall';
+    if (type === 'empty') {
+        const c = EMPTY_COLOR_MAP[cell?.color];
+        const label = String(cell?.label ?? '').trim();
+        if (!c && !label) return null;
+        return { fill: c?.hex || null, ink: c?.ink || null, label };
+    }
+    const room = LEGACY_ROOMS[type];
+    if (room) {
+        const c = EMPTY_COLOR_MAP[room.color];
+        return { fill: c.hex, ink: c.ink, label: room.label };
+    }
+    return null;
+};
+
+// Paint box `id` as Empty with a colour (null = plain empty). Its label is kept. A
+// booked stall is left alone. Returns a NEW stalls[].
+export const paintEmptyCell = (stalls, id, color) =>
+    stalls.map(s => {
+        if (s.id !== id) return s;
+        const { color: _c, customNumber: _n, ...rest } = s;
+        return { ...rest, type: 'empty', bookingId: null, ...(color ? { color } : {}) };
+    });
+
+// Set or clear the word on an Empty box. Only Empty boxes carry a label.
+export const setCellLabel = (stalls, id, text) => {
+    const label = String(text ?? '').trim().slice(0, 40);
+    return stalls.map(s => {
+        if (s.id !== id || (s.type || 'stall') !== 'empty') return s;
+        const { label: _l, ...rest } = s;
+        return label ? { ...rest, label } : rest;
+    });
+};
+
+// When a box stops being Empty it forgets its colour and label.
+export const clearEmptyLook = (cell) => {
+    const { color: _c, label: _l, ...rest } = cell;
+    return rest;
+};
+
 // ── Reshaping ──
 
-const newCell = (type = 'stall') => ({ id: uuidv4(), bookingId: null, type });
+// A new box next to an Empty box inherits its colour (not its label), so adding a row or
+// column beside a coloured area keeps the area looking like one block.
+const newCell = (type = 'stall', color = null) => ({
+    id: uuidv4(), bookingId: null, type,
+    ...(type === 'empty' && color ? { color } : {}),
+});
 
 // Flat box array → array of rows, padding a ragged final row so every row is `cols` wide.
 const toMatrix = (stalls, cols) => {
@@ -242,7 +326,7 @@ const toMatrix = (stalls, cols) => {
     for (let i = 0; i < stalls.length; i += cols) m.push(stalls.slice(i, i + cols));
     if (m.length) {
         const last = m[m.length - 1];
-        while (last.length < cols) last.push(newCell(last[last.length - 1]?.type || 'stall'));
+        while (last.length < cols) last.push(newCell(last[last.length - 1]?.type || 'stall', last[last.length - 1]?.color));
     }
     return m;
 };
@@ -288,7 +372,7 @@ export const insertRowAt = (barn, at) => {
     const m = toMatrix(barn.stalls || [], cols);
     const srcIdx = Math.min(Math.max(at - 1, 0), Math.max(m.length - 1, 0));
     const src = m[srcIdx] || [];
-    const row = Array.from({ length: cols }, (_, i) => newCell(src[i]?.type || 'stall'));
+    const row = Array.from({ length: cols }, (_, i) => newCell(src[i]?.type || 'stall', src[i]?.color));
     m.splice(Math.min(at, m.length), 0, row);
     return finish(barn, m, cols, {
         rowLabels: spliceLabels(barn.rowLabels, at, 0, 1),
@@ -316,7 +400,7 @@ export const insertColAt = (barn, at) => {
     const m = toMatrix(barn.stalls || [], cols).map(row => {
         const src = row[at - 1] || row[at] || row[row.length - 1];
         const next = [...row];
-        next.splice(Math.min(at, next.length), 0, newCell(src?.type || 'stall'));
+        next.splice(Math.min(at, next.length), 0, newCell(src?.type || 'stall', src?.color));
         return next;
     });
     const nextCols = cols + 1;
@@ -358,20 +442,26 @@ export const resizeGrid = (barn, nextRows, nextCols) => {
         for (let col = 0; col < c; col++) {
             const prev = (row < oldRows && col < oldCols) ? existing[row * oldCols + col] : null;
             let type = 'stall';
+            let color = null;
             if (prev) {
                 type = prev.type || 'stall';
             } else if (existing.length && oldRows > 0 && oldCols > 0) {
                 const srcRow = Math.min(row, oldRows - 1);
                 const srcCol = Math.min(col, oldCols - 1);
-                type = existing[srcRow * oldCols + srcCol]?.type || 'stall';
+                const src = existing[srcRow * oldCols + srcCol];
+                type = src?.type || 'stall';
+                color = src?.color || null;
             }
             line.push(prev
                 ? {
                     id: prev.id, bookingId: prev.bookingId || null, type,
                     // A typed stall number belongs to the stall, not its position.
                     ...(prev.customNumber ? { customNumber: prev.customNumber } : {}),
+                    // An Empty box keeps its colour and label through a resize.
+                    ...(prev.color ? { color: prev.color } : {}),
+                    ...(prev.label ? { label: prev.label } : {}),
                 }
-                : newCell(type));
+                : newCell(type, color));
         }
         built.push(line);
     }

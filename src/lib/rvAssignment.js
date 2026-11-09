@@ -80,15 +80,40 @@ export function setRvSpotType(area, spotId, type) {
     return spots.map(s => {
         if (s.id !== spotId) return s;
         const { type: _drop, ...rest } = s;
+        // Only an Empty spot keeps the colour and word it was drawn with.
+        const base = type === 'empty' ? rest : (({ color: _col, label: _lab, ...r }) => r)(rest);
         // Empty / Blocked / Roadway spots are not sellable, so they leave their camping type —
         // and the 30A / 50A that the paint gave them (otherwise it shows on a spot with no type).
         if (type === 'empty' || type === 'blocked' || type === 'roadway') {
-            const { campingTypeId: _ct, ...noType } = rest;
+            const { campingTypeId: _ct, ...noType } = base;
             if (!s.campingTypeId) return { ...noType, type };
             const { amps: _a, ...clean } = noType;
             return { ...clean, type };
         }
-        return rest;
+        return base;
+    });
+}
+
+// Colour-coded Empty spots (Robert 11-09): paint a spot as Empty with a colour (null = plain
+// Empty). Its word is kept. Refused (null) when an exhibitor is on it.
+export function paintRvEmpty(area, spotId, color) {
+    const next = setRvSpotType(area, spotId, 'empty');
+    if (!next) return null;
+    return next.map(s => {
+        if (s.id !== spotId) return s;
+        const { color: _c, ...rest } = s;
+        return color ? { ...rest, color } : rest;
+    });
+}
+
+// Type (or clear) the word on an Empty spot. Only Empty spots carry a word.
+export function setRvSpotLabel(area, spotId, text) {
+    const label = String(text ?? '').trim().slice(0, 40);
+    const { spots } = ensureRvSpots(area);
+    return spots.map(s => {
+        if (s.id !== spotId || s.type !== 'empty') return s;
+        const { label: _l, ...rest } = s;
+        return label ? { ...rest, label } : rest;
     });
 }
 
@@ -210,29 +235,38 @@ export function unassignBookingRvSpots(rvAreas, bookingId) {
     }));
 }
 
-// ── Grid growth (Robert 11-02: add rows / add columns, like the stalling chart) ──
-// Both return { spots, perRow } for the caller to save. Spot ids are positional
-// (`${areaId}::spot::${n}`), so after inserting we re-key every spot by its new
-// position — each spot keeps its own booking, type, amps and custom number.
+// ── Grid growth (Robert 11-02: add rows / add columns; 11-09: on any of the four sides) ──
+// Every function returns { spots, perRow, roadsAfter } for the caller to save, or null when it
+// cannot be done. Spot ids are positional (`${areaId}::spot::${n}`), so after changing the grid
+// we re-key every spot by its new position — each spot keeps its own booking, type, amps,
+// colour, word and custom number. Roadways sit BETWEEN rows (index i = after row i), so they
+// move with the rows when a row is added or removed at the top.
 const rekey = (areaId, list) => list.map((s, i) => ({ ...s, id: `${areaId}::spot::${i + 1}` }));
+const perRowOf = (area) => Math.max(1, Number(area.layoutPerRow) || 10);
+const roadsOf = (area) => [...(area.layoutRoadsAfter || [])];
 
-// One more row of blank spots at the bottom (as wide as a row).
-export function addRvRow(area) {
+// One more row of blank spots, at the bottom (default) or the top (everything moves down).
+export function addRvRow(area, side = 'bottom') {
     const { spots } = ensureRvSpots(area);
-    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    const perRow = perRowOf(area);
     const blanks = Array.from({ length: perRow }, () => ({ bookingId: null }));
-    return { spots: rekey(area.id, [...spots, ...blanks]), perRow };
+    if (side === 'top') {
+        return { spots: rekey(area.id, [...blanks, ...spots]), perRow, roadsAfter: roadsOf(area).map(i => i + 1) };
+    }
+    return { spots: rekey(area.id, [...spots, ...blanks]), perRow, roadsAfter: roadsOf(area) };
 }
 
-// One more spot at the end of every row. Rows are rebuilt from the current width.
-export function addRvColumn(area) {
+// One more spot at the end of every row (right, default) or the start (left: everything moves
+// right). Rows are rebuilt from the current width.
+export function addRvColumn(area, side = 'right') {
     const { spots } = ensureRvSpots(area);
-    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    const perRow = perRowOf(area);
     const out = [];
     for (let i = 0; i < spots.length; i += perRow) {
-        out.push(...spots.slice(i, i + perRow), { bookingId: null });
+        const row = spots.slice(i, i + perRow);
+        out.push(...(side === 'left' ? [{ bookingId: null }, ...row] : [...row, { bookingId: null }]));
     }
-    return { spots: rekey(area.id, out), perRow: Math.min(40, perRow + 1) };
+    return { spots: rekey(area.id, out), perRow: Math.min(40, perRow + 1), roadsAfter: roadsOf(area) };
 }
 
 // When an area's spot count goes DOWN, drop the extra spots from the saved list — the public
@@ -248,27 +282,40 @@ export function trimRvSpots(area, count) {
     return ensureRvSpots({ ...area, spotCount: keep, layoutCells: keep }).spots;
 }
 
-// Take the last row off the grid. Refused (null) when an exhibitor sits on one of its spots.
-export function removeRvRow(area) {
+// Take the bottom row (default) or the top row off the grid. Refused (null) when an exhibitor
+// sits on one of its spots, or only one row is left.
+export function removeRvRow(area, side = 'bottom') {
     const { spots } = ensureRvSpots(area);
-    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    const perRow = perRowOf(area);
     if (spots.length <= perRow) return null;
+    if (side === 'top') {
+        if (spots.slice(0, perRow).some(s => s.bookingId)) return null;
+        const roadsAfter = roadsOf(area).filter(i => i >= 1).map(i => i - 1);
+        return { spots: rekey(area.id, spots.slice(perRow)), perRow, roadsAfter };
+    }
     const lastRow = spots.length % perRow || perRow;
     const kept = spots.slice(0, spots.length - lastRow);
     if (spots.slice(kept.length).some(s => s.bookingId)) return null;
-    return { spots: rekey(area.id, kept), perRow };
+    const rowsLeft = Math.ceil(kept.length / perRow);
+    return { spots: rekey(area.id, kept), perRow, roadsAfter: roadsOf(area).filter(i => i < rowsLeft - 1) };
 }
 
-// Take the last spot off every row. Refused (null) when an exhibitor sits on one of them.
-export function removeRvColumn(area) {
+// Take the last spot off every row (right, default) or the first (left). Refused (null) when
+// an exhibitor sits on one of them.
+export function removeRvColumn(area, side = 'right') {
     const { spots } = ensureRvSpots(area);
-    const perRow = Math.max(1, Number(area.layoutPerRow) || 10);
+    const perRow = perRowOf(area);
     if (perRow <= 1) return null;
     const kept = [];
     for (let i = 0; i < spots.length; i += perRow) {
         const row = spots.slice(i, i + perRow);
-        if (row.length === perRow && row[perRow - 1].bookingId) return null;
-        kept.push(...(row.length === perRow ? row.slice(0, perRow - 1) : row));
+        if (side === 'left') {
+            if (row[0]?.bookingId) return null;
+            kept.push(...row.slice(1));
+        } else {
+            if (row.length === perRow && row[perRow - 1].bookingId) return null;
+            kept.push(...(row.length === perRow ? row.slice(0, perRow - 1) : row));
+        }
     }
-    return { spots: rekey(area.id, kept), perRow: perRow - 1 };
+    return { spots: rekey(area.id, kept), perRow: perRow - 1, roadsAfter: roadsOf(area) };
 }
