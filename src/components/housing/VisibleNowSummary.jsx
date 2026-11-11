@@ -6,7 +6,9 @@ import { cn } from '@/lib/utils';
 import {
     getAutoValues, publicText, publicList, realAssociations, realDisciplines,
     resolveContacts, publicHotel, publicDocuments, formatShowDateRange,
+    isEventPagePublished,
 } from '@/lib/publicPage';
+import { patternIsLive } from '@/components/housing/EventPagePublishCard';
 
 const dayOnly = (v) => (typeof v === 'string' ? v.slice(0, 10) : '');
 
@@ -103,12 +105,13 @@ const STATE_STYLES = {
     empty: { icon: Minus, iconClass: 'text-muted-foreground/60', label: 'Nothing entered' },
 };
 
-const VisibleNowSummary = ({ pd, showId }) => {
+const VisibleNowSummary = ({ pd, showId, status }) => {
     const rows = buildSummaryRows(pd);
     const visible = rows.filter(r => r.state === 'visible').length;
     const hiddenCount = rows.filter(r => r.state === 'hidden').length;
     const isLive = pd?.moduleStatuses?.housing === 'published';
-    const eventUrl = `${window.location.origin}/event-detail/${showId}`;
+    const pageLive = isEventPagePublished(pd?.publicPage, isLive || patternIsLive(pd, status));
+    const eventUrl = `${window.location.origin}/event-detail/${showId}${pageLive ? '' : '?preview=1'}`;
 
     return (
         <Card className="mb-6 border-emerald-200 dark:border-emerald-900">
@@ -120,7 +123,8 @@ const VisibleNowSummary = ({ pd, showId }) => {
                         </CardTitle>
                         <CardDescription className="text-xs mt-1.5">
                             {visible} shown to the public{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}.
-                            {!isLive && ' Your show is not published yet, so the public cannot open the booking page.'}
+                            {!pageLive && ' The event page is a Draft, so the public cannot see any of this yet.'}
+                            {!isLive && ' Housing is not published yet, so the booking buttons are hidden.'}
                         </CardDescription>
                     </div>
                     <Button type="button" size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => window.open(eventUrl, '_blank')}>

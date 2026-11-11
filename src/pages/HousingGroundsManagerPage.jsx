@@ -8748,7 +8748,7 @@ const HousingGroundsManagerPage = () => {
                                             <EventQrCard show={selectedShow} className="!mb-0" />
                                         </div>
 
-                                        <PublicPageEditor pd={selectedShow.project_data || {}} onChange={updatePublicPageImmediate} showId={selectedShow.id} />
+                                        <PublicPageEditor pd={selectedShow.project_data || {}} onChange={updatePublicPageImmediate} showId={selectedShow.id} status={selectedShow.status} />
                                     </>
                                 )}
                                 onSave={handleSave}

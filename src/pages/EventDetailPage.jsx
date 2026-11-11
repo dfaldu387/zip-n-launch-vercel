@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Calendar, MapPin, Award, BookOpen, Share2, Twitter, Facebook, ExternalLink, Clock, Users, Trophy, Loader2, Building2, Mail, Phone, FileText, Image as ImageIcon, ZoomIn, Download, Printer, ShoppingCart } from 'lucide-react';
 import Navigation from '@/components/Navigation';
@@ -16,7 +16,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import PatternBookDownloadDialog from '@/components/PatternBookDownloadDialog';
 import { isShowPublished } from '@/lib/showPublishing';
-import { isHiddenOnPublicPage, publicText, mapsUrl, formatShowDate, publicLogo, publicWelcome } from '@/lib/publicPage';
+import { isHiddenOnPublicPage, publicText, mapsUrl, formatShowDate, publicLogo, publicWelcome, isEventPagePublished } from '@/lib/publicPage';
 import PublicContactCards from '@/components/public/PublicContactCards';
 import PublicScheduleCard from '@/components/public/PublicScheduleCard';
 
@@ -48,6 +48,13 @@ const EventDetailPage = () => {
   const [patternBookProject, setPatternBookProject] = useState(null);
   const [bookDialogOpen, setBookDialogOpen] = useState(false);
   const { toast } = useToast();
+  // ?preview=1 lets a signed-in owner look at a Draft event page.
+  const [searchParams] = useSearchParams();
+  const wantsPreview = searchParams.get('preview') === '1';
+  const [hasSession, setHasSession] = useState(false);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setHasSession(!!data?.session)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const fetchEventData = async () => {
@@ -557,6 +564,31 @@ const EventDetailPage = () => {
     projectData?.moduleStatuses?.patternBook === 'published' ||
     ['Final', 'Publication', 'published'].includes(event.project?.status)
   );
+  // The Event page has its own Draft / Published switch (Event Branding & Public Links),
+  // separate from Housing, Pattern Book and the stalling chart. A draft page is hidden
+  // from the public; the owner can still look at it with ?preview=1 while signed in.
+  const eventPageLive = !event.isFromProjects || isEventPagePublished(
+    projectData?.publicPage,
+    projectData?.moduleStatuses?.housing === 'published' || patternPublished,
+  );
+  const draftPreview = !eventPageLive && wantsPreview && hasSession;
+  if (!eventPageLive && !draftPreview) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navigation />
+        <div className="text-foreground min-h-[60vh] flex items-center justify-center px-4">
+          <div className="text-center max-w-md">
+            <h2 className="text-2xl font-bold mb-2">This event is not public yet</h2>
+            <p className="text-muted-foreground">The organizer has not published this event page. Please check back soon.</p>
+            <Button asChild className="mt-4">
+              <Link to="/events">Back to Events</Link>
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Completed score sheets are public once the show is published — same rule the
   // results page itself enforces, so the button and the page can never disagree.
   const resultsPublished = isShowPublished(event.project);
@@ -736,6 +768,11 @@ const EventDetailPage = () => {
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
+      {draftPreview && (
+        <div className="bg-amber-100 border-b border-amber-300 text-amber-900 text-sm text-center px-4 py-2 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800">
+          <strong>Draft preview.</strong> This event page is not published, so the public cannot see it. Publish it from Event Branding &amp; Public Links.
+        </div>
+      )}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <motion.div
           initial={{ opacity: 0, y: -20 }}

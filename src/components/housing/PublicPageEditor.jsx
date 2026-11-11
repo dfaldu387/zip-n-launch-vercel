@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
 import VisibleNowSummary from '@/components/housing/VisibleNowSummary';
+import EventPagePublishCard from '@/components/housing/EventPagePublishCard';
 import {
     PUBLIC_FIELDS, getAutoValues, resolveContacts, formatShowDateRange,
     realAssociations, realDisciplines, publicList, WELCOME_MAX,
@@ -369,7 +370,7 @@ const DocumentsCard = ({ showId, documents, hidden, onToggle, onChange }) => {
 
 // pd = show.project_data. onChange(fn) saves immediately; fn gets the newest saved
 // publicPage and returns the next one (so quick edits never overwrite each other).
-const PublicPageEditor = ({ pd, onChange, showId }) => {
+const PublicPageEditor = ({ pd, onChange, showId, status }) => {
     const auto = getAutoValues(pd);
     const pp = pd?.publicPage || {};
     const hidden = pp.hidden || {};
@@ -413,7 +414,8 @@ const PublicPageEditor = ({ pd, onChange, showId }) => {
 
     return (
         <>
-            <VisibleNowSummary pd={pd} showId={showId} />
+            <EventPagePublishCard pd={pd} onChange={onChange} showId={showId} status={status} />
+            <VisibleNowSummary pd={pd} showId={showId} status={status} />
 
             <Card className="mb-6">
                 <CardHeader className="pb-3">

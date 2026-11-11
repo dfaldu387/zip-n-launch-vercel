@@ -146,6 +146,16 @@ export const websiteHref = (url = '') => (/^https?:\/\//i.test(url) ? url : `htt
 
 export const isHiddenOnPublicPage =(pd, key) => !!pd?.publicPage?.hidden?.[key];
 
+// The Event page has its OWN Draft / Published switch (publicPage.eventPublished),
+// separate from Housing, Pattern Book and the stalling chart. Shows made before the
+// switch existed have no value saved: they stay public if Housing or the Pattern
+// Book is already live, so nothing disappears on the day this ships.
+export const isEventPagePublished = (publicPage, legacyLive = false) => {
+    if (publicPage?.eventPublished === true) return true;
+    if (publicPage?.eventPublished === false) return false;
+    return !!legacyLive;
+};
+
 // The text the public should see for a single-value field: the edited text if
 // there is one, otherwise the real value.
 export const publicText = (pd, key, fallback) => {

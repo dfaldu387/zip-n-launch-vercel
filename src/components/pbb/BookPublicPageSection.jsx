@@ -147,7 +147,7 @@ const BookPublicPageSection = ({ formData, setFormData, isReadOnly = false }) =>
                         </div>
                     )}
 
-                    <PublicPageEditor pd={pd} onChange={savePublicPage} showId={targetId || undefined} />
+                    <PublicPageEditor pd={pd} onChange={savePublicPage} showId={targetId || undefined} status={formData.status} />
                 </fieldset>
             )}
         </div>
