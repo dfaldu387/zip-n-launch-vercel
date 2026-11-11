@@ -35,8 +35,8 @@ export function buildSummaryRows(pd = {}) {
         if (hidden.showDates) return { key: 'showDates', label: 'Show dates', state: 'hidden', value: '' };
         const range = pp.dates?.start || pp.dates?.end
             ? formatShowDateRange(
-                pp.dates.start || dayOnly(pd.startDate || pd.showDetails?.general?.startDate),
-                pp.dates.end || dayOnly(pd.endDate || pd.showDetails?.general?.endDate))
+                pp.dates.start || dayOnly(pd.showDetails?.general?.startDate || pd.startDate),
+                pp.dates.end || dayOnly(pd.showDetails?.general?.endDate || pd.endDate))
             : publicText(pd, 'showDates', auto.showDates);
         return range ? { key: 'showDates', label: 'Show dates', state: 'visible', value: range } : { key: 'showDates', label: 'Show dates', state: 'empty', value: '' };
     })();

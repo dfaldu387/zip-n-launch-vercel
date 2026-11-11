@@ -140,8 +140,8 @@ const dayOnly = (v) => (typeof v === 'string' ? v.slice(0, 10) : '');
 // Show dates: two date pickers. They start on the real dates; picking a different
 // day changes only what the public sees.
 const DatesRow = ({ pd, dates, hidden, onToggle, onChangeDates, onReset }) => {
-    const realStart = dayOnly(pd?.startDate || pd?.showDetails?.general?.startDate);
-    const realEnd = dayOnly(pd?.endDate || pd?.showDetails?.general?.endDate);
+    const realStart = dayOnly(pd?.showDetails?.general?.startDate || pd?.startDate);
+    const realEnd = dayOnly(pd?.showDetails?.general?.endDate || pd?.endDate);
     const start = dates.start || realStart;
     const end = dates.end || realEnd;
     const edited = !!(dates.start || dates.end || pd?.publicPage?.text?.showDates);

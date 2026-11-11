@@ -208,8 +208,8 @@ const EventDetailPage = () => {
           const eventFromProject = {
             id: (housingRec || project).id,           // housing id drives the /show/:id/book route
             name: project.project_name || 'Untitled Show',
-            startDate: projectDataObj.startDate || project.created_at,
-            endDate: projectDataObj.endDate || project.created_at,
+            startDate: projectDataObj.showDetails?.general?.startDate || projectDataObj.startDate || project.created_at,
+            endDate: projectDataObj.showDetails?.general?.endDate || projectDataObj.endDate || project.created_at,
             location: projectDataObj.showLocation || projectDataObj.location || projectDataObj.venueName || projectDataObj.venueAddress || 'Location TBD',
             status: project.status === 'Publication' ? 'upcoming' : 'recent',
             pattern_book_id: (patternRec || project).id,

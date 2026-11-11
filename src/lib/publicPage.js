@@ -67,7 +67,7 @@ export function getAutoValues(pd = {}) {
     });
     return {
         showName: pd.showName || '',
-        showDates: formatShowDateRange(pd.startDate || pd.showDetails?.general?.startDate, pd.endDate || pd.showDetails?.general?.endDate),
+        showDates: formatShowDateRange(pd.showDetails?.general?.startDate || pd.startDate, pd.showDetails?.general?.endDate || pd.endDate),
         showType: pd.showType || '',
         venueName: pd.venueName || '',
         venueAddress: pd.venueAddress || '',

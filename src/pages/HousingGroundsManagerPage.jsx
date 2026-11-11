@@ -566,9 +566,11 @@ const PUBLISH_STATUSES = [
 // Once those are set, nights should come from them, not the show's date span
 // (Robert: the calculator was pulling the horse show's dates, not move-in/move-out).
 function getShowNights(pd) {
-    if (!pd?.startDate) return 0;
-    const start = new Date(pd.startDate);
-    const end = pd.endDate ? new Date(pd.endDate) : start;
+    const sd = pd?.showDetails?.general?.startDate || pd?.startDate;
+    const ed = pd?.showDetails?.general?.endDate || pd?.endDate;
+    if (!sd) return 0;
+    const start = new Date(sd);
+    const end = ed ? new Date(ed) : start;
     const diff = Math.round((end - start) / (1000 * 60 * 60 * 24));
     return Math.max(diff, 1); // At least 1 night
 }
@@ -7392,7 +7394,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                     </button>
                                 </div>
                                 <Badge variant="outline" className="text-[10px] ml-auto">
-                                    {pd.startDate && new Date(pd.startDate).toLocaleDateString()} — {pd.endDate && new Date(pd.endDate).toLocaleDateString()}
+                                    {(pd?.showDetails?.general?.startDate || pd.startDate) && new Date(pd?.showDetails?.general?.startDate || pd.startDate).toLocaleDateString()} — {(pd?.showDetails?.general?.endDate || pd.endDate) && new Date(pd?.showDetails?.general?.endDate || pd.endDate).toLocaleDateString()}
                                 </Badge>
                             </div>
                             {whatIfMode && (

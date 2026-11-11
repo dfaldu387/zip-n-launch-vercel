@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Loader2, Home, Car, ArrowLeft, MapPin, Search, X } from 'lucide-react';
+import { Loader2, Home, Car, ArrowLeft, MapPin, Search, X, ChevronDown, Minus, Plus } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,7 +32,7 @@ const unitMatches = (u, q) => {
 };
 const countMatches = (units, q) => (units || []).filter(u => unitMatches(u, q)).length;
 
-const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, roadsAfter = [], Icon = Home, query = '', wholeMatch = false }) => {
+const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, colorByGroup, roadsAfter = [], Icon = Home, query = '', wholeMatch = false, open = true, onToggle, zoom = 100, countText = '' }) => {
     const searching = !!query && !wholeMatch;
     const cols = gridCols({ layoutCols, stallCount });
     const rowCount = Math.ceil(units.length / cols);
@@ -40,14 +40,18 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
 
     return (
         <Card className="bg-secondary border-border">
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                    <Icon className="h-4 w-4 text-primary" /> {name}
-                </CardTitle>
+            <CardHeader className={cn(!open && 'py-3')}>
+                <button type="button" onClick={onToggle} aria-expanded={open} className="w-full text-left">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                        <Icon className="h-4 w-4 text-primary" /> {name}
+                        {countText && <span className="text-xs font-normal text-muted-foreground">{countText}</span>}
+                        <ChevronDown className={cn('h-5 w-5 ml-auto text-muted-foreground transition-transform', open && 'rotate-180')} />
+                    </CardTitle>
+                </button>
             </CardHeader>
-            <CardContent>
+            {open && <CardContent>
                 <div className="overflow-x-auto">
-                    <div className="inline-grid gap-1" style={{ gridTemplateColumns: `28px repeat(${cols}, minmax(52px, 1fr))` }}>
+                    <div className="inline-grid gap-1" style={{ ...(zoom !== 100 ? { zoom: zoom / 100 } : {}), gridTemplateColumns: `28px repeat(${cols}, minmax(52px, 1fr))` }}>
                         <div />
                         {Array.from({ length: cols }, (_, ci) => (
                             <div key={ci} className="text-center text-[11px] font-semibold text-muted-foreground font-mono">
@@ -125,7 +129,7 @@ const UnitGrid = ({ name, units, layoutCols, stallCount, rowLabels, colLabels, c
                         ))}
                     </div>
                 </div>
-            </CardContent>
+            </CardContent>}
         </Card>
     );
 };
@@ -151,6 +155,9 @@ const PublicStallingChartPage = () => {
     const [error, setError] = useState('');
     const [view, setView] = useState('stalls');
     const [search, setSearch] = useState('');
+    const [zoom, setZoom] = useState(100);
+    const [openIds, setOpenIds] = useState([]);
+    const toggleId = (id) => setOpenIds(o => o.includes(id) ? o.filter(x => x !== id) : [...o, id]);
     const query = search.trim().toLowerCase();
 
     useEffect(() => {
@@ -281,12 +288,37 @@ const PublicStallingChartPage = () => {
                     </div>
                 )}
 
+                {(hasBarns || hasRv) && (() => {
+                    const list = activeView === 'rv' ? rvShown : barnsShown;
+                    return (
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">Size</span>
+                                <Button type="button" variant="outline" size="icon" className="h-7 w-7" disabled={zoom <= 40} onClick={() => setZoom(z => Math.max(40, z - 10))} aria-label="Smaller boxes"><Minus className="h-3.5 w-3.5" /></Button>
+                                <input type="range" min={40} max={200} step={5} value={zoom} onChange={e => setZoom(Number(e.target.value))} aria-label="Box size" className="w-32 sm:w-48 accent-primary" />
+                                <Button type="button" variant="outline" size="icon" className="h-7 w-7" disabled={zoom >= 200} onClick={() => setZoom(z => Math.min(200, z + 10))} aria-label="Bigger boxes"><Plus className="h-3.5 w-3.5" /></Button>
+                                <span className="text-xs font-mono w-10">{zoom}%</span>
+                                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={zoom === 100} onClick={() => setZoom(100)}>100%</Button>
+                            </div>
+                            {list.length > 1 && (
+                                <div className="flex items-center gap-1 ml-auto">
+                                    <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => setOpenIds(list.map(x => x.id))}>Open all</Button>
+                                    <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => setOpenIds([])}>Close all</Button>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
+
                 {activeView === 'stalls' && barnsShown.map(barn => (
                     <motion.div key={barn.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                         <UnitGrid
                             query={query}
                             wholeMatch={nameHit(barn.name)}
                             name={barn.name}
+                            zoom={zoom}
+                            open={!!query || barnsShown.length === 1 || openIds.includes(barn.id)}
+                            onToggle={() => toggleId(barn.id)}
                             units={barn.stalls || []}
                             layoutCols={barn.layoutCols}
                             stallCount={barn.stallCount}
@@ -303,6 +335,9 @@ const PublicStallingChartPage = () => {
                             query={query}
                             wholeMatch={nameHit(area.name)}
                             name={area.name}
+                            zoom={zoom}
+                            open={!!query || rvShown.length === 1 || openIds.includes(area.id)}
+                            onToggle={() => toggleId(area.id)}
                             units={area.spots || []}
                             layoutCols={area.layoutPerRow || Math.min(Math.max(1, area.spotCount || 1), 10)}
                             stallCount={area.spotCount}
