@@ -2257,7 +2257,7 @@ const RvAreaCard = ({ rvArea, onUpdate, onRemove, otherRvAreas = [], venueName =
                                     {/* Slider instead of Small / Normal / Large (Robert 11-09). Only changes how big the spots look here. */}
                                     <GridZoomBar zoom={rvZoom} setZoom={setRvZoom} onFit={fitRvWidth} />
                                     {/* No inner scroll box: the grid grows down the page so the whole chart is visible. */}
-                                    <div ref={rvScrollRef} className="overflow-x-auto pb-1">
+                                    <div ref={rvScrollRef} className="overflow-x-auto pb-1 w-full max-w-full min-w-0">
                                       <div style={rvZoom !== 100 ? { zoom: rvZoom / 100 } : undefined} className="inline-block min-w-full">
                                         {rvRows.map((row, ri) => (
                                             <React.Fragment key={ri}>
