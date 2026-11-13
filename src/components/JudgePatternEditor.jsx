@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -31,13 +31,18 @@ const extractPatternNumber = (fileName) => {
 const JudgePatternEditor = ({ project, userEmail, onSave }) => {
   const { toast } = useToast();
   const [isSaving, setIsSaving] = useState(false);
-  const [patterns, setPatterns] = useState([]);
+  const [patterns, setPatterns] = useState({});
   const [loadingPatterns, setLoadingPatterns] = useState({});
   const [hoveredPatternId, setHoveredPatternId] = useState(null);
   const [hoveredPatternImage, setHoveredPatternImage] = useState(null);
   const [loadingHoveredImage, setLoadingHoveredImage] = useState(false);
   const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
-  
+  const hoverTimerRef = useRef(null);
+  const requestedDisciplinesRef = useRef(new Set());
+
+  // Clear any pending hover timer when the component unmounts
+  useEffect(() => () => clearTimeout(hoverTimerRef.current), []);
+
   const projectData = project?.project_data || {};
   const disciplines = projectData.disciplines || [];
   const [patternSelections, setPatternSelections] = useState(projectData.patternSelections || {});
@@ -166,7 +171,9 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
   useEffect(() => {
     assignedDisciplines.forEach(({ discipline, disciplineIndex }) => {
       const disciplineId = discipline.id;
-      if (!patterns[disciplineId] && !loadingPatterns[disciplineId]) {
+      // Ref guard: each discipline is requested once, so no stale state and no retry loop on error
+      if (!requestedDisciplinesRef.current.has(disciplineId)) {
+        requestedDisciplinesRef.current.add(disciplineId);
         fetchPatternsForDiscipline(discipline, disciplineIndex);
       }
     });
@@ -174,6 +181,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
 
   // Fetch pattern image on hover
   useEffect(() => {
+    let cancelled = false; // ignore results from an older hover
     const fetchPatternImage = async () => {
       if (!hoveredPatternId) {
         setHoveredPatternImage(null);
@@ -192,29 +200,29 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
           .maybeSingle();
         
         if (error) throw error;
-        setHoveredPatternImage(data?.image_url || null);
+        if (!cancelled) setHoveredPatternImage(data?.image_url || null);
       } catch (error) {
         console.error('Error fetching pattern image:', error);
-        setHoveredPatternImage(null);
+        if (!cancelled) setHoveredPatternImage(null);
       } finally {
-        setLoadingHoveredImage(false);
+        if (!cancelled) setLoadingHoveredImage(false);
       }
     };
-    
+
     fetchPatternImage();
+    return () => { cancelled = true; };
   }, [hoveredPatternId]);
 
   // Handle pattern selection change
   const handlePatternChange = (disciplineId, disciplineIndex, groupId, patternId) => {
     if (!project) return;
     
-    const updatedSelections = { ...patternSelections };
-    
-    // Use discipline ID as key (preferred)
-    if (!updatedSelections[disciplineId]) {
-      updatedSelections[disciplineId] = {};
-    }
-    
+    // Copy the nested object too, so state is never mutated
+    const updatedSelections = {
+      ...patternSelections,
+      [disciplineId]: { ...(patternSelections[disciplineId] || {}) },
+    };
+
     const selectedPattern = patterns[disciplineId]?.find(p => p.id.toString() === patternId);
     if (selectedPattern) {
       updatedSelections[disciplineId][groupId] = {
@@ -246,21 +254,17 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
   const handleDifficultyChange = (disciplineId, disciplineIndex, groupId, difficulty) => {
     if (!project) return;
     
-    const updatedSelections = { ...patternSelections };
-    
-    // Use discipline ID as key (preferred)
-    if (!updatedSelections[disciplineId]) {
-      updatedSelections[disciplineId] = {};
-    }
-    
-    // Get current selection - try multiple key formats
+    // Copy the nested object too, so state is never mutated
+    const updatedSelections = {
+      ...patternSelections,
+      [disciplineId]: { ...(patternSelections[disciplineId] || {}) },
+    };
+
+    // Get current selection - try multiple key formats (read only, no new keys)
     let currentSelection = updatedSelections[disciplineId][groupId];
     if (!currentSelection) {
       // Try legacy format
-      if (!updatedSelections[disciplineIndex]) {
-        updatedSelections[disciplineIndex] = {};
-      }
-      currentSelection = updatedSelections[disciplineIndex][groupId];
+      currentSelection = patternSelections[disciplineIndex]?.[groupId];
     }
     
     if (currentSelection) {
@@ -272,7 +276,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
       
       // If pattern doesn't match new difficulty, clear it
       if (difficulty !== 'ALL' && currentSelection.patternId) {
-        const pattern = patterns[disciplineId]?.find(p => p.id === currentSelection.patternId);
+        const pattern = patterns[disciplineId]?.find(p => Number(p.id) === Number(currentSelection.patternId));
         if (pattern && pattern.pattern_version !== difficulty) {
           // Pattern doesn't match difficulty, clear selection
           updatedSelections[disciplineId][groupId] = {
@@ -468,7 +472,8 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
                                     <SelectItem 
                                       key={pattern.id} 
                                       value={pattern.id.toString()}
-                                      onMouseEnter={(e) => {
+                                      onMouseEnter={() => {
+                                        clearTimeout(hoverTimerRef.current);
                                         setHoveredPatternId(pattern.id);
                                         const screenWidth = window.innerWidth;
                                         const screenHeight = window.innerHeight;
@@ -478,7 +483,8 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
                                         });
                                       }}
                                       onMouseLeave={() => {
-                                        setTimeout(() => {
+                                        clearTimeout(hoverTimerRef.current);
+                                        hoverTimerRef.current = setTimeout(() => {
                                           setHoveredPatternId(prev => prev === pattern.id ? null : prev);
                                         }, 100);
                                       }}
