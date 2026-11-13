@@ -255,6 +255,9 @@ export const EMPTY_COLORS = [
     { id: 'pink', name: 'Light pink', hex: '#fbcfe8', ink: '#831843' },
     { id: 'teal', name: 'Light teal', hex: '#99f6e4', ink: '#134e4a' },
     { id: 'brown', name: 'Tan', hex: '#e7d3b7', ink: '#44331a' },
+    { id: 'white', name: 'White', hex: '#ffffff', ink: '#374151' },
+    { id: 'darkgray', name: 'Dark gray', hex: '#6b7280', ink: '#ffffff' },
+    { id: 'black', name: 'Black', hex: '#111827', ink: '#ffffff' },
 ];
 const EMPTY_COLOR_MAP = Object.fromEntries(EMPTY_COLORS.map(c => [c.id, c]));
 
