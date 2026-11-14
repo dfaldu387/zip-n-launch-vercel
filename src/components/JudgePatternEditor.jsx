@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, Save, Eye } from 'lucide-react';
+import { Loader2, Save } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { cn } from '@/lib/utils';
@@ -25,8 +25,11 @@ const PATTERN_VERSIONS = [
 const extractPatternNumber = (fileName) => {
   if (!fileName) return null;
   const match = fileName.match(/(\d+)/);
-  return match ? parseInt(match[1]) : null;
+  return match ? parseInt(match[1], 10) : null;
 };
+
+// Case-insensitive, trimmed name comparison
+const sameName = (a, b) => !!a && !!b && a.toLowerCase().trim() === b.toLowerCase().trim();
 
 const JudgePatternEditor = ({ project, userEmail, onSave }) => {
   const { toast } = useToast();
@@ -37,6 +40,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
   const [hoveredPatternImage, setHoveredPatternImage] = useState(null);
   const [loadingHoveredImage, setLoadingHoveredImage] = useState(false);
   const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
+  const [imageFailed, setImageFailed] = useState(false);
   const hoverTimerRef = useRef(null);
   const requestedDisciplinesRef = useRef(new Set());
 
@@ -84,7 +88,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
     disciplines.forEach((discipline, disciplineIndex) => {
       // Check if judge is assigned at discipline level
       const disciplineJudge = judgeSelections[disciplineIndex];
-      if (disciplineJudge && disciplineJudge.toLowerCase().trim() === judgeName.toLowerCase().trim()) {
+      if (sameName(disciplineJudge, judgeName)) {
         assigned.push({ discipline, disciplineIndex });
         return;
       }
@@ -93,7 +97,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
       const groups = discipline.patternGroups || [];
       const hasGroupAssignment = groups.some((group, groupIndex) => {
         const groupJudge = groupJudges[disciplineIndex]?.[groupIndex];
-        return groupJudge && groupJudge.toLowerCase().trim() === judgeName.toLowerCase().trim();
+        return sameName(groupJudge, judgeName);
       });
       
       if (hasGroupAssignment) {
@@ -191,6 +195,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
       
       setLoadingHoveredImage(true);
       setHoveredPatternImage(null);
+      setImageFailed(false);
       
       try {
         const { data, error } = await supabase
@@ -214,7 +219,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
   }, [hoveredPatternId]);
 
   // Handle pattern selection change
-  const handlePatternChange = (disciplineId, disciplineIndex, groupId, patternId) => {
+  const handlePatternChange = (disciplineId, groupId, patternId) => {
     if (!project) return;
     
     // Copy the nested object too, so state is never mutated
@@ -226,7 +231,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
     const selectedPattern = patterns[disciplineId]?.find(p => p.id.toString() === patternId);
     if (selectedPattern) {
       updatedSelections[disciplineId][groupId] = {
-        patternId: parseInt(patternId),
+        patternId: parseInt(patternId, 10),
         patternName: selectedPattern.pdf_file_name?.trim() || `Pattern ${patternId}`,
         version: selectedPattern.pattern_version || 'ALL',
         maneuversRange: selectedPattern.maneuvers_range || '',
@@ -318,21 +323,15 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
         patternSelections,
       };
       
-      const { error } = await supabase
-        .from('projects')
-        .update({ project_data: updatedProjectData })
-        .eq('id', project.id);
-      
-      if (error) throw error;
-      
+      // The parent's onSave writes to the database (one save only, no duplicate write here)
+      if (!onSave) return;
+      const result = await onSave(updatedProjectData);
+      if (result === false) return; // parent already showed the error message
+
       toast({
         title: 'Success',
         description: 'Pattern selections have been saved.',
       });
-      
-      if (onSave) {
-        onSave(updatedProjectData);
-      }
     } catch (error) {
       console.error('Error saving patterns:', error);
       toast({
@@ -441,7 +440,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
                       </div>
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Select Pattern</Label>
                         {isLoading ? (
@@ -452,7 +451,7 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
                         ) : (
                             <Select
                             value={selectedPatternId || ''}
-                            onValueChange={(value) => handlePatternChange(disciplineId, disciplineIndex, group.id, value)}
+                            onValueChange={(value) => handlePatternChange(disciplineId, group.id, value)}
                           >
                             <SelectTrigger>
                               <SelectValue placeholder="Select Pattern" />
@@ -559,7 +558,6 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
             top: `${hoverPosition.y}px`,
             transform: 'translate(-50%, -50%)',
           }}
-          onMouseEnter={() => {}} // Keep preview open when hovering over it
           onMouseLeave={() => {
             setHoveredPatternId(null);
             setHoveredPatternImage(null);
@@ -571,22 +569,13 @@ const JudgePatternEditor = ({ project, userEmail, onSave }) => {
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
                 Loading preview...
               </div>
-            ) : hoveredPatternImage ? (
-              <>
-                <img 
-                  src={hoveredPatternImage} 
-                  alt="Pattern Preview" 
-                  className="w-full h-auto rounded border"
-                  onError={(e) => {
-                    e.target.style.display = 'none';
-                    const errorDiv = e.target.nextSibling;
-                    if (errorDiv) errorDiv.style.display = 'flex';
-                  }}
-                />
-                <div className="w-full h-40 rounded border bg-muted flex items-center justify-center text-muted-foreground text-sm hidden">
-                  No preview available
-                </div>
-              </>
+            ) : hoveredPatternImage && !imageFailed ? (
+              <img
+                src={hoveredPatternImage}
+                alt="Pattern Preview"
+                className="w-full h-auto rounded border"
+                onError={() => setImageFailed(true)}
+              />
             ) : (
               <div className="w-full h-40 rounded border bg-muted flex items-center justify-center text-muted-foreground text-sm">
                 No preview available

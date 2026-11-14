@@ -1923,9 +1923,9 @@ const JudgesPortalPage = () => {
                                         description: 'Failed to save changes.',
                                         variant: 'destructive',
                                     });
-                                    return;
+                                    return false; // tells the editor the save failed
                                 }
-                                
+
                                 // Update local state
                                 setSelectedProjectForEdit(prev => ({
                                     ...prev,
