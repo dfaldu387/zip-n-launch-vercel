@@ -43,7 +43,7 @@ const AddBookingDialog = ({
     const blankDetails = () => ({
         exhibitorName: '', email: '', phone: '',
         trainerName: '', trainerEmail: '', trainerPhone: '',
-        horses: '', status: 'pending',
+        horses: '', horseCount: '', status: 'pending',
     });
     // Edit mode is remounted fresh each time it opens (the caller only
     // renders it while there's a booking to edit), so lazy-initializing from
@@ -56,6 +56,13 @@ const AddBookingDialog = ({
         trainerEmail: booking.trainerEmail || '',
         trainerPhone: booking.trainerPhone || '',
         horses: (booking.horseNames && booking.horseNames.length ? booking.horseNames : (booking.horseName ? [booking.horseName] : [])).join(', '),
+        // Saved count first; older bookings fall back to how many names were typed.
+        horseCount: (() => {
+            const saved = Number(booking.horseCount);
+            if (saved > 0) return String(saved);
+            const n = (booking.horseNames && booking.horseNames.length ? booking.horseNames : (booking.horseName ? [booking.horseName] : [])).length;
+            return n > 0 ? String(n) : '';
+        })(),
         status: booking.status || 'pending',
     } : blankDetails());
     const [nights, setNights] = useState(Math.max(1, (isEditMode ? booking.nights : defaultNights) || 1));
@@ -69,9 +76,11 @@ const AddBookingDialog = ({
         setSelection({ stalls: {}, rvs: {}, supplies: {} });
     };
 
-    // Horses are typed as a comma-separated list — count them so a Per Horse
-    // extra fee prices correctly.
-    const horseCount = details.horses.split(',').map(h => h.trim()).filter(Boolean).length;
+    // The "Number of horses" box is the real count (names are optional). If more
+    // names are typed than the count says, trust the names so nobody is missed.
+    // Feeds Per Horse extra fees, so it must be right before pricing.
+    const namedHorses = details.horses.split(',').map(h => h.trim()).filter(Boolean).length;
+    const horseCount = Math.max(Number(details.horseCount) || 0, namedHorses);
 
     const { items, subtotal } = useMemo(
         () => buildBookingItems({ barns, rvAreas, supplies, extraStallFees, extraRvFees }, selection, nights, { horseCount }),
@@ -109,6 +118,10 @@ const AddBookingDialog = ({
             toast({ title: 'Email and phone required', description: 'Enter the exhibitor\'s email and phone.', variant: 'destructive' });
             return;
         }
+        if (horseCount < 1) {
+            toast({ title: 'Number of horses required', description: 'Enter how many horses are coming. Horse names are optional.', variant: 'destructive' });
+            return;
+        }
         if (items.length === 0) {
             toast({ title: 'Add at least one item', description: 'Pick a stall, RV spot, or supply.', variant: 'destructive' });
             return;
@@ -126,7 +139,7 @@ const AddBookingDialog = ({
                     trainerPhone: details.trainerPhone.trim(),
                     horseName: horseList[0] || '',
                     horseNames: horseList,
-                    horseCount: horseList.length,
+                    horseCount,
                     nights,
                     items,
                     amount: subtotal,
@@ -145,7 +158,7 @@ const AddBookingDialog = ({
                     trainerPhone: details.trainerPhone.trim(),
                     horseName: horseList[0] || '',
                     horseNames: horseList,
-                    horseCount: horseList.length,
+                    horseCount,
                     nights,
                     items,
                     amount: subtotal,
@@ -184,7 +197,7 @@ const AddBookingDialog = ({
                         <DialogDescription>
                             {isEditMode
                                 ? 'Change contact details, stalls, RV spots, or supplies for this booking.'
-                                : 'Enter a booking on behalf of an exhibitor. Only the name is required.'}
+                                : 'Enter a booking on behalf of an exhibitor. Name, email, phone and number of horses are required.'}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -236,16 +249,22 @@ const AddBookingDialog = ({
                                         placeholder="Optional" />
                                 </div>
 
-                                <div className="space-y-1 col-span-2">
-                                    <Label className="text-xs">Horses (comma separated)</Label>
-                                    <Input className="h-8 text-sm" value={details.horses}
-                                        onChange={(e) => setDetails(d => ({ ...d, horses: e.target.value }))}
-                                        placeholder="Charlie, Cinnamon" />
+                                <div className="space-y-1">
+                                    <Label className="text-xs">Number of horses <span className="text-destructive">*</span></Label>
+                                    <Input type="number" min={1} max={50} className="h-8 text-sm" value={details.horseCount}
+                                        onChange={(e) => setDetails(d => ({ ...d, horseCount: e.target.value }))}
+                                        placeholder="e.g., 2" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs">Nights</Label>
                                     <Input type="number" min={1} className="h-8 text-sm" value={nights}
                                         onChange={(e) => setNights(Math.max(1, parseInt(e.target.value) || 1))} />
+                                </div>
+                                <div className="space-y-1 col-span-2">
+                                    <Label className="text-xs">Horse names (optional, comma separated)</Label>
+                                    <Input className="h-8 text-sm" value={details.horses}
+                                        onChange={(e) => setDetails(d => ({ ...d, horses: e.target.value }))}
+                                        placeholder="Charlie, Cinnamon" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs">Status</Label>

@@ -23,7 +23,7 @@ import {
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronLeft, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
     ClipboardList, Package, Truck, ArrowUpDown, BarChart3, Printer, MoreHorizontal,
-    Map as MapIcon, List as ListIcon, Download,
+    Map as MapIcon, List as ListIcon, Download, CalendarDays,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -61,6 +61,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
+const HousingCalendarPanel = lazy(() => import('@/components/housing/HousingCalendarPanel'));
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
@@ -6459,6 +6460,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             ],
         },
         {
+            // Robert 11-15: day-by-day view of stalls, RV, horses and pre-delivered supplies.
+            id: 'calendar', label: 'Calendar', icon: CalendarDays,
+            items: [
+                { value: 'calendar', label: 'Calendar' },
+            ],
+        },
+        {
             id: 'analytics', label: 'Analytics', icon: BarChart3,
             items: [
                 { value: 'analytics', label: 'Analytics' },
@@ -6493,7 +6501,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 this generic row would just repeat the same numbers a second time. */}
             {activeSection === 'supplyorders' ? (
                 <SupplyOrderStatTiles {...supplyOrderCounts} />
-            ) : activeSection !== 'masterlist' && activeSection !== 'branding' && (
+            ) : activeSection !== 'masterlist' && activeSection !== 'branding' && activeSection !== 'calendar' && (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                     {sectionStats.map((stat, i) => {
                         const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
@@ -7862,6 +7870,19 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             📭 No bookings yet — charts fill in as exhibitors reserve.
                         </div>
                     )}
+                </TabsContent>
+
+                {/* ── Calendar Tab — day-by-day stalls / RV / horses / pre-delivered supplies ── */}
+                <TabsContent value="calendar" className="mt-4 space-y-4">
+                    <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading calendar…</div>}>
+                        <HousingCalendarPanel
+                            bookings={stallBookings}
+                            supplies={supplies}
+                            startDate={moveInDate}
+                            endDate={moveOutDate}
+                            showName={pd?.name || pd?.showName}
+                        />
+                    </Suspense>
                 </TabsContent>
 
                 {/* ── Analytics Tab ── */}

@@ -788,12 +788,14 @@ const Step2_Details = ({ details, setDetails, showWindow, bookWindow = {} }) => 
                     {/* ---- Horses ---- */}
                     <div className="border-t border-border pt-5 space-y-3">
                         <div className="max-w-[200px]">
-                            <Label>Number of Horses</Label>
+                            <Label>Number of Horses <span className="text-destructive">*</span></Label>
                             <Input
                                 type="number"
-                                min={0}
+                                min={1}
                                 max={50}
-                                value={details.horseCount}
+                                required
+                                placeholder="e.g., 2"
+                                value={details.horseCount || ''}
                                 onChange={(e) => {
                                     const n = Math.max(0, Math.min(50, parseInt(e.target.value) || 0));
                                     setDetails(d => {
@@ -967,7 +969,7 @@ const PublicBookingPage = () => {
         trainerName: '',
         trainerEmail: '',
         trainerPhone: '',
-        horseCount: 1,
+        horseCount: 0, // required — exhibitor must enter it (shown empty)
         horseNames: [],
         preferences: '',
     });
@@ -1340,6 +1342,10 @@ const PublicBookingPage = () => {
             }
             if (!details.exhibitorName || !details.email || !details.phone) {
                 toast({ title: 'Please complete required fields', variant: 'destructive' });
+                return false;
+            }
+            if (!(Number(details.horseCount) >= 1)) {
+                toast({ title: 'Number of horses required', description: 'Tell us how many horses you are bringing. Horse names are optional.', variant: 'destructive' });
                 return false;
             }
         }
