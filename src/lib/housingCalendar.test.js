@@ -67,7 +67,7 @@ describe('buildHousingCalendar', () => {
         const { rows, totals } = buildHousingCalendar({ bookings: [b], supplies });
         expect(rows.map((r) => r.shavingsBags)).toEqual([10, 0, 0]);
         expect(rows.map((r) => r.hayBales)).toEqual([4, 0, 0]);
-        expect(totals).toEqual({ shavingsBags: 10, hayBales: 4 });
+        expect(totals).toMatchObject({ shavingsBags: 10, hayBales: 4 });
     });
 
     it('skips cancelled bookings and at-show re-orders', () => {
@@ -102,5 +102,47 @@ describe('buildHousingCalendar', () => {
     it('reports bookings with no horse count', () => {
         const { missingHorseCount } = buildHousingCalendar({ bookings: [booking({ horseCount: 0 })], supplies });
         expect(missingHorseCount).toBe(1);
+    });
+});
+
+describe('location filters', () => {
+    const barns = [
+        { id: 'A', name: 'Barn A', stalls: [{ id: 'a1', bookingId: 'b1' }, { id: 'a2', bookingId: 'b1' }, { id: 'a3' }] },
+        { id: 'B', name: 'Barn B', stalls: [{ id: 'b1s', bookingId: 'b2' }, { id: 'b2s' }] },
+    ];
+    const bookings = [
+        booking({ id: 'b1', horseCount: 2, items: [{ type: 'stall', feeType: 'flat', qty: 2 }] }),
+        booking({ id: 'b2', horseCount: 1, items: [{ type: 'stall', feeType: 'flat', qty: 1 }] }),
+    ];
+    const run = (extra) => buildHousingCalendar({ bookings, supplies, barns, startDate: '2026-12-10', endDate: '2026-12-12', ...extra });
+
+    it('whole facility counts everything and reports capacity', () => {
+        const { rows, capacity } = run({});
+        expect(rows[0].stalls).toBe(3);
+        expect(rows[0].horses).toBe(3);
+        expect(capacity.stalls).toBe(5);
+        expect(rows[0].byBarn).toEqual({ A: 2, B: 1 });
+    });
+    it('one barn picked counts only that barn', () => {
+        const { rows, capacity } = run({ barnIds: ['A'] });
+        expect(rows[0].stalls).toBe(2);
+        expect(rows[0].horses).toBe(2);
+        expect(capacity.stalls).toBe(3);
+        expect(rows[0].byBarn).toEqual({ A: 2 });
+    });
+    it('a booking not placed in a barn yet is left out when a barn is picked', () => {
+        const { rows } = run({ barnIds: ['B'], bookings: [...bookings, booking({ id: 'b3', items: [{ type: 'stall', feeType: 'flat', qty: 4 }] })] });
+        expect(rows[0].stalls).toBe(1);
+    });
+    it('counts a delivery on the day it was delivered', () => {
+        const order = booking({
+            id: 'b1', createdAt: '2026-12-01',
+            items: [{ type: 'supply', refId: 's1', name: 'Shavings', qty: 6 }],
+            itemStatuses: { s1: { status: 'delivered', stageTimestamps: { delivered: '2026-12-11T09:00:00Z' } } },
+        });
+        const { rows, totals } = run({ bookings: [order] });
+        expect(rows[1].deliveredBags).toBe(6);
+        expect(totals.deliveredBags).toBe(6);
+        expect(totals.outstandingBags).toBe(0);
     });
 });

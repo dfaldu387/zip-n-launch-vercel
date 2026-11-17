@@ -61,7 +61,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // once there are no-show bookings — so the library loads with the charts rather
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
-const HousingCalendarPanel = lazy(() => import('@/components/housing/HousingCalendarPanel'));
+const HousingCalendarPanel = lazy(() => import('@/components/housing/HousingCalendarSwitch'));
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
@@ -4546,7 +4546,7 @@ const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onSaveDeliverySecrets, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, sectionSelectContainer, brandingContent }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onSaveDeliverySecrets, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, onUpdateDayNote, sectionSelectContainer, brandingContent }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const { profile, refreshProfile } = useAuth();
@@ -7876,10 +7876,16 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 <TabsContent value="calendar" className="mt-4 space-y-4">
                     <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading calendar…</div>}>
                         <HousingCalendarPanel
-                            bookings={stallBookings}
+                            bookings={bookings}
                             supplies={supplies}
                             startDate={moveInDate}
                             endDate={moveOutDate}
+                            barns={barns}
+                            rvAreas={rvAreas}
+                            extraStallFees={extraStallFees}
+                            showId={show.id}
+                            dayNotes={pd.housingDayNotes}
+                            onUpdateDayNote={onUpdateDayNote}
                             showName={pd?.name || pd?.showName}
                         />
                     </Suspense>
@@ -8522,6 +8528,29 @@ const HousingGroundsManagerPage = () => {
         }
     }, [selectedShowId, commitShowData, toast]);
 
+    // Operations Calendar day notes (Robert 2026-11-16). Kept on the show as
+    // housingDayNotes = { 'yyyy-MM-dd': [{ id, text, by, at }] }. Each add / delete is
+    // applied to the NEWEST saved copy, so two staff adding notes at once keep both.
+    // Not blocked by Draft / Locked / Published: notes are written during the show.
+    const updateDayNote = useCallback(async ({ action, date, note, noteId }) => {
+        if (!selectedShowId || !date) return;
+        try {
+            await commitShowData(latest => {
+                const all = { ...(latest.housingDayNotes || {}) };
+                const list = [...(all[date] || [])];
+                if (action === 'add' && note) list.push(note);
+                if (action === 'delete') {
+                    const i = list.findIndex(n => n.id === noteId);
+                    if (i >= 0) list.splice(i, 1);
+                }
+                if (list.length) all[date] = list; else delete all[date];
+                return { data: { ...latest, housingDayNotes: all } };
+            });
+        } catch (error) {
+            toast({ title: 'Note not saved', description: error.message, variant: 'destructive' });
+        }
+    }, [selectedShowId, commitShowData, toast]);
+
     // Delivery QR secrets (one per order, created the first time it is printed on a
     // Load Sheet). Kept in their own map on the show — not on the booking — because
     // the customer booking page returns the whole booking and must never see them.
@@ -8782,6 +8811,7 @@ const HousingGroundsManagerPage = () => {
                                 onUpdateCover={updateCoverImageImmediate}
                                 onAddBookingImmediate={addBookingImmediate}
                                 onRemoveBookingImmediate={removeBookingImmediate}
+                                onUpdateDayNote={updateDayNote}
                                 sectionSelectContainer={sectionSelectMount}
                             />
                         </>
