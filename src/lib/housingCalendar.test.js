@@ -141,8 +141,61 @@ describe('location filters', () => {
             itemStatuses: { s1: { status: 'delivered', stageTimestamps: { delivered: '2026-12-11T09:00:00Z' } } },
         });
         const { rows, totals } = run({ bookings: [order] });
-        expect(rows[1].deliveredBags).toBe(6);
+        expect(rows.find((r) => r.date === '2026-12-11').deliveredBags).toBe(6);
         expect(totals.deliveredBags).toBe(6);
         expect(totals.outstandingBags).toBe(0);
+    });
+});
+
+describe('products and barn supplies', () => {
+    const sup = [
+        { id: 's1', name: 'Shavings', unit: 'bag', preBedding: true },
+        { id: 's2', name: 'Hay (Alfalfa)', unit: 'bale', preBedding: true },
+        { id: 's9', name: 'Stall Mat Rental', unit: 'per stall', preBedding: false },
+    ];
+    const barns = [
+        { id: 'A', name: 'Barn A', stalls: [{ id: 'a1', bookingId: 'b1' }, { id: 'a2', bookingId: 'b1' }] },
+        { id: 'B', name: 'Barn B', stalls: [{ id: 'b1s', bookingId: 'b1' }, { id: 'b2s', bookingId: 'b1' }] },
+    ];
+    const b1 = booking({
+        id: 'b1', createdAt: '2026-12-01T10:00:00Z', items: [
+            { type: 'stall', feeType: 'flat', qty: 4 },
+            { type: 'supply', refId: 's1', name: 'Shavings', qty: 40 },
+            { type: 'supply', refId: 's2', name: 'Hay (Alfalfa)', qty: 8 },
+            { type: 'supply', refId: 's9', name: 'Stall Mat Rental', qty: 4 },
+        ],
+        itemStatuses: { s1: { status: 'delivered', stageTimestamps: { delivered: '2026-12-09T08:00:00Z' } } },
+    });
+    const run = (extra) => buildHousingCalendar({ bookings: [b1], supplies: sup, barns, startDate: '2026-12-10', endDate: '2026-12-12', ...extra });
+
+    it('splits pre-delivery due by product', () => {
+        const { rows } = run();
+        const day = rows.find((r) => r.date === '2026-12-10');
+        expect(day.products.Shavings.due).toBe(40);
+        expect(day.products['Hay (Alfalfa)'].due).toBe(8);
+        expect(day.products['Stall Mat Rental']).toBeUndefined(); // not a pre-delivery item
+    });
+    it('counts items ordered on the day the order was placed, all products', () => {
+        const { rows, productTotals } = run();
+        const day = rows.find((r) => r.date === '2026-12-01');
+        expect(day.products.Shavings.ordered).toBe(40);
+        expect(day.products['Stall Mat Rental'].ordered).toBe(4);
+        expect(productTotals.Shavings.ordered).toBe(40);
+    });
+    it('counts a delivered product on its delivery day', () => {
+        const { rows } = run();
+        expect(rows.find((r) => r.date === '2026-12-09').products.Shavings.delivered).toBe(40);
+    });
+    it('shows each barn its own share of the supplies', () => {
+        const { rows } = run();
+        const day = rows.find((r) => r.date === '2026-12-10');
+        expect(day.barnSupply.A.Shavings.due).toBe(20);
+        expect(day.barnSupply.B.Shavings.due).toBe(20);
+    });
+    it('a barn pick keeps only that barn share', () => {
+        const { rows } = run({ barnIds: ['A'] });
+        const day = rows.find((r) => r.date === '2026-12-10');
+        expect(day.products.Shavings.due).toBe(20);
+        expect(day.barnSupply.B).toBeUndefined();
     });
 });

@@ -73,6 +73,27 @@ const splitAcross = (n, assigned, idKey) => {
 
 const addTo = (map, id, n) => { if (n > 0) map[id] = (map[id] || 0) + n; };
 
+// Supply id / name -> { name, unit, preBedding }, so a booking line can be named and
+// counted by product (Shavings, Hay (Grass), Stall Mat Rental...).
+const supplyMetaMap = (supplies) => {
+    const meta = {};
+    for (const s of supplies || []) {
+        const m = { name: s.name || '', unit: s.unit || 'each', preBedding: !!s.preBedding };
+        if (s.id) meta[s.id] = m;
+        if (s.name) meta[s.name] = m;
+    }
+    return meta;
+};
+
+// Every supply line on a booking, with its product name, unit and quantity.
+const supplyLinesOf = (booking, meta) => (booking?.items || [])
+    .filter((it) => it.type === 'supply')
+    .map((it) => {
+        const m = meta[it.refId] || meta[it.name] || {};
+        return { ...it, product: m.name || it.name || 'Supply', unit: m.unit || 'each', preBedding: !!m.preBedding, qtyN: Number(it.qty) || 0 };
+    })
+    .filter((it) => it.qtyN > 0);
+
 // Filters (Robert 2026-11-16): barnIds / rvIds = the locations picked. Nothing picked =
 // whole facility. Once something is picked, only those locations are counted.
 export function buildHousingCalendar({
@@ -94,20 +115,37 @@ export function buildHousingCalendar({
         if (a && (!first || a < first)) first = a;
         if (d && (!last || d > last)) last = d;
     }
-    // Work out the deliveries first, so a delivery made before move-in (or after
+    // Work out the deliveries and orders first, so one made before move-in (or after
     // move-out) still gets a day of its own instead of silently disappearing.
     const deliveries = [];
+    const productEvents = []; // { day, field: 'ordered' | 'delivered', product, unit, qty, split }
+    const supplyMeta = supplyMetaMap(supplies);
+    const widen = (day) => {
+        if (!first || day < first) first = day;
+        if (!last || day > last) last = day;
+    };
     for (const o of allLive) {
+        const isAtShow = o.orderType === 'live-supply';
+        const assigned = isAtShow ? [] : getAssignedStallsForBooking(o, barns);
         let orderShare = 1;
-        if (o.orderType === 'live-supply') {
+        if (isAtShow) {
             if (barnIds.length) orderShare = pickedBarnNames.includes(o.barnName) ? 1 : 0;
             else if (locFilter) orderShare = 0;
         } else if (barnIds.length) {
-            orderShare = shareOf(getAssignedStallsForBooking(o, barns), 'barnId', barnIds);
+            orderShare = shareOf(assigned, 'barnId', barnIds);
         } else if (locFilter) {
             orderShare = 0;
         }
         if (orderShare <= 0) continue;
+        // Which barn(s) an amount of this order's supplies belongs to.
+        const splitFor = (qty) => {
+            if (isAtShow) {
+                const barn = (barns || []).find((x) => x.name === o.barnName);
+                return barn ? { [barn.id]: qty } : {};
+            }
+            return splitAcross(qty, barnIds.length ? assigned.filter((x) => barnIds.includes(x.barnId)) : assigned, 'barnId');
+        };
+
         for (const it of beddingItemsOf(o, supplies)) {
             const { status, stageTimestamps } = getItemStatus(o, it.refId);
             if (status !== 'delivered') continue;
@@ -118,8 +156,27 @@ export function buildHousingCalendar({
             const qty = Math.round((Number(it.qty) || 0) * orderShare);
             if (!day || qty <= 0) continue;
             deliveries.push({ day, key: it.isHay ? 'deliveredBales' : 'deliveredBags', qty });
-            if (!first || day < first) first = day;
-            if (!last || day > last) last = day;
+            widen(day);
+        }
+
+        // Every supply line (shavings, each hay, stall mats...) by product.
+        const orderDay = isoDay(o.createdAt) || isoDay(o.arrivalDate);
+        for (const line of supplyLinesOf(o, supplyMeta)) {
+            const qty = Math.round(line.qtyN * orderShare);
+            if (qty <= 0) continue;
+            if (orderDay) {
+                productEvents.push({ day: orderDay, field: 'ordered', product: line.product, unit: line.unit, qty, split: splitFor(qty) });
+                widen(orderDay);
+            }
+            const { status, stageTimestamps } = getItemStatus(o, line.refId);
+            if (status === 'delivered') {
+                const st = stageTimestamps || {};
+                const day = isoDay(st.delivered || st.out_for_delivery || st.received || st.new || o.createdAt);
+                if (day) {
+                    productEvents.push({ day, field: 'delivered', product: line.product, unit: line.unit, qty, split: splitFor(qty) });
+                    widen(day);
+                }
+            }
         }
     }
     const days = daysInRange(first, last);
@@ -130,9 +187,24 @@ export function buildHousingCalendar({
             date: day, stalls: 0, rvs: 0, horses: 0, bookings: 0, shavingsBags: 0, hayBales: 0,
             deliveredBags: 0, deliveredBales: 0, outstandingBags: 0, outstandingBales: 0,
             byBarn: {}, byRv: {},
+            products: {}, barnSupply: {},
         };
     }
     const add = (day, key, n) => { if (byDay[day]) byDay[day][key] += n; };
+    // Per product (and per barn): field is 'ordered' | 'due' | 'delivered'.
+    const addProduct = (day, field, product, unit, qty, split) => {
+        const row = byDay[day];
+        if (!row || qty <= 0) return;
+        const bump = (bucket, n) => {
+            const p = bucket[product] || (bucket[product] = { unit, ordered: 0, due: 0, delivered: 0 });
+            p[field] += n;
+        };
+        bump(row.products, qty);
+        // Each barn gets its own share, not the whole amount.
+        Object.entries(split || {}).forEach(([id, c]) => {
+            if (c > 0) bump(row.barnSupply[id] || (row.barnSupply[id] = {}), c);
+        });
+    };
 
     for (const b of stayBookings) {
         const stay = daysInRange(b.arrivalDate, b.departureDate);
@@ -183,10 +255,17 @@ export function buildHousingCalendar({
             add(arrival, it.isHay ? 'hayBales' : 'shavingsBags', qty);
             if (!isItemDelivered(b, it.refId)) add(arrival, it.isHay ? 'outstandingBales' : 'outstandingBags', qty);
         }
+        // The same pre-delivery items, product by product and barn by barn.
+        for (const line of supplyLinesOf(b, supplyMeta)) {
+            if (!line.preBedding) continue;
+            const qty = Math.round(line.qtyN * stallShare);
+            addProduct(arrival, 'due', line.product, line.unit, qty, splitAcross(qty, stallsInPicked, 'barnId'));
+        }
     }
 
     // Actual deliveries land on the day they were delivered.
     deliveries.forEach((d) => add(d.day, d.key, d.qty));
+    productEvents.forEach((e) => addProduct(e.day, e.field, e.product, e.unit, e.qty, e.split));
 
     const rows = days.map((d) => byDay[d]);
     const peak = (key) => rows.reduce((m, r) => (r[key] > m.value ? { value: r[key], date: r.date } : m), { value: 0, date: '' });
@@ -200,8 +279,18 @@ export function buildHousingCalendar({
         rvs: rvIds.length || !barnIds.length ? shownRv.reduce((s, a) => s + sellableRvSpotCount(a.spots || []), 0) : 0,
     };
 
+    // Whole-show totals per product (Shavings, Hay (Grass), Hay (Alfalfa), Stall Mat Rental...).
+    const productTotals = {};
+    for (const r of rows) {
+        for (const [name, p] of Object.entries(r.products)) {
+            const t = productTotals[name] || (productTotals[name] = { unit: p.unit, ordered: 0, due: 0, delivered: 0 });
+            t.ordered += p.ordered; t.due += p.due; t.delivered += p.delivered;
+        }
+    }
+
     return {
         rows,
+        productTotals,
         totals: {
             shavingsBags: sum('shavingsBags'),
             hayBales: sum('hayBales'),

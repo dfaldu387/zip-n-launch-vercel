@@ -93,6 +93,37 @@ export function LocationPicker({ barns, rvAreas, barnIds, rvIds, onBarns, onRv }
     );
 }
 
+// Ordered / pre-delivery due / delivered, product by product (Shavings, each hay, mats...).
+function ProductTable({ products, title }) {
+    const entries = Object.entries(products || {});
+    if (entries.length === 0) return null;
+    return (
+        <div>
+            <p className="text-xs font-semibold mb-1">{title}</p>
+            <table className="w-full text-xs">
+                <thead className="text-muted-foreground">
+                    <tr>
+                        <th className="text-left font-medium py-1">Product</th>
+                        <th className="text-right font-medium py-1">Ordered</th>
+                        <th className="text-right font-medium py-1">Due</th>
+                        <th className="text-right font-medium py-1">Delivered</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y">
+                    {entries.map(([name, p]) => (
+                        <tr key={name}>
+                            <td className="py-1.5 pr-2">{name}<span className="text-muted-foreground"> ({p.unit})</span></td>
+                            <td className="py-1.5 text-right tabular-nums">{num(p.ordered)}</td>
+                            <td className="py-1.5 text-right tabular-nums text-amber-700 dark:text-amber-400">{num(p.due)}</td>
+                            <td className="py-1.5 text-right tabular-nums text-blue-700 dark:text-blue-400">{num(p.delivered)}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
 // Side panel for one clicked day: Overview / By Barn / By RV Lot.
 function DayPanel({ row, cal, barnIds, rvIds, notes, onUpdateDayNote, onClose }) {
     const [tab, setTab] = useState('overview');
@@ -165,6 +196,7 @@ function DayPanel({ row, cal, barnIds, rvIds, notes, onUpdateDayNote, onClose })
                                 {line('Hay', `${row.deliveredBales} bales`)}
                             </div>
                         </div>
+                        <ProductTable products={row.products} title="Items by product (this day)" />
                     </>
                 )}
                 {tab === 'barn' && (
@@ -172,7 +204,24 @@ function DayPanel({ row, cal, barnIds, rvIds, notes, onUpdateDayNote, onClose })
                         <div className="divide-y">
                             {barnList.map((b) => {
                                 const used = row.byBarn[b.id] || 0;
-                                return line(b.name, `${used} / ${b.stalls} (${pct(used, b.stalls)})`);
+                                const sup = Object.entries(row.barnSupply[b.id] || {});
+                                return (
+                                    <div key={b.id}>
+                                        {line(b.name, `${used} / ${b.stalls} (${pct(used, b.stalls)})`)}
+                                        {sup.length > 0 && (
+                                            <ul className="pb-2 pl-3 space-y-0.5 text-xs text-muted-foreground">
+                                                {sup.map(([name, p]) => (
+                                                    <li key={name} className="flex justify-between gap-2">
+                                                        <span className="truncate">{name}</span>
+                                                        <span className="tabular-nums shrink-0">
+                                                            {[p.due ? `due ${p.due}` : '', p.delivered ? `delivered ${p.delivered}` : '', p.ordered ? `ordered ${p.ordered}` : ''].filter(Boolean).join(' · ')}
+                                                        </span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                );
                             })}
                             {row.byBarn.unassigned > 0 && line('Not placed in a barn yet', row.byBarn.unassigned, 'text-amber-600')}
                         </div>
@@ -231,7 +280,7 @@ function DayPanel({ row, cal, barnIds, rvIds, notes, onUpdateDayNote, onClose })
 
 export default function HousingCalendarPanel({ bookings, supplies, startDate, endDate, showName, barns = [], rvAreas = [], dayNotes, onUpdateDayNote, showId }) {
     const notesOf = (date) => (dayNotes && Array.isArray(dayNotes[date]) ? dayNotes[date] : []);
-    const [view, setView] = useState('table');
+    const [view, setView] = useState('month');
     const [hideEmpty, setHideEmpty] = useState(true);
     const [barnIds, setBarnIds] = useState([]);
     const [rvIds, setRvIds] = useState([]);
@@ -244,12 +293,12 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
         () => buildHousingCalendar({ bookings, supplies, startDate, endDate, barns, rvAreas: rvFull, barnIds, rvIds }),
         [bookings, supplies, startDate, endDate, barns, rvFull, barnIds, rvIds],
     );
-    const { rows, totals, peaks, missingHorseCount, capacity, locations } = cal;
+    const { rows, totals, peaks, missingHorseCount, capacity, locations, productTotals } = cal;
 
     // A day is "empty" when nothing is booked or delivered on it.
     const isActive = (r) => r.bookings > 0 || r.stalls > 0 || r.rvs > 0 || r.horses > 0
         || r.shavingsBags > 0 || r.hayBales > 0 || r.deliveredBags > 0 || r.deliveredBales > 0
-        || notesOf(r.date).length > 0;
+        || notesOf(r.date).length > 0 || Object.keys(r.products).length > 0;
     const shownRows = useMemo(() => (hideEmpty ? rows.filter(isActive) : rows), [rows, hideEmpty]);
 
     // Week view: 7 days at a time.
@@ -280,11 +329,13 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
         const where = [names(locations.barns, barnIds), rvIds.length ? names(locations.rvAreas, rvIds) : ''].filter(Boolean).join(' + ');
         const body = shownRows.map((r) => [
             r.date, r.bookings, r.stalls, capacity.stalls ? pct(r.stalls, capacity.stalls) : '', r.rvs, r.horses,
-            r.shavingsBags, r.hayBales, r.outstandingBags, r.outstandingBales, r.deliveredBags, r.deliveredBales, notesOf(r.date).map((n) => n.text).join(' | '),
+            r.shavingsBags, r.hayBales, r.outstandingBags, r.outstandingBales, r.deliveredBags, r.deliveredBales,
+            Object.entries(r.products).map(([n, x]) => `${n}: ordered ${x.ordered}, due ${x.due}, delivered ${x.delivered}`).join(' | '),
+            notesOf(r.date).map((n) => n.text).join(' | '),
         ]);
         const csv = toCsv(
             ['Day', 'Bookings', 'Stalls used', 'Stall use %', 'RV spots used', 'Horses on grounds', 'Shavings due (bags)', 'Hay due (bales)',
-                'Shavings not delivered (bags)', 'Hay not delivered (bales)', 'Shavings delivered (bags)', 'Hay delivered (bales)', 'Notes'],
+                'Shavings not delivered (bags)', 'Hay not delivered (bales)', 'Shavings delivered (bags)', 'Hay delivered (bales)', 'Products (ordered / due / delivered)', 'Notes'],
             body,
         );
         downloadCsv(`operations-calendar-${format(new Date(), 'yyyy-MM-dd')}.csv`, `${toCsv([`Location: ${where}`], [])}\r\n${csv}`);
@@ -307,7 +358,7 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
             <Card>
                 <CardHeader className="pb-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
+                        <div className="min-w-[260px] flex-1">
                             <CardTitle className="flex items-center gap-2"><CalendarDays className="h-5 w-5" /> Operations Calendar</CardTitle>
                             <CardDescription>
                                 What is on the grounds each day{showName ? ` — ${showName}` : ''}. Updates live as bookings come in.
@@ -384,6 +435,12 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                             tone="bg-sky-50/60 border-sky-200 dark:bg-sky-950/20 dark:border-sky-900" />
                     </div>
 
+                    {Object.keys(productTotals).length > 0 && (
+                        <div className="rounded-lg border p-3 print:break-inside-avoid">
+                            <ProductTable products={productTotals} title="Supplies by product (whole show)" />
+                        </div>
+                    )}
+
                     {missingHorseCount > 0 && (
                         <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
                             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
@@ -394,7 +451,7 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                         </div>
                     )}
 
-                    <div className={cn('grid gap-4', selectedRow && 'lg:grid-cols-[minmax(0,1fr)_320px]')}>
+                    <div className={cn('grid gap-4', selectedRow && 'lg:grid-cols-[minmax(0,1fr)_280px]')}>
                         <div className="min-w-0 space-y-3">
                             {view === 'week' && weeks.length > 0 && (
                                 <div className="flex items-center gap-2 print:hidden">
@@ -412,20 +469,21 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                                     <table className="w-full text-sm">
                                         <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                                             <tr>
-                                                <th className="text-left px-3 py-2 font-medium">Day</th>
-                                                <th className="text-right px-3 py-2 font-medium">Bookings</th>
-                                                <th className="text-right px-3 py-2 font-medium">Stalls used</th>
-                                                {capacity.stalls > 0 && <th className="text-right px-3 py-2 font-medium">Stall use</th>}
-                                                <th className="text-right px-3 py-2 font-medium">RV spots used</th>
-                                                <th className="text-right px-3 py-2 font-medium">Horses on grounds</th>
-                                                <th className="text-right px-3 py-2 font-medium">Shavings due (bags)</th>
-                                                <th className="text-right px-3 py-2 font-medium">Hay due (bales)</th>
-                                                <th className="text-right px-3 py-2 font-medium">Delivered</th>
+                                                <th className="text-left px-2 py-2 font-medium">Day</th>
+                                                <th className="text-right px-2 py-2 font-medium">Bookings</th>
+                                                <th className="text-right px-2 py-2 font-medium">Stalls</th>
+                                                {capacity.stalls > 0 && <th className="text-right px-2 py-2 font-medium">Stall use</th>}
+                                                <th className="text-right px-2 py-2 font-medium">RV used</th>
+                                                <th className="text-right px-2 py-2 font-medium">Horses</th>
+                                                <th className="text-right px-2 py-2 font-medium">Shavings due</th>
+                                                <th className="text-right px-2 py-2 font-medium">Hay due</th>
+                                                <th className="text-right px-2 py-2 font-medium">Items ordered</th>
+                                                <th className="text-right px-2 py-2 font-medium">Delivered</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {tableRows.length === 0 && (
-                                                <tr><td colSpan={9} className="px-3 py-6 text-center text-muted-foreground">No days with bookings yet.</td></tr>
+                                                <tr><td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">No days with bookings yet.</td></tr>
                                             )}
                                             {tableRows.map((r) => (
                                                 <tr
@@ -433,18 +491,19 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                                                     onClick={() => setSelectedDay(r.date === selectedDay ? null : r.date)}
                                                     className={cn('border-t cursor-pointer hover:bg-muted/30', r.date === selectedDay && 'bg-primary/10')}
                                                 >
-                                                    <td className="px-3 py-2 font-medium whitespace-nowrap">
+                                                    <td className="px-2 py-2 font-medium whitespace-nowrap">
                                                         {fmtDay(r.date, 'EEE, MMM d')}
                                                         {notesOf(r.date).length > 0 && <StickyNote className="inline h-3.5 w-3.5 ml-1.5 text-yellow-600" aria-label="Has a note" />}
                                                     </td>
-                                                    <td className="px-3 py-2 text-right tabular-nums">{num(r.bookings)}</td>
-                                                    <td className="px-3 py-2 text-right tabular-nums">{num(r.stalls)}</td>
-                                                    {capacity.stalls > 0 && <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{r.stalls > 0 ? pct(r.stalls, capacity.stalls) : '–'}</td>}
-                                                    <td className="px-3 py-2 text-right tabular-nums">{num(r.rvs)}</td>
-                                                    <td className="px-3 py-2 text-right tabular-nums font-semibold">{num(r.horses)}</td>
-                                                    <td className="px-3 py-2 text-right tabular-nums text-amber-700 dark:text-amber-400">{num(r.shavingsBags)}</td>
-                                                    <td className="px-3 py-2 text-right tabular-nums text-amber-700 dark:text-amber-400">{num(r.hayBales)}</td>
-                                                    <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap text-blue-700 dark:text-blue-400">
+                                                    <td className="px-2 py-2 text-right tabular-nums">{num(r.bookings)}</td>
+                                                    <td className="px-2 py-2 text-right tabular-nums">{num(r.stalls)}</td>
+                                                    {capacity.stalls > 0 && <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{r.stalls > 0 ? pct(r.stalls, capacity.stalls) : '–'}</td>}
+                                                    <td className="px-2 py-2 text-right tabular-nums">{num(r.rvs)}</td>
+                                                    <td className="px-2 py-2 text-right tabular-nums font-semibold">{num(r.horses)}</td>
+                                                    <td className="px-2 py-2 text-right tabular-nums text-amber-700 dark:text-amber-400">{num(r.shavingsBags)}</td>
+                                                    <td className="px-2 py-2 text-right tabular-nums text-amber-700 dark:text-amber-400">{num(r.hayBales)}</td>
+                                                    <td className="px-2 py-2 text-right tabular-nums">{num(Object.values(r.products).reduce((n, x) => n + x.ordered, 0))}</td>
+                                                    <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap text-blue-700 dark:text-blue-400">
                                                         {r.deliveredBags + r.deliveredBales > 0 ? `${r.deliveredBags} bags · ${r.deliveredBales} bales` : <span className="text-muted-foreground/50">–</span>}
                                                     </td>
                                                 </tr>
@@ -452,10 +511,11 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                                         </tbody>
                                         <tfoot className="border-t bg-muted/30 text-xs">
                                             <tr>
-                                                <td className="px-3 py-2 font-semibold" colSpan={capacity.stalls > 0 ? 6 : 5}>Total</td>
-                                                <td className="px-3 py-2 text-right font-semibold tabular-nums">{totals.shavingsBags}</td>
-                                                <td className="px-3 py-2 text-right font-semibold tabular-nums">{totals.hayBales}</td>
-                                                <td className="px-3 py-2 text-right font-semibold tabular-nums whitespace-nowrap">{totals.deliveredBags} bags · {totals.deliveredBales} bales</td>
+                                                <td className="px-2 py-2 font-semibold" colSpan={capacity.stalls > 0 ? 6 : 5}>Total</td>
+                                                <td className="px-2 py-2 text-right font-semibold tabular-nums">{totals.shavingsBags}</td>
+                                                <td className="px-2 py-2 text-right font-semibold tabular-nums">{totals.hayBales}</td>
+                                                <td className="px-2 py-2 text-right font-semibold tabular-nums">{Object.values(productTotals).reduce((n, x) => n + x.ordered, 0)}</td>
+                                                <td className="px-2 py-2 text-right font-semibold tabular-nums whitespace-nowrap">{totals.deliveredBags} bags · {totals.deliveredBales} bales</td>
                                             </tr>
                                         </tfoot>
                                     </table>

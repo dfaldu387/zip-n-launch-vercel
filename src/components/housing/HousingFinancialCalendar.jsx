@@ -137,7 +137,7 @@ function DayPanel({ row, onClose }) {
 }
 
 export default function HousingFinancialCalendar({ bookings, startDate, endDate, showName, barns = [], rvAreas = [], extraStallFees = [], showId }) {
-    const [view, setView] = useState('table');
+    const [view, setView] = useState('month');
     const [hideEmpty, setHideEmpty] = useState(true);
     const [barnIds, setBarnIds] = useState([]);
     const [rvIds, setRvIds] = useState([]);
@@ -186,7 +186,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
             <Card>
                 <CardHeader className="pb-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
+                        <div className="min-w-[260px] flex-1">
                             <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" /> Orders &amp; Financial Calendar</CardTitle>
                             <CardDescription>
                                 Orders, sales and payments by the day the order was placed{showName ? ` — ${showName}` : ''}.
@@ -239,6 +239,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                 <X className="h-3.5 w-3.5 mr-1" /> Reset
                             </Button>
                         )}
+                        <span className="text-xs text-muted-foreground">Every number below follows these filters.</span>
                     </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
