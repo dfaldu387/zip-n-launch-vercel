@@ -26,6 +26,52 @@ const isoDay = (d) => {
     return s.length >= 10 ? s.slice(0, 10) : s;
 };
 
+// A day with nothing on it — lets a note be added to any date, even outside the show.
+export const emptyDayRow = (date) => ({
+    date, stalls: 0, rvs: 0, horses: 0, bookings: 0, shavingsBags: 0, hayBales: 0,
+    deliveredBags: 0, deliveredBales: 0, outstandingBags: 0, outstandingBales: 0,
+    byBarn: {}, byRv: {}, products: {}, barnSupply: {},
+});
+
+// What was actually delivered on a day, one line per product and kind:
+// [{ product, unit, kind: 'pre' | 'show', qty }]. Used by the day boxes.
+export function deliveriesOfDay(row) {
+    const out = [];
+    for (const [product, p] of Object.entries(row?.products || {})) {
+        if (p.preDelivered > 0) out.push({ product, unit: p.unit, kind: 'pre', qty: p.preDelivered });
+        if (p.showDelivered > 0) out.push({ product, unit: p.unit, kind: 'show', qty: p.showDelivered });
+    }
+    return out;
+}
+
+// Supply filter (Robert 2026-11-17): keep only the picked products and/or only pre-delivery
+// or only at-show. Works on a finished calendar, so the barn / RV pick keeps working.
+// Products with nothing left are dropped, so days and totals show no zeros.
+export function filterSupplies(cal, { names = [], pre = true, show = true } = {}) {
+    if (!names.length && pre && show) return cal;
+    const trim = (map) => {
+        const out = {};
+        for (const [name, p] of Object.entries(map || {})) {
+            if (names.length && !names.includes(name)) continue;
+            const q = { ...p };
+            if (!pre) { q.preOrdered = 0; q.preDelivered = 0; }
+            if (!show) { q.showOrdered = 0; q.showDelivered = 0; }
+            if (q.preOrdered + q.preDelivered + q.showOrdered + q.showDelivered === 0) continue;
+            out[name] = q;
+        }
+        return out;
+    };
+    return {
+        ...cal,
+        rows: cal.rows.map((r) => ({
+            ...r,
+            products: trim(r.products),
+            barnSupply: Object.fromEntries(Object.entries(r.barnSupply || {}).map(([id, m]) => [id, trim(m)])),
+        })),
+        productTotals: trim(cal.productTotals),
+    };
+}
+
 // Every day from start to end, both included, as 'yyyy-MM-dd'.
 export function daysInRange(start, end) {
     const a = isoDay(start);
@@ -164,8 +210,11 @@ export function buildHousingCalendar({
         for (const line of supplyLinesOf(o, supplyMeta)) {
             const qty = Math.round(line.qtyN * orderShare);
             if (qty <= 0) continue;
+            // Pre-show delivery = a Pre-Show Delivery item on a normal booking; at-show = a walk-up order.
+            // Anything else (stall mats...) is not a delivery, so it gets no kind.
+            const kind = isAtShow ? 'show' : (line.preBedding ? 'pre' : null);
             if (orderDay) {
-                productEvents.push({ day: orderDay, field: 'ordered', product: line.product, unit: line.unit, qty, split: splitFor(qty) });
+                productEvents.push({ day: orderDay, field: 'ordered', kind, product: line.product, unit: line.unit, qty, split: splitFor(qty) });
                 widen(orderDay);
             }
             const { status, stageTimestamps } = getItemStatus(o, line.refId);
@@ -173,7 +222,7 @@ export function buildHousingCalendar({
                 const st = stageTimestamps || {};
                 const day = isoDay(st.delivered || st.out_for_delivery || st.received || st.new || o.createdAt);
                 if (day) {
-                    productEvents.push({ day, field: 'delivered', product: line.product, unit: line.unit, qty, split: splitFor(qty) });
+                    productEvents.push({ day, field: 'delivered', kind, product: line.product, unit: line.unit, qty, split: splitFor(qty) });
                     widen(day);
                 }
             }
@@ -192,12 +241,14 @@ export function buildHousingCalendar({
     }
     const add = (day, key, n) => { if (byDay[day]) byDay[day][key] += n; };
     // Per product (and per barn): field is 'ordered' | 'due' | 'delivered'.
-    const addProduct = (day, field, product, unit, qty, split) => {
+    const addProduct = (day, field, product, unit, qty, split, kind) => {
         const row = byDay[day];
         if (!row || qty <= 0) return;
         const bump = (bucket, n) => {
-            const p = bucket[product] || (bucket[product] = { unit, ordered: 0, due: 0, delivered: 0 });
+            const p = bucket[product] || (bucket[product] = { unit, ordered: 0, due: 0, delivered: 0, preOrdered: 0, preDelivered: 0, showOrdered: 0, showDelivered: 0 });
             p[field] += n;
+            // 'pre' / 'show' split: preOrdered, preDelivered, showOrdered, showDelivered.
+            if (kind) p[`${kind}${field === 'ordered' ? 'Ordered' : 'Delivered'}`] += n;
         };
         bump(row.products, qty);
         // Each barn gets its own share, not the whole amount.
@@ -265,7 +316,7 @@ export function buildHousingCalendar({
 
     // Actual deliveries land on the day they were delivered.
     deliveries.forEach((d) => add(d.day, d.key, d.qty));
-    productEvents.forEach((e) => addProduct(e.day, e.field, e.product, e.unit, e.qty, e.split));
+    productEvents.forEach((e) => addProduct(e.day, e.field, e.product, e.unit, e.qty, e.split, e.kind));
 
     const rows = days.map((d) => byDay[d]);
     const peak = (key) => rows.reduce((m, r) => (r[key] > m.value ? { value: r[key], date: r.date } : m), { value: 0, date: '' });
@@ -283,8 +334,10 @@ export function buildHousingCalendar({
     const productTotals = {};
     for (const r of rows) {
         for (const [name, p] of Object.entries(r.products)) {
-            const t = productTotals[name] || (productTotals[name] = { unit: p.unit, ordered: 0, due: 0, delivered: 0 });
+            const t = productTotals[name] || (productTotals[name] = { unit: p.unit, ordered: 0, due: 0, delivered: 0, preOrdered: 0, preDelivered: 0, showOrdered: 0, showDelivered: 0 });
             t.ordered += p.ordered; t.due += p.due; t.delivered += p.delivered;
+            t.preOrdered += p.preOrdered; t.preDelivered += p.preDelivered;
+            t.showOrdered += p.showOrdered; t.showDelivered += p.showDelivered;
         }
     }
 

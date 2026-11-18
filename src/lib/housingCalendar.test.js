@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildHousingCalendar, daysInRange, horseCountOf } from './housingCalendar';
+import { buildHousingCalendar, daysInRange, horseCountOf, deliveriesOfDay } from './housingCalendar';
 
 const supplies = [
     { id: 's1', name: 'Shavings', preBedding: true },
@@ -185,6 +185,20 @@ describe('products and barn supplies', () => {
     it('counts a delivered product on its delivery day', () => {
         const { rows } = run();
         expect(rows.find((r) => r.date === '2026-12-09').products.Shavings.delivered).toBe(40);
+    });
+    it('splits pre-show and at-show deliveries, and leaves non-delivery items out', () => {
+        const atShow = booking({
+            id: 'w1', orderType: 'live-supply', createdAt: '2026-12-11T10:00:00Z',
+            items: [{ type: 'supply', refId: 's2', name: 'Hay (Alfalfa)', qty: 26 }],
+            itemStatuses: { s2: { status: 'delivered', stageTimestamps: { delivered: '2026-12-11T12:00:00Z' } } },
+        });
+        const { rows, productTotals } = run({ bookings: [b1, atShow] });
+        expect(productTotals.Shavings).toMatchObject({ preOrdered: 40, preDelivered: 40, showOrdered: 0 });
+        expect(productTotals['Hay (Alfalfa)']).toMatchObject({ preOrdered: 8, preDelivered: 0, showOrdered: 26, showDelivered: 26 });
+        expect(productTotals['Stall Mat Rental']).toMatchObject({ preOrdered: 0, showOrdered: 0 });
+        expect(deliveriesOfDay(rows.find((r) => r.date === '2026-12-09'))).toEqual([{ product: 'Shavings', unit: 'bag', kind: 'pre', qty: 40 }]);
+        expect(deliveriesOfDay(rows.find((r) => r.date === '2026-12-11'))).toEqual([{ product: 'Hay (Alfalfa)', unit: 'bale', kind: 'show', qty: 26 }]);
+        expect(deliveriesOfDay(rows.find((r) => r.date === '2026-12-10'))).toEqual([]);
     });
     it('shows each barn its own share of the supplies', () => {
         const { rows } = run();

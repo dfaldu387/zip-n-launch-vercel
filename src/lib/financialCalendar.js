@@ -19,8 +19,10 @@ import { getAssignedRvSpotsForBooking } from './rvAssignment';
 export const ORDER_KINDS = [
     { id: 'stall', label: 'Stall orders' },
     { id: 'rv', label: 'RV orders' },
-    { id: 'supply', label: 'Supply orders' },
-    { id: 'atshow', label: 'At-show orders' },
+    // Robert 2026-11-17: supplies are either ordered ahead (pre-order) or at the show.
+    // The ids stay 'supply' / 'atshow' so saved views keep working.
+    { id: 'supply', label: 'Pre-order supplies' },
+    { id: 'atshow', label: 'At-show supplies' },
 ];
 
 const isoDay = (d) => (d ? String(d).slice(0, 10) : '');
@@ -49,6 +51,17 @@ export function splitBookingMoney(booking, total) {
     }
     parts.stall = Math.max(total - nonStall, 0);
     return parts;
+}
+
+// The supply products on one order: [{ kind: 'supply' | 'atshow', name, qty }].
+// Pre-order = supplies on a normal booking, at-show = a walk-up supply order.
+export function supplyLinesOf(booking, share = 1) {
+    const kind = booking?.orderType === 'live-supply' ? 'atshow' : 'supply';
+    return (booking?.items || [])
+        .filter((it) => it.type === 'supply')
+        // Saved names can already end in "x 2" (quantity); the real quantity is shown separately.
+        .map((it) => ({ kind, name: String(it.name || 'Supply').replace(/\s*[×x]\s*\d+\s*$/i, '').trim() || 'Supply', qty: Math.round((Number(it.qty) || 0) * share) }))
+        .filter((l) => l.qty > 0);
 }
 
 export function buildFinancialCalendar({
@@ -93,7 +106,9 @@ export function buildFinancialCalendar({
         if (pay === 'paid' && outstanding > 0.005) continue;
         if (pay === 'unpaid' && outstanding <= 0.005) continue;
 
+        const lines = supplyLinesOf(b, atShow ? 1 : stallShare).filter((l) => kind === 'all' || l.kind === kind);
         orders.push({
+            lines,
             id: b.id,
             ref: b.bookingRef || b.id,
             name: b.exhibitorName || b.name || 'Order',
@@ -121,7 +136,7 @@ export function buildFinancialCalendar({
     }
     const byDay = {};
     for (const d of days) {
-        byDay[d] = { date: d, orders: 0, sales: 0, paid: 0, outstanding: 0, byKind: {}, list: [] };
+        byDay[d] = { date: d, orders: 0, sales: 0, paid: 0, outstanding: 0, byKind: {}, list: [], products: [] };
     }
     for (const o of orders) {
         const row = byDay[o.date];
@@ -139,6 +154,10 @@ export function buildFinancialCalendar({
             row.byKind[k] = cur;
         }
         row.list.push(o);
+        for (const l of o.lines) {
+            const hit = row.products.find((x) => x.kind === l.kind && x.name === l.name);
+            if (hit) hit.qty += l.qty; else row.products.push({ ...l });
+        }
     }
     const rows = days.map((d) => {
         const r = byDay[d];

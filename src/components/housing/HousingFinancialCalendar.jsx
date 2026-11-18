@@ -25,6 +25,7 @@ const money = (n) => {
 const pctOf = (part, whole) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : '0%');
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const KIND_LABEL = Object.fromEntries(ORDER_KINDS.map((k) => [k.id, k.label]));
+const KIND_TEXT = { supply: 'text-violet-700 dark:text-violet-400', atshow: 'text-amber-700 dark:text-amber-400' };
 const KIND_BAR = { stall: 'bg-blue-500', rv: 'bg-green-500', supply: 'bg-violet-500', atshow: 'bg-amber-500' };
 
 const Select = ({ label, value, onChange, options }) => (
@@ -98,6 +99,19 @@ function DayPanel({ row, onClose }) {
                                 ))}
                             </div>
                         </div>
+                        {row.products.length > 0 && (
+                            <div>
+                                <p className="text-xs font-semibold mb-1">Supplies ordered this day</p>
+                                <div className="divide-y">
+                                    {row.products.map((p) => (
+                                        <div key={`${p.kind}-${p.name}`} className="flex items-center justify-between py-1.5 text-sm">
+                                            <span className="text-muted-foreground">{p.name}<span className={cn('text-[11px] ml-1.5', KIND_TEXT[p.kind])}>{p.kind === 'atshow' ? 'At-show' : 'Pre-order'}</span></span>
+                                            <span className="font-semibold tabular-nums">{p.qty}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </>
                 )}
                 {tab === 'orders' && (
@@ -110,6 +124,7 @@ function DayPanel({ row, onClose }) {
                                         <span className="font-semibold tabular-nums">{money(o.sales)}</span>
                                     </div>
                                     <p className="text-[11px] text-muted-foreground">{o.kinds.map((k) => KIND_LABEL[k]).join(', ')}</p>
+                                    {o.lines.length > 0 && <p className="text-[11px]">{o.lines.map((l) => `${l.qty} ${l.name}`).join(' · ')}</p>}
                                 </div>
                             ))}
                         </div>
@@ -172,8 +187,10 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
         const where = picked ? [names(locations.barns, barnIds), names(locations.rvAreas, rvIds)].filter(Boolean).join(' + ') : 'Entire facility';
         const typeLabel = kind === 'all' ? 'All orders' : KIND_LABEL[kind];
         const payLabel = { all: 'All payments', paid: 'Paid in full', unpaid: 'Balance due' }[pay];
-        const body = shownRows.map((r) => [r.date, r.orders, r.sales, r.paid, r.outstanding]);
-        const csv = toCsv(['Day', 'Orders', 'Sales', 'Collected', 'Outstanding'], body);
+        // Products ordered that day, by kind: "2 Hay (Grass) | 40 Shavings".
+        const productsText = (r, k) => r.products.filter((p) => p.kind === k).map((p) => `${p.qty} ${p.name}`).join(' | ');
+        const body = shownRows.map((r) => [r.date, r.orders, r.sales, r.paid, r.outstanding, productsText(r, 'supply'), productsText(r, 'atshow')]);
+        const csv = toCsv(['Day', 'Orders', 'Sales', 'Collected', 'Outstanding', 'Pre-order supplies', 'At-show supplies'], body);
         downloadCsv(
             `orders-financial-calendar-${format(new Date(), 'yyyy-MM-dd')}.csv`,
             `${toCsv([`Location: ${where} | ${typeLabel} | ${payLabel}`], [])}\r\n${csv}`,
@@ -262,7 +279,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                 const v = totals.byKind[k.id]?.sales || 0;
                                 return (
                                     <div key={k.id} className="flex items-center gap-3 text-sm">
-                                        <span className="w-28 shrink-0">{k.label.replace(' orders', '')}</span>
+                                        <span className="w-36 shrink-0">{k.label.replace(' orders', '')}</span>
                                         <div className="flex-1 h-2.5 rounded-full bg-muted overflow-hidden">
                                             <div className={cn('h-full rounded-full', KIND_BAR[k.id])} style={{ width: `${(v / maxKind) * 100}%` }} />
                                         </div>
@@ -353,9 +370,15 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                                             >
                                                                 <div className="font-semibold text-xs mb-1">{c.day}</div>
                                                                 {r && (
-                                                                    <div className="space-y-0.5">
+                                                                    <div className="space-y-0.5 max-h-[120px] overflow-y-auto">
                                                                         <div>🛒 {r.orders} order{r.orders === 1 ? '' : 's'}</div>
                                                                         <div className="font-semibold text-green-700 dark:text-green-400">{money(r.sales)}</div>
+                                                                        {r.products.map((p) => (
+                                                                            <div key={`${p.kind}-${p.name}`} className={KIND_TEXT[p.kind]}>
+                                                                                {p.qty} {p.name}
+                                                                                <span className="block text-[10px] opacity-80">{p.kind === 'atshow' ? 'At-show' : 'Pre-order'}</span>
+                                                                            </div>
+                                                                        ))}
                                                                     </div>
                                                                 )}
                                                             </button>
