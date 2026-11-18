@@ -179,6 +179,20 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
         return out;
     }, [shownRows]);
     const selectedRow = selectedDay ? rows.find((r) => r.date === selectedDay) : null;
+    // Whole-show supply totals by product (all days, same filters as the rest of the page).
+    const productTotals = useMemo(() => {
+        const out = { supply: [], atshow: [] };
+        for (const r of rows) {
+            for (const p of r.products) {
+                const list = out[p.kind] || (out[p.kind] = []);
+                const hit = list.find((x) => x.name === p.name);
+                if (hit) hit.qty += p.qty; else list.push({ name: p.name, qty: p.qty });
+            }
+        }
+        out.supply.sort((a, b) => b.qty - a.qty);
+        out.atshow.sort((a, b) => b.qty - a.qty);
+        return out;
+    }, [rows]);
     const picked = barnIds.length + rvIds.length;
     const filtered = picked > 0 || kind !== 'all' || pay !== 'all';
     // CSV of what is on screen: same filters, same days.
@@ -289,6 +303,31 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                             })}
                         </div>
                     </div>
+
+                    {(productTotals.supply.length > 0 || productTotals.atshow.length > 0) && (
+                        <div className="rounded-lg border p-3">
+                            <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Supplies by product (whole show)</p>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                {[['supply', 'Pre-order supplies'], ['atshow', 'At-show supplies']].map(([k, label]) => (
+                                    <div key={k}>
+                                        <p className="text-xs font-medium mb-1">{label}</p>
+                                        {productTotals[k].length === 0 ? <p className="text-xs text-muted-foreground">None</p> : (
+                                            <table className="w-full text-sm">
+                                                <tbody className="divide-y">
+                                                    {productTotals[k].map((p) => (
+                                                        <tr key={p.name}>
+                                                            <td className="py-1">{p.name}</td>
+                                                            <td className="py-1 text-right font-semibold tabular-nums">{p.qty}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     <div className={cn('grid gap-4', selectedRow && 'lg:grid-cols-[minmax(0,1fr)_320px]')}>
                         <div className="min-w-0">
