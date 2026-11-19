@@ -106,6 +106,13 @@ export function buildFinancialCalendar({
         if (pay === 'paid' && outstanding > 0.005) continue;
         if (pay === 'unpaid' && outstanding <= 0.005) continue;
 
+        // Quantities (Robert 2026-11-18): how many stalls / RV spots the order holds.
+        const sumQty = (type) => (b.items || []).filter((it) => it.type === type).reduce((t, it) => t + (Number(it.qty) || 0), 0);
+        const units = atShow ? {} : {
+            stall: Math.round(sumQty('stall') * stallShare),
+            rv: Math.round(sumQty('rv') * rvShare),
+        };
+
         const lines = supplyLinesOf(b, atShow ? 1 : stallShare).filter((l) => kind === 'all' || l.kind === kind);
         orders.push({
             lines,
@@ -116,6 +123,7 @@ export function buildFinancialCalendar({
             // With an order-type filter on, only that type is shown for the order.
             kinds: kind === 'all' ? kinds : [kind],
             money,
+            units,
             sales: counted,
             paid,
             outstanding,
@@ -148,9 +156,10 @@ export function buildFinancialCalendar({
         for (const [k, v] of Object.entries(o.money)) {
             if (v <= 0) continue;
             if (kind !== 'all' && k !== kind) continue;
-            const cur = row.byKind[k] || { orders: 0, sales: 0 };
+            const cur = row.byKind[k] || { orders: 0, sales: 0, units: 0 };
             cur.orders += 1;
             cur.sales += v;
+            cur.units += o.units?.[k] || 0;
             row.byKind[k] = cur;
         }
         row.list.push(o);
@@ -169,8 +178,8 @@ export function buildFinancialCalendar({
     const totals = rows.reduce((t, r) => {
         t.orders += r.orders; t.sales += r.sales; t.paid += r.paid; t.outstanding += r.outstanding;
         for (const [k, v] of Object.entries(r.byKind)) {
-            const cur = t.byKind[k] || { orders: 0, sales: 0 };
-            cur.orders += v.orders; cur.sales += v.sales;
+            const cur = t.byKind[k] || { orders: 0, sales: 0, units: 0 };
+            cur.orders += v.orders; cur.sales += v.sales; cur.units += v.units || 0;
             t.byKind[k] = cur;
         }
         return t;

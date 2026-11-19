@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { format, parseISO, getDay, addDays } from 'date-fns';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -341,6 +341,24 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
     const [barnIds, setBarnIds] = useState([]);
     const [rvIds, setRvIds] = useState([]);
     const [selectedDay, setSelectedDay] = useState(null);
+    // Floating day panel (Robert 2026-11-18): opens right next to the clicked day.
+    const wrapRef = useRef(null);
+    const panelRef = useRef(null);
+    const [anchor, setAnchor] = useState(null);
+    const pickDay = (iso, e) => {
+        if (iso === selectedDay) { setSelectedDay(null); return; }
+        const wrap = wrapRef.current?.getBoundingClientRect();
+        const el = e?.currentTarget?.getBoundingClientRect();
+        setAnchor(wrap && el ? { top: el.top - wrap.top, left: el.left - wrap.left, right: el.right - wrap.left, width: wrap.width } : null);
+        setSelectedDay(iso);
+    };
+    useEffect(() => {
+        if (!selectedDay) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setSelectedDay(null); };
+        document.addEventListener('keydown', onKey);
+        panelRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        return () => document.removeEventListener('keydown', onKey);
+    }, [selectedDay]);
     const [weekIdx, setWeekIdx] = useState(0);
 
     const rvFull = useMemo(() => ensureAllRvSpots(rvAreas), [rvAreas]);
@@ -548,7 +566,7 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                         </div>
                     )}
 
-                    <div className={cn('grid gap-4', selectedRow && 'lg:grid-cols-[minmax(0,1fr)_280px]')}>
+                    <div ref={wrapRef} className="relative">
                         <div className="min-w-0 space-y-3">
                             {view === 'week' && weeks.length > 0 && (
                                 <div className="flex items-center gap-2 print:hidden">
@@ -583,7 +601,7 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                                             {tableRows.map((r) => (
                                                 <tr
                                                     key={r.date}
-                                                    onClick={() => setSelectedDay(r.date === selectedDay ? null : r.date)}
+                                                    onClick={(e) => pickDay(r.date, e)}
                                                     className={cn('border-t cursor-pointer hover:bg-muted/30', r.date === selectedDay && 'bg-primary/10')}
                                                 >
                                                     <td className="px-2 py-2 font-medium whitespace-nowrap">
@@ -648,7 +666,7 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                                                             <button
                                                                 type="button"
                                                                 key={c.iso}
-                                                                onClick={() => setSelectedDay(c.iso === selectedDay ? null : c.iso)}
+                                                                onClick={(e) => pickDay(c.iso, e)}
                                                                 className={cn(
                                                                     'rounded-md border p-1.5 min-h-[88px] text-[11px] leading-tight text-left cursor-pointer hover:border-primary',
                                                                     busy ? 'bg-card' : 'bg-muted/20 text-muted-foreground/60',
@@ -687,9 +705,24 @@ export default function HousingCalendarPanel({ bookings, supplies, startDate, en
                             )}
                         </div>
 
-                        {selectedRow && (
-                            <DayPanel key={selectedRow.date} row={selectedRow} cal={cal} barnIds={barnIds} rvIds={rvIds} notes={notesOf(selectedRow.date)} onUpdateDayNote={onUpdateDayNote} onClose={() => setSelectedDay(null)} />
-                        )}
+                        {selectedRow && (() => {
+                            const W = Math.min(320, anchor?.width || 320);
+                            let left = 0;
+                            if (anchor) {
+                                left = anchor.right + 8 + W <= anchor.width ? anchor.right + 8 : anchor.left - W - 8;
+                                left = Math.max(0, Math.min(left, anchor.width - W));
+                            }
+                            const narrow = anchor && anchor.width < 640;
+                            return (
+                                <div
+                                    ref={panelRef}
+                                    className="absolute z-30 shadow-2xl rounded-xl max-h-[80vh] overflow-y-auto"
+                                    style={narrow ? { left: 0, right: 0, top: anchor.top + 40 } : { width: W, left, top: anchor ? Math.max(0, anchor.top) : 0 }}
+                                >
+                                    <DayPanel key={selectedRow.date} row={selectedRow} cal={cal} barnIds={barnIds} rvIds={rvIds} notes={notesOf(selectedRow.date)} onUpdateDayNote={onUpdateDayNote} onClose={() => setSelectedDay(null)} />
+                                </div>
+                            );
+                        })()}
                     </div>
 
                     <p className="text-xs text-muted-foreground">

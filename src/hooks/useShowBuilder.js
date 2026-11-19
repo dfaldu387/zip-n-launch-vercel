@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { MODULE_STATUS, migrateLegacyStatus, migrateAllModuleStatuses, stampModuleStatusOnSave } from '@/lib/moduleStatusService';
 import { mergeLatestShowData } from '@/lib/mergeLatestShowData';
+import { pushDatesToLinked } from '@/lib/linkedDatePush';
 
 // Auto-heal: keep divisionDates in sync with each division's Go 1 date.
 // Older shows (and shows edited with the per-division date picker before the
@@ -380,6 +381,13 @@ export const useShowBuilder = (showId) => {
         toast({ title: 'Error saving show', description: error.message, variant: 'destructive' });
         return null;
       }
+      // Push a changed show date to the linked pattern book (only if it still holds the old date).
+      await pushDatesToLinked(supabase, {
+        id: currentShowId,
+        type: 'show',
+        oldDates: { startDate: latestRow?.project_data?.startDate || '', endDate: latestRow?.project_data?.endDate || '' },
+        newDates: { startDate: showPayload.project_data?.startDate || '', endDate: showPayload.project_data?.endDate || '' },
+      });
       // Silent save — no popup during normal editing
       return data;
     } else {

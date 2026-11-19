@@ -2618,8 +2618,8 @@ const EventPatternBookDialogContent = ({ project, profile, user, associationsDat
                         Show dates: {
                             projectData.startDate 
                                 ? projectData.endDate && projectData.startDate !== projectData.endDate
-                                    ? `${format(new Date(projectData.startDate), "MMM d")} - ${format(new Date(projectData.endDate), "MMM d, yyyy")}`
-                                    : format(new Date(projectData.startDate), "MMM d, yyyy")
+                                    ? `${format(new Date(`${String(projectData.startDate).slice(0, 10)}T00:00:00`), "MMM d")} - ${format(new Date(`${String(projectData.endDate).slice(0, 10)}T00:00:00`), "MMM d, yyyy")}`
+                                    : format(new Date(`${String(projectData.startDate).slice(0, 10)}T00:00:00`), "MMM d, yyyy")
                                 : 'Not set'
                         }
                     </span>

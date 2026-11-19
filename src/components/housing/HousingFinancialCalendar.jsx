@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { format, parseISO, getDay, addDays } from 'date-fns';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,8 @@ const money = (n) => {
     const v = Number(n) || 0;
     return v.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 2 });
 };
+const UNIT_WORD = { stall: ['stall', 'stalls'], rv: ['RV spot', 'RV spots'] };
+const unitText = (k, n) => (UNIT_WORD[k] && n > 0 ? `${n} ${UNIT_WORD[k][n === 1 ? 0 : 1]}` : '');
 const pctOf = (part, whole) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : '0%');
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const KIND_LABEL = Object.fromEntries(ORDER_KINDS.map((k) => [k.id, k.label]));
@@ -94,11 +96,24 @@ function DayPanel({ row, onClose }) {
                                 {kinds.map((k) => (
                                     <div key={k.id} className="flex items-center justify-between py-1.5 text-sm">
                                         <span>{k.label}</span>
-                                        <span className="tabular-nums"><span className="text-muted-foreground mr-3">{row.byKind[k.id].orders}</span><span className="font-semibold">{money(row.byKind[k.id].sales)}</span></span>
+                                        <span className="tabular-nums"><span className="text-muted-foreground mr-3">{row.byKind[k.id].orders}{unitText(k.id, row.byKind[k.id].units) ? ` · ${unitText(k.id, row.byKind[k.id].units)}` : ''}</span><span className="font-semibold">{money(row.byKind[k.id].sales)}</span></span>
                                     </div>
                                 ))}
                             </div>
                         </div>
+                        {['stall', 'rv'].filter((k) => row.byKind[k]?.units > 0).map((k) => (
+                            <div key={k}>
+                                <p className="text-xs font-semibold mb-1">{k === 'stall' ? 'Stalls' : 'RV spots'} ordered this day</p>
+                                <div className="divide-y">
+                                    {row.list.filter((o) => o.units?.[k] > 0).map((o) => (
+                                        <div key={o.id} className="flex items-center justify-between py-1.5 text-sm">
+                                            <span className="text-muted-foreground truncate">{o.name}</span>
+                                            <span className="font-semibold tabular-nums">{o.units[k]}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
                         {row.products.length > 0 && (
                             <div>
                                 <p className="text-xs font-semibold mb-1">Supplies ordered this day</p>
@@ -123,7 +138,7 @@ function DayPanel({ row, onClose }) {
                                         <span className="font-medium truncate">{o.name}</span>
                                         <span className="font-semibold tabular-nums">{money(o.sales)}</span>
                                     </div>
-                                    <p className="text-[11px] text-muted-foreground">{o.kinds.map((k) => KIND_LABEL[k]).join(', ')}</p>
+                                    <p className="text-[11px] text-muted-foreground">{o.kinds.map((k) => KIND_LABEL[k]).join(', ')}{['stall', 'rv'].filter((k) => o.units?.[k] > 0).map((k) => ` · ${unitText(k, o.units[k])}`).join('')}</p>
                                     {o.lines.length > 0 && <p className="text-[11px]">{o.lines.map((l) => `${l.qty} ${l.name}`).join(' · ')}</p>}
                                 </div>
                             ))}
@@ -159,6 +174,25 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
     const [kind, setKind] = useState('all');
     const [pay, setPay] = useState('all');
     const [selectedDay, setSelectedDay] = useState(null);
+    // Floating day panel (Robert 2026-11-18): opens right next to the clicked day, no scrolling.
+    const wrapRef = useRef(null);
+    const panelRef = useRef(null);
+    const [anchor, setAnchor] = useState(null);
+    const pickDay = (iso, e) => {
+        if (iso === selectedDay) { setSelectedDay(null); return; }
+        const wrap = wrapRef.current?.getBoundingClientRect();
+        const el = e?.currentTarget?.getBoundingClientRect();
+        setAnchor(wrap && el ? { top: el.top - wrap.top, left: el.left - wrap.left, right: el.right - wrap.left, width: wrap.width } : null);
+        setSelectedDay(iso);
+    };
+    useEffect(() => {
+        if (!selectedDay) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') setSelectedDay(null); };
+        document.addEventListener('keydown', onKey);
+        // Make sure the popup is fully on screen when it opens.
+        panelRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        return () => document.removeEventListener('keydown', onKey);
+    }, [selectedDay]);
 
     const rvFull = useMemo(() => ensureAllRvSpots(rvAreas), [rvAreas]);
     const cal = useMemo(
@@ -276,7 +310,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                 <CardContent className="space-y-4">
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                         <Tile icon={ShoppingCart} label="Total orders" value={totals.orders}
-                            sub={ORDER_KINDS.filter((k) => totals.byKind[k.id]).map((k) => `${KIND_LABEL[k.id].replace(' orders', '')}: ${totals.byKind[k.id].orders}`).join(' · ') || 'No orders'}
+                            sub={ORDER_KINDS.filter((k) => totals.byKind[k.id]).map((k) => `${KIND_LABEL[k.id].replace(' orders', '')}: ${totals.byKind[k.id].orders}${unitText(k.id, totals.byKind[k.id].units) ? ` (${unitText(k.id, totals.byKind[k.id].units)})` : ''}`).join(' · ') || 'No orders'}
                             tone="bg-blue-50/60 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900" />
                         <Tile icon={DollarSign} label="Total sales" value={money(totals.sales)} sub="live prices, before fees"
                             tone="bg-green-50/60 border-green-200 dark:bg-green-950/20 dark:border-green-900" />
@@ -329,7 +363,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                         </div>
                     )}
 
-                    <div className={cn('grid gap-4', selectedRow && 'lg:grid-cols-[minmax(0,1fr)_320px]')}>
+                    <div ref={wrapRef} className="relative">
                         <div className="min-w-0">
                             {view === 'table' ? (
                                 <div className="overflow-x-auto rounded-lg border">
@@ -350,7 +384,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                             {shownRows.map((r) => (
                                                 <tr
                                                     key={r.date}
-                                                    onClick={() => setSelectedDay(r.date === selectedDay ? null : r.date)}
+                                                    onClick={(e) => pickDay(r.date, e)}
                                                     className={cn('border-t cursor-pointer hover:bg-muted/30', r.date === selectedDay && 'bg-primary/10')}
                                                 >
                                                     <td className="px-3 py-2 font-medium whitespace-nowrap">{fmtDay(r.date, 'EEE, MMM d')}</td>
@@ -400,7 +434,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                                                 type="button"
                                                                 key={c.iso}
                                                                 disabled={!r}
-                                                                onClick={() => setSelectedDay(c.iso === selectedDay ? null : c.iso)}
+                                                                onClick={(e) => pickDay(c.iso, e)}
                                                                 className={cn(
                                                                     'rounded-md border p-1.5 min-h-[72px] text-[11px] leading-tight text-left',
                                                                     r ? 'bg-card hover:border-primary cursor-pointer' : 'bg-muted/20 text-muted-foreground/50 cursor-default',
@@ -411,6 +445,9 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                                                 {r && (
                                                                     <div className="space-y-0.5 max-h-[120px] overflow-y-auto">
                                                                         <div>🛒 {r.orders} order{r.orders === 1 ? '' : 's'}</div>
+                                                                        {['stall', 'rv'].filter((k) => r.byKind[k]?.units > 0).map((k) => (
+                                                                            <div key={k} className="font-medium">{k === 'stall' ? '🐴' : '🚐'} {unitText(k, r.byKind[k].units)}</div>
+                                                                        ))}
                                                                         <div className="font-semibold text-green-700 dark:text-green-400">{money(r.sales)}</div>
                                                                         {r.products.map((p) => (
                                                                             <div key={`${p.kind}-${p.name}`} className={KIND_TEXT[p.kind]}>
@@ -430,7 +467,24 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                 </div>
                             )}
                         </div>
-                        {selectedRow && <DayPanel key={selectedRow.date} row={selectedRow} onClose={() => setSelectedDay(null)} />}
+                        {selectedRow && (() => {
+                            const W = Math.min(320, anchor?.width || 320);
+                            let left = 0;
+                            if (anchor) {
+                                left = anchor.right + 8 + W <= anchor.width ? anchor.right + 8 : anchor.left - W - 8;
+                                left = Math.max(0, Math.min(left, anchor.width - W));
+                            }
+                            const narrow = anchor && anchor.width < 640;
+                            return (
+                                <div
+                                    ref={panelRef}
+                                    className="absolute z-30 shadow-2xl rounded-xl max-h-[80vh] overflow-y-auto"
+                                    style={narrow ? { left: 0, right: 0, top: anchor.top + 40 } : { width: W, left, top: anchor ? Math.max(0, anchor.top) : 0 }}
+                                >
+                                    <DayPanel key={selectedRow.date} row={selectedRow} onClose={() => setSelectedDay(null)} />
+                                </div>
+                            );
+                        })()}
                     </div>
 
                     <p className="text-xs text-muted-foreground">

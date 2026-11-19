@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabaseClient';
 import { computeFillPatch, BOOK_FILL_KEYS } from '@/lib/showBookSync';
+import { pushDatesToLinked } from '@/lib/linkedDatePush';
 import { NOT_ARCHIVED_FILTER } from '@/lib/archivedProjects';
 import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -590,6 +591,13 @@ export const usePatternBookBuilder = (projectId) => {
     // before state or the URL catch up.
 
     if (currentProjectId) {
+      // The dates this book had before this save, so a change can be pushed to the linked show.
+      let oldDates = null;
+      if (finalFormData.linkedProjectId) {
+        const { data: prevRow } = await supabase.from('projects').select('project_data').eq('id', currentProjectId).maybeSingle();
+        oldDates = { startDate: prevRow?.project_data?.startDate || '', endDate: prevRow?.project_data?.endDate || '' };
+      }
+
       const { error } = await supabase
         .from('projects')
         .update(projectPayload)
@@ -598,6 +606,15 @@ export const usePatternBookBuilder = (projectId) => {
       if (error) {
         toast({ title: 'Error saving project', description: error.message, variant: 'destructive' });
         return null;
+      }
+      if (oldDates) {
+        await pushDatesToLinked(supabase, {
+          id: currentProjectId,
+          type: 'pattern_book',
+          linkedId: finalFormData.linkedProjectId,
+          oldDates,
+          newDates: { startDate: finalFormData.startDate || '', endDate: finalFormData.endDate || '' },
+        });
       }
       // Bind this session to the row so any later save updates it, never INSERTs.
       boundProjectIdRef.current = currentProjectId;

@@ -7,12 +7,16 @@ import { Card, CardHeader, CardContent, CardTitle, CardFooter } from '@/componen
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
+// A plain "2026-11-20" must be read as that local day. new Date() reads it as midnight UTC,
+// which shows the day before for viewers in the US.
+const localDay = (value) => new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value);
+
 // Compute event status dynamically from dates.
 export const getComputedStatus = (event) => {
   if (!event.start_date || !event.end_date) return 'upcoming';
   const now = new Date();
-  const start = startOfDay(new Date(event.start_date));
-  const end = endOfDay(new Date(event.end_date));
+  const start = startOfDay(localDay(event.start_date));
+  const end = endOfDay(localDay(event.end_date));
   if (isBefore(now, start)) return 'upcoming';
   if (isAfter(now, end)) return 'completed';
   return 'ongoing';
@@ -84,7 +88,7 @@ export const EventCard = ({ event, onPatternBookClick }) => {
           </Link>
           <div className="text-sm text-muted-foreground mt-2 space-y-2">
             {event.start_date && (
-              <div className="flex items-center"><Calendar className="h-4 w-4 mr-2" />{format(new Date(event.start_date), 'MMM d, yyyy')}{event.end_date && ` - ${format(new Date(event.end_date), 'MMM d, yyyy')}`}</div>
+              <div className="flex items-center"><Calendar className="h-4 w-4 mr-2" />{format(localDay(event.start_date), 'MMM d, yyyy')}{event.end_date && ` - ${format(localDay(event.end_date), 'MMM d, yyyy')}`}</div>
             )}
             <div className="flex items-center"><MapPin className="h-4 w-4 mr-2" />{locationDisplay}</div>
             {computedStatus === 'upcoming' && (
