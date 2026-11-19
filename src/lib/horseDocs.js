@@ -14,7 +14,20 @@ export const HORSE_DOC_KINDS = [
 
 export const HORSE_DOCS_BUCKET = 'horse-health-docs';
 
-const isDoc = (d) => !!(d && typeof d === 'object' && d.path);
+const isDoc = (d) => !!(d && typeof d === 'object' && (d.path || d.file));
+
+/**
+ * Where a paper sits in the bucket. A file the manager uploaded keeps its full `path`.
+ * A file the exhibitor uploaded through their link keeps only `file`: the folder holds
+ * the link's secret, which must never be copied onto the booking, so the path is
+ * rebuilt here from the show's secrets map.
+ */
+export const docStoragePath = (doc, showId, bookingId, secret) => {
+  if (!doc) return null;
+  if (doc.path) return doc.path;
+  if (doc.file && secret) return `${showId}/${bookingId}/${secret}/${doc.file}`;
+  return null;
+};
 
 /** One entry per horse: { index, name, certificate, coggins }. `count` and `names` come from the booking. */
 export const getHorseSlots = (booking, count = 0, names = []) => {
@@ -62,6 +75,32 @@ export const withHorseName = (horseDocs, index, name, slotCount = 0) => {
   list[index] = { ...list[index], name: String(name || '').trim() };
   return list;
 };
+
+const SKIP_REASONS = {
+  no_email: 'no email on file',
+  complete: 'already complete',
+  cancelled: 'cancelled',
+  no_horses: 'no horses listed',
+  no_link: 'link not ready',
+  send_failed: 'the email could not be sent',
+  not_found: 'booking not found',
+};
+
+/** One plain sentence for the result of "Request health docs". */
+export const describeRequestResult = ({ sent = [], skipped = [] } = {}) => {
+  const head = sent.length === 0
+    ? 'No emails were sent.'
+    : `Email sent to ${sent.length} ${sent.length === 1 ? 'exhibitor' : 'exhibitors'}.`;
+  if (skipped.length === 0) return head;
+  const counts = {};
+  skipped.forEach((s) => { counts[s.reason] = (counts[s.reason] || 0) + 1; });
+  const why = Object.entries(counts).map(([r, n]) => `${n} ${SKIP_REASONS[r] || r}`).join(', ');
+  return `${head} Skipped: ${why}.`;
+};
+
+/** Bookings that still need papers and can be emailed: have an email, are not cancelled, have horses, are not complete. */
+export const isRequestable = (row) =>
+  !!row.email && row.status !== 'cancelled' && (row.health.state === 'missing' || row.health.state === 'partial');
 
 const SAFE_EXT = /^(pdf|jpe?g|png|webp|heic)$/i;
 

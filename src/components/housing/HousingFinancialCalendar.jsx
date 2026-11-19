@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Button } from '@/components/ui/button';
 import {
     DollarSign, ShoppingCart, CreditCard, Clock, CalendarDays, List as ListIcon, Printer, X, Download,
+    ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { buildFinancialCalendar, ORDER_KINDS } from '@/lib/financialCalendar';
@@ -174,6 +175,12 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
     const [kind, setKind] = useState('all');
     const [pay, setPay] = useState('all');
     const [selectedDay, setSelectedDay] = useState(null);
+    // Fold / unfold a month (Robert 2026-11-18: "have these open and close").
+    const [folded, setFolded] = useState([]);
+    const toggleMonth = (key) => {
+        setFolded((f) => (f.includes(key) ? f.filter((k) => k !== key) : [...f, key]));
+        setSelectedDay((d) => (d && d.startsWith(key) ? null : d));
+    };
     // Floating day panel (Robert 2026-11-18): opens right next to the clicked day, no scrolling.
     const wrapRef = useRef(null);
     const panelRef = useRef(null);
@@ -421,7 +428,17 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                         }
                                         return (
                                             <div key={m.key}>
-                                                <h4 className="font-semibold mb-2">{m.label}</h4>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleMonth(m.key)}
+                                                    aria-expanded={!folded.includes(m.key)}
+                                                    title={folded.includes(m.key) ? 'Open this month' : 'Fold this month'}
+                                                    className="flex items-center gap-1.5 font-semibold mb-2 print:pointer-events-none hover:text-primary"
+                                                >
+                                                    <ChevronDown className={cn('h-4 w-4 transition-transform print:hidden', folded.includes(m.key) && '-rotate-90')} />
+                                                    {m.label}
+                                                </button>
+                                                {!folded.includes(m.key) && (<>
                                                 <div className="grid grid-cols-7 gap-1 text-[11px] text-muted-foreground mb-1">
                                                     {WEEKDAYS.map((d) => <div key={d} className="text-center">{d}</div>)}
                                                 </div>
@@ -461,6 +478,7 @@ export default function HousingFinancialCalendar({ bookings, startDate, endDate,
                                                         );
                                                     })}
                                                 </div>
+                                                </>)}
                                             </div>
                                         );
                                     })}

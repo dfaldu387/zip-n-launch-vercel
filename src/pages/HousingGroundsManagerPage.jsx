@@ -74,6 +74,7 @@ import { printSupplyBarnReport } from '@/lib/supplyBarnReportPrint';
 import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineItems, getItemStatus, buildLoadSheet, buildSupplyByBarn, unitLookup, computeItemStageUpdates, orderHasItemAtStage, orderHasOutstandingItem, getDeliveryProgress, getItemStage } from '@/lib/supplyStatus';
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { newDeliverySecret } from '@/lib/deliveryLink';
+import { newHorseDocSecret } from '@/lib/horseDocLink';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from '@/lib/showDataWrite';
@@ -4546,7 +4547,7 @@ const ExtraRvFeeRow = ({ fee, rvAreas, onUpdateField, onRemove }) => {
 
 // ── Main Dashboard ──
 
-const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onSaveDeliverySecrets, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, onUpdateDayNote, sectionSelectContainer, brandingContent }) => {
+const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUpdateBookingFields, onSaveDeliverySecrets, onSaveHorseDocSecrets, projectId, onUpdateBarns, onUpdateRvAreas, onUpdateCover, onAddBookingImmediate, onRemoveBookingImmediate, onUpdateDayNote, sectionSelectContainer, brandingContent }) => {
     const pd = show.project_data || {};
     const { toast } = useToast();
     const { profile, refreshProfile } = useAuth();
@@ -5271,6 +5272,25 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     const updateBooking = async (bookingId, field, value) => {
         setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, [field]: value } : b));
         if (field !== 'status' && onUpdateBookingFields) await onUpdateBookingFields(bookingId, { [field]: value });
+    };
+
+    // Email exhibitors their private link to upload horse health papers. The links are
+    // created first (saved to the show), then the edge function sends the emails from the
+    // SAVED bookings. Each booking that was emailed is stamped with the date so the office
+    // sees "Last requested". Returns { sent, skipped } for the caller to report.
+    const requestHorseDocs = async (bookingIds) => {
+        const ids = [...new Set((bookingIds || []).filter(Boolean))];
+        if (ids.length === 0) return { sent: [], skipped: [] };
+        await onSaveHorseDocSecrets(ids);
+        const { data, error } = await invokeAsUser('send-horse-doc-request', {
+            projectId, bookingIds: ids, origin: window.location.origin,
+        });
+        if (error || !data?.success) throw new Error(data?.error || error?.message || 'Could not send the emails.');
+        const stamp = new Date().toISOString();
+        for (const s of data.sent || []) {
+            await updateBooking(s.bookingId, 'horseDocsRequestedAt', stamp);
+        }
+        return { sent: data.sent || [], skipped: data.skipped || [] };
     };
 
     // Append one line to a booking's Activity Log (Master List's expanded row).
@@ -7302,6 +7322,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         showName={show.project_name || 'Show'}
                         showId={show.id}
                         deliverySecrets={pd.deliverySecrets || {}}
+                        horseDocSecrets={pd.horseDocSecrets || {}}
+                        onEnsureHorseDocSecret={async (bookingId) => (await onSaveHorseDocSecrets([bookingId]))?.[bookingId] || ''}
+                        onRequestHorseDocs={requestHorseDocs}
                         onUpdateField={(bookingId, field, value) => updateBooking(bookingId, field, value)}
                         onRecordPayment={recordPayment}
                         onStatusChange={changeBookingStatus}
@@ -8568,6 +8591,20 @@ const HousingGroundsManagerPage = () => {
         });
     }, [selectedShowId, commitShowData]);
 
+    // Horse health upload links (one secret per booking, created the first time the
+    // office copies or emails that booking's link). Kept in their own map on the show,
+    // never on the booking. A secret that already exists is kept, so a link sent
+    // earlier keeps working. Returns the secret for that booking.
+    const saveHorseDocSecrets = useCallback(async (bookingIds) => {
+        if (!selectedShowId || !Array.isArray(bookingIds) || bookingIds.length === 0) return {};
+        return commitShowData(latest => {
+            const have = latest.horseDocSecrets || {};
+            const fresh = Object.fromEntries(bookingIds.filter(id => id && !have[id]).map(id => [id, newHorseDocSecret()]));
+            const merged = { ...fresh, ...have };
+            return { data: { ...latest, horseDocSecrets: merged }, result: merged };
+        });
+    }, [selectedShowId, commitShowData]);
+
     // Delete a booking immediately (no Save All needed). The delete button in the
     // Bookings list only ever updated local React state — a deleted booking looked
     // gone until the next remote refresh silently brought it right back, because
@@ -8726,7 +8763,7 @@ const HousingGroundsManagerPage = () => {
             <Helmet><title>Housing & Grounds Manager - Horse Show Manager</title></Helmet>
             <div className="min-h-screen bg-background">
                 <Navigation />
-                <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+                <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
                     <PageHeader title="Housing & Grounds Manager" subtitle={selectedShow?.project_name} backTo={showId ? `/horse-show-manager/show/${showId}` : '/horse-show-manager'} />
 
                     {selectedShow && <div ref={setSectionSelectMount} className="mb-4" />}
@@ -8806,6 +8843,8 @@ const HousingGroundsManagerPage = () => {
                                 onUpdateBookingStatus={updateBookingStatusImmediate}
                                 onUpdateBookingFields={updateBookingFieldsImmediate}
                                 onSaveDeliverySecrets={saveDeliverySecrets}
+                                onSaveHorseDocSecrets={saveHorseDocSecrets}
+                                projectId={selectedShowId}
                                 onUpdateBarns={updateBarnsImmediate}
                                 onUpdateRvAreas={updateRvAreasImmediate}
                                 onUpdateCover={updateCoverImageImmediate}

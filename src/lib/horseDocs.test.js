@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getHorseSlots, healthStatus, withHorseDoc, withHorseName, horseDocPath } from './horseDocs';
+import { getHorseSlots, healthStatus, withHorseDoc, withHorseName, horseDocPath, docStoragePath, describeRequestResult, isRequestable } from './horseDocs';
 
 const doc = (p) => ({ path: p, name: `${p}.pdf`, uploadedAt: '2026-11-19T00:00:00Z' });
 
@@ -46,6 +46,43 @@ describe('withHorseDoc / withHorseName', () => {
   it('stores a trimmed name', () => {
     expect(withHorseName([], 0, '  Smart Cash ', 1)[0].name).toBe('Smart Cash');
   });
+});
+
+describe('docStoragePath', () => {
+  it('keeps a manager upload path as is', () => expect(docStoragePath({ path: 's/b/x.pdf' }, 's', 'b', 'sec')).toBe('s/b/x.pdf'));
+  it('rebuilds the folder for a link upload from the secret', () => {
+    expect(docStoragePath({ file: 'u.pdf' }, 's', 'b', 'sec')).toBe('s/b/sec/u.pdf');
+  });
+  it('returns null when the secret is unknown', () => expect(docStoragePath({ file: 'u.pdf' }, 's', 'b', '')).toBeNull());
+  it('counts a link upload as a paper', () => {
+    const s = getHorseSlots({ horseDocs: [{ certificate: { file: 'a.pdf' }, coggins: { file: 'b.pdf' } }] }, 1, []);
+    expect(healthStatus(s).state).toBe('confirmed');
+  });
+});
+
+describe('describeRequestResult', () => {
+  it('says how many were emailed', () => {
+    expect(describeRequestResult({ sent: [{}, {}], skipped: [] })).toBe('Email sent to 2 exhibitors.');
+  });
+  it('explains what was skipped', () => {
+    const msg = describeRequestResult({ sent: [{}], skipped: [{ reason: 'no_email' }, { reason: 'no_email' }, { reason: 'complete' }] });
+    expect(msg).toBe('Email sent to 1 exhibitor. Skipped: 2 no email on file, 1 already complete.');
+  });
+  it('handles nothing sent', () => expect(describeRequestResult({ sent: [], skipped: [{ reason: 'complete' }] })).toBe('No emails were sent. Skipped: 1 already complete.'));
+});
+
+describe('isRequestable', () => {
+  const row = (o) => ({ email: 'a@b.com', status: 'confirmed', health: { state: 'missing' }, ...o });
+  it('needs an email', () => expect(isRequestable(row({ email: '' }))).toBe(false));
+  it('skips complete and cancelled', () => {
+    expect(isRequestable(row({ health: { state: 'confirmed' } }))).toBe(false);
+    expect(isRequestable(row({ status: 'cancelled' }))).toBe(false);
+  });
+  it('accepts missing and partial', () => {
+    expect(isRequestable(row())).toBe(true);
+    expect(isRequestable(row({ health: { state: 'partial' } }))).toBe(true);
+  });
+  it('skips bookings with no horses', () => expect(isRequestable(row({ health: { state: 'none' } }))).toBe(false));
 });
 
 describe('horseDocPath', () => {

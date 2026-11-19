@@ -21,7 +21,8 @@ import { formatNightDates } from '@/lib/stallNights';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getSupplyStage, getSupplyLastUpdate, getItemStatus, SUPPLY_STAGES } from '@/lib/supplyStatus';
-import { getHorseSlots, healthStatus } from '@/lib/horseDocs';
+import { getHorseSlots, healthStatus, describeRequestResult, isRequestable } from '@/lib/horseDocs';
+import { useToast } from '@/components/ui/use-toast';
 import { HorseHealthDocs, HealthBadge } from '@/components/housing/HorseHealthDocs';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -206,6 +207,7 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
         horseSlots,
         health,
         healthSort: health.sort,
+        docsRequestedAt: booking.horseDocsRequestedAt || '',
         // Robert: booking status is separate from payment — a paid booking
         // that hasn't been confirmed yet still reads Pending.
         status: booking.status || 'pending',
@@ -401,6 +403,7 @@ const SupplyFulfillmentBox = ({ row, isCurrent, showTitle, showId, deliverySecre
 // can hold local draft/confirm state without re-rendering the whole table.
 const MasterListRow = ({
     r, isOpen, onToggleExpand, supplyOrders = [], showId, deliverySecrets = {},
+    horseDocSecrets = {}, onEnsureHorseDocSecret, onRequestHorseDocs,
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
 }) => {
     const booking = r.booking;
@@ -850,6 +853,11 @@ const MasterListRow = ({
                                         showId={showId}
                                         bookingId={booking.id}
                                         horseDocs={booking.horseDocs}
+                                        secret={horseDocSecrets?.[booking.id]}
+                                        onEnsureSecret={onEnsureHorseDocSecret ? () => onEnsureHorseDocSecret(booking.id) : null}
+                                        onRequest={onRequestHorseDocs ? () => onRequestHorseDocs([booking.id]) : null}
+                                        canEmail={!!r.email}
+                                        requestedAt={r.docsRequestedAt}
                                         onChange={(next) => onUpdateField?.(booking.id, 'horseDocs', next)}
                                     />
                                 </div>
@@ -1042,6 +1050,7 @@ const MasterListRow = ({
 
 const MasterListPanel = ({
     bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show', showId, deliverySecrets = {},
+    horseDocSecrets = {}, onEnsureHorseDocSecret, onRequestHorseDocs,
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
     addBookingSlot,
 }) => {
@@ -1126,6 +1135,30 @@ const MasterListPanel = ({
         });
         return list;
     }, [rows, search, statusFilter, paymentFilter, assignFilter, supplyFilter, sort]);
+
+    // "Request all unverified": everyone in the CURRENT filter who still has papers
+    // missing and can be emailed. A confirm box shows the count before anything is sent.
+    const { toast } = useToast();
+    const [confirmRequestAll, setConfirmRequestAll] = useState(false);
+    const [requestingAll, setRequestingAll] = useState(false);
+    const requestables = useMemo(() => filtered.filter(isRequestable), [filtered]);
+    const noEmailMissing = useMemo(
+        () => filtered.filter(r => !r.email && r.status !== 'cancelled' && (r.health.state === 'missing' || r.health.state === 'partial')).length,
+        [filtered]
+    );
+    const sendRequestAll = async () => {
+        setConfirmRequestAll(false);
+        setRequestingAll(true);
+        try {
+            const result = await onRequestHorseDocs(requestables.map(r => r.booking.id));
+            const sentSome = (result?.sent || []).length > 0;
+            toast({ title: sentSome ? 'Requests sent' : 'Nothing was sent', description: describeRequestResult(result), variant: sentSome ? undefined : 'destructive' });
+        } catch (e) {
+            toast({ title: 'Could not send the requests', description: e.message, variant: 'destructive' });
+        } finally {
+            setRequestingAll(false);
+        }
+    };
 
     const totals = useMemo(() => filtered.reduce((t, r) => ({
         stalls: t.stalls + r.stalls,
@@ -1420,6 +1453,14 @@ const MasterListPanel = ({
                     </SelectContent>
                 </Select>
                 <div className="flex-1" />
+                {onRequestHorseDocs && (
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setConfirmRequestAll(true)}
+                        disabled={requestables.length === 0 || requestingAll}
+                        title="Request all unverified: email every exhibitor who still has horse health papers missing">
+                        {requestingAll ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Mail className="h-3.5 w-3.5 mr-1.5" />}
+                        Request docs{requestables.length > 0 ? ` (${requestables.length})` : ''}
+                    </Button>
+                )}
                 <Button variant="outline" size="sm" className="h-8 text-xs" onClick={exportExcel} disabled={filtered.length === 0}>
                     <Download className="h-3.5 w-3.5 mr-1.5" /> Excel
                 </Button>
@@ -1428,6 +1469,20 @@ const MasterListPanel = ({
                 </Button>
                 {addBookingSlot}
             </div>
+
+            <ConfirmationDialog
+                isOpen={confirmRequestAll}
+                onClose={() => setConfirmRequestAll(false)}
+                onConfirm={sendRequestAll}
+                title={`Email ${requestables.length} ${requestables.length === 1 ? 'exhibitor' : 'exhibitors'}?`}
+                description={
+                    `Each one gets an email with a private link to upload a Health Certificate and a Coggins for their horses. `
+                    + `Only exhibitors who still have papers missing are included (${requestables.length} in the current list)`
+                    + (noEmailMissing > 0 ? `; ${noEmailMissing} more cannot be emailed because they have no email on file.` : '.')
+                }
+                confirmText="Send emails"
+                cancelText="Cancel"
+            />
 
             {rows.length === 0 ? (
                 <Card>
@@ -1465,6 +1520,9 @@ const MasterListPanel = ({
                                     supplyOrders={supplyOrdersByEmail.get(customerKey(r)) || []}
                                     showId={showId}
                                     deliverySecrets={deliverySecrets}
+                                    horseDocSecrets={horseDocSecrets}
+                                    onEnsureHorseDocSecret={onEnsureHorseDocSecret}
+                                    onRequestHorseDocs={onRequestHorseDocs}
                                     onUpdateField={onUpdateField}
                                     onRecordPayment={onRecordPayment}
                                     onStatusChange={onStatusChange}

@@ -1,12 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { FileText, Download, Upload, Loader2, Trash2 } from 'lucide-react';
+import { FileText, Download, Upload, Loader2, Trash2, Link2, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
 import { useToast } from '@/components/ui/use-toast';
-import { HORSE_DOC_KINDS, HORSE_DOCS_BUCKET, horseDocPath, withHorseDoc } from '@/lib/horseDocs';
+import { HORSE_DOC_KINDS, HORSE_DOCS_BUCKET, horseDocPath, withHorseDoc, docStoragePath, describeRequestResult } from '@/lib/horseDocs';
+import { buildHorseDocUrl } from '@/lib/horseDocLink';
 
 const STATUS_STYLE = {
     confirmed: 'bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-500/15 dark:text-emerald-300',
@@ -28,16 +29,19 @@ export const HealthBadge = ({ health }) => {
 };
 
 // One paper of one horse: View + Download when it is there, Upload when it is not.
-const DocCell = ({ slot, kind, showId, bookingId, horseDocs, slotCount, onChange, readOnly }) => {
+const DocCell = ({ slot, kind, showId, bookingId, secret, horseDocs, slotCount, onChange, readOnly }) => {
     const { toast } = useToast();
     const inputRef = useRef(null);
     const [busy, setBusy] = useState(false);
     const doc = slot[kind.key];
+    // A paper the exhibitor sent through their link only keeps a file name; rebuild the folder.
+    const storagePath = docStoragePath(doc, showId, bookingId, secret);
 
     const signedUrl = async (download) => {
+        if (!storagePath) throw new Error('This file cannot be found.');
         const { data, error } = await supabase.storage
             .from(HORSE_DOCS_BUCKET)
-            .createSignedUrl(doc.path, 3600, download ? { download: doc.name || true } : undefined);
+            .createSignedUrl(storagePath, 3600, download ? { download: doc.name || true } : undefined);
         if (error) throw error;
         return data.signedUrl;
     };
@@ -84,7 +88,7 @@ const DocCell = ({ slot, kind, showId, bookingId, horseDocs, slotCount, onChange
             if (error) throw error;
             onChange(withHorseDoc(horseDocs, slot.index, kind.key, { path, name: file.name, uploadedAt: new Date().toISOString() }, slotCount));
             // A replaced file is removed so old papers do not pile up in storage.
-            if (doc?.path) await supabase.storage.from(HORSE_DOCS_BUCKET).remove([doc.path]);
+            if (storagePath) await supabase.storage.from(HORSE_DOCS_BUCKET).remove([storagePath]);
         } catch (e) {
             toast({ title: 'Upload failed', description: e.message, variant: 'destructive' });
         } finally {
@@ -97,7 +101,7 @@ const DocCell = ({ slot, kind, showId, bookingId, horseDocs, slotCount, onChange
         setBusy(true);
         try {
             onChange(withHorseDoc(horseDocs, slot.index, kind.key, null, slotCount));
-            await supabase.storage.from(HORSE_DOCS_BUCKET).remove([doc.path]);
+            if (storagePath) await supabase.storage.from(HORSE_DOCS_BUCKET).remove([storagePath]);
         } catch (e) {
             toast({ title: 'Could not remove the file', description: e.message, variant: 'destructive' });
         } finally {
@@ -140,9 +144,68 @@ const DocCell = ({ slot, kind, showId, bookingId, horseDocs, slotCount, onChange
  * The "Health Documents" block of an open Master List row: one line per horse,
  * with a Health Certificate and a Coggins column.
  */
-export const HorseHealthDocs = ({ slots, showId, bookingId, horseDocs, onChange, readOnly }) => {
+const fmtRequested = (iso) => {
+    try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return ''; }
+};
+
+export const HorseHealthDocs = ({ slots, showId, bookingId, secret, onEnsureSecret, onRequest, canEmail, requestedAt, horseDocs, onChange, readOnly }) => {
+    const { toast } = useToast();
+    const [linking, setLinking] = useState(false);
+    const [requesting, setRequesting] = useState(false);
+
+    const allDone = slots.length > 0 && slots.every((s) => s.certificate && s.coggins);
+    const sendRequest = async () => {
+        setRequesting(true);
+        try {
+            const result = await onRequest();
+            const sentOne = (result?.sent || []).length > 0;
+            toast({ title: sentOne ? 'Request sent' : 'Nothing was sent', description: describeRequestResult(result), variant: sentOne ? undefined : 'destructive' });
+        } catch (e) {
+            toast({ title: 'Could not send the request', description: e.message, variant: 'destructive' });
+        } finally {
+            setRequesting(false);
+        }
+    };
+
+    // The exhibitor's private upload link. The secret is created the first time it is asked for.
+    const copyLink = async () => {
+        setLinking(true);
+        try {
+            const s = secret || (onEnsureSecret ? await onEnsureSecret() : '');
+            if (!s) throw new Error('Could not create the link.');
+            const url = buildHorseDocUrl({ origin: window.location.origin, showId, bookingId, secret: s });
+            try {
+                await navigator.clipboard.writeText(url);
+                toast({ title: 'Upload link copied', description: 'Send it to the exhibitor. They can upload without logging in.' });
+            } catch {
+                window.prompt('Copy this link and send it to the exhibitor:', url);
+            }
+        } catch (e) {
+            toast({ title: 'Could not create the link', description: e.message, variant: 'destructive' });
+        } finally {
+            setLinking(false);
+        }
+    };
+
     if (slots.length === 0) return <p className="italic text-muted-foreground">No horses on this booking</p>;
     return (
+        <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+            {onRequest && !allDone && (
+                <Button type="button" size="sm" className="h-7 px-2 text-[11px] gap-1" disabled={requesting || !canEmail}
+                    title={canEmail ? 'Email this exhibitor their upload link' : 'No email on file for this exhibitor'} onClick={sendRequest}>
+                    {requesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mail className="h-3 w-3" />} Request health docs
+                </Button>
+            )}
+            {onEnsureSecret && (
+                <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px] gap-1" disabled={linking} onClick={copyLink}>
+                    {linking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Link2 className="h-3 w-3" />} Copy upload link
+                </Button>
+            )}
+        </div>
+        {requestedAt && !allDone && (
+            <p className="text-[10px] text-muted-foreground">Last requested {fmtRequested(requestedAt)}</p>
+        )}
         <div className="rounded-md border overflow-hidden bg-background">
             <div className="grid grid-cols-[1.2fr_1fr_1fr] gap-x-2 px-2 py-1 bg-muted/60 text-[11px] font-semibold border-b">
                 <span>Horse</span>
@@ -154,11 +217,12 @@ export const HorseHealthDocs = ({ slots, showId, bookingId, horseDocs, onChange,
                         {slot.name || `Horse ${slot.index + 1} — name not entered`}
                     </span>
                     {HORSE_DOC_KINDS.map((k) => (
-                        <DocCell key={k.key} slot={slot} kind={k} showId={showId} bookingId={bookingId}
+                        <DocCell key={k.key} slot={slot} kind={k} showId={showId} bookingId={bookingId} secret={secret}
                             horseDocs={horseDocs} slotCount={slots.length} onChange={onChange} readOnly={readOnly} />
                     ))}
                 </div>
             ))}
+        </div>
         </div>
     );
 };
