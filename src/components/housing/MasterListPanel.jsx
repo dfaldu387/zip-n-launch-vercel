@@ -21,6 +21,8 @@ import { formatNightDates } from '@/lib/stallNights';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getSupplyStage, getSupplyLastUpdate, getItemStatus, SUPPLY_STAGES } from '@/lib/supplyStatus';
+import { getHorseSlots, healthStatus } from '@/lib/horseDocs';
+import { HorseHealthDocs, HealthBadge } from '@/components/housing/HorseHealthDocs';
 
 const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
@@ -124,6 +126,8 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
     const rvSpots = getAssignedRvSpotsForBooking(booking, rvWithSpots);
     const supplies = getSupplies(booking);
     const horseNamesArr = getHorseNames(booking);
+    const horseSlots = getHorseSlots(booking, getHorseCount(booking), horseNamesArr);
+    const health = healthStatus(horseSlots);
     const supplyStage = getSupplyStage(booking);
     // Live-priced, same as the invoice/balance-due figures elsewhere in this
     // page — never the stored totalAmount, which freezes at booking time and
@@ -199,6 +203,9 @@ const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
         horses: getHorseCount(booking),
         horseNamesArr,
         horseNamesStr: horseNamesArr.join(', '),
+        horseSlots,
+        health,
+        healthSort: health.sort,
         // Robert: booking status is separate from payment — a paid booking
         // that hasn't been confirmed yet still reads Pending.
         status: booking.status || 'pending',
@@ -255,6 +262,7 @@ const COLUMNS = [
     { key: 'rv', label: 'RV', align: 'center' },
     { key: 'suppliesStr', label: 'Supplies', align: 'left' },
     { key: 'horses', label: 'Horses', align: 'center' },
+    { key: 'healthSort', label: 'Health Documents', align: 'center' },
     { key: 'status', label: 'Status', align: 'left' },
     { key: 'paymentStatus', label: 'Payment', align: 'left' },
     { key: 'amount', label: 'Amount', align: 'right' },
@@ -606,6 +614,7 @@ const MasterListRow = ({
                         <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{r.horseNamesStr}</div>
                     )}
                 </td>
+                <td className="px-3 py-2 text-center"><HealthBadge health={r.health} /></td>
                 <td className="px-3 py-2">
                     <Badge className={cn('text-[10px] capitalize', STATUS_STYLES[r.status] || '')}>
                         {r.status.replace('_', ' ')}
@@ -687,7 +696,7 @@ const MasterListRow = ({
             />
             {isOpen && (
                 <tr className="border-b bg-muted/30">
-                    <td colSpan={12} className="px-4 py-3 text-xs">
+                    <td colSpan={13} className="px-4 py-3 text-xs">
                         <div className="space-y-2.5">
                             {/* Sticky identity bar — stays under the table header while the detail scrolls,
                                 so you always see whose booking this is (Robert 2026-09-24). */}
@@ -803,7 +812,7 @@ const MasterListRow = ({
 
                             {/* Vertical, labelled columns (Robert 2026-09-24): every block reads
                                 top-to-bottom under its own heading, like the Status/Payment columns. */}
-                            <div className="grid gap-x-4 gap-y-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-[1.5fr_1.5fr_1fr_1fr_0.8fr_0.8fr_1.2fr]">
+                            <div className="grid gap-x-4 gap-y-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-[1.4fr_1.4fr_0.9fr_2.2fr_1fr_0.8fr_0.8fr_1.2fr]">
                                 <div className="space-y-1 min-w-0">
                                     <p className="font-semibold text-foreground">Contact Information</p>
                                     <p className="inline-flex items-center gap-1.5"><Users className="h-3 w-3 text-muted-foreground shrink-0" /> {r.name}</p>
@@ -832,6 +841,17 @@ const MasterListRow = ({
                                             {r.horseNamesArr.map((h, i) => <li key={i}>{i + 1}. {h}</li>)}
                                         </ol>
                                         : <p className="italic text-muted-foreground">None listed</p>}
+                                </div>
+
+                                <div className="space-y-1 min-w-0 col-span-2 md:col-span-2 xl:col-span-1">
+                                    <p className="font-semibold text-foreground">Health Documents</p>
+                                    <HorseHealthDocs
+                                        slots={r.horseSlots}
+                                        showId={showId}
+                                        bookingId={booking.id}
+                                        horseDocs={booking.horseDocs}
+                                        onChange={(next) => onUpdateField?.(booking.id, 'horseDocs', next)}
+                                    />
                                 </div>
 
                                 <div className="space-y-1 min-w-0">
@@ -1465,6 +1485,7 @@ const MasterListPanel = ({
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.rv}</td>
                                     <td className="px-3 py-2 tabular-nums">{totals.supplies ? `${totals.supplies} items` : ''}</td>
                                     <td className="px-3 py-2 text-center tabular-nums">{totals.horses}</td>
+                                    <td className="px-3 py-2" />
                                     <td className="px-3 py-2" />
                                     <td className="px-3 py-2" />
                                     <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(totals.amount)}</td>
