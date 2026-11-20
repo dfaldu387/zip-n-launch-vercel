@@ -1,12 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { FileText, Download, Upload, Loader2, Trash2, Link2, Mail } from 'lucide-react';
+import { FileText, Download, Upload, Loader2, Trash2, Link2, Mail, Pencil, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabaseClient';
 import { useToast } from '@/components/ui/use-toast';
-import { HORSE_DOC_KINDS, HORSE_DOCS_BUCKET, horseDocPath, withHorseDoc, docStoragePath, describeRequestResult } from '@/lib/horseDocs';
+import { getRequiredKinds, HORSE_DOC_KINDS, HORSE_DOCS_BUCKET, horseDocPath, withHorseDoc, docStoragePath, describeRequestResult, buildHorsePatch, renameHorse, addHorse, removeHorse, MAX_HORSES, MAX_HORSE_NAME } from '@/lib/horseDocs';
 import { buildHorseDocUrl } from '@/lib/horseDocLink';
 
 const STATUS_STYLE = {
@@ -18,6 +19,7 @@ const STATUS_STYLE = {
 /** Badge for the Health Documents column. */
 export const HealthBadge = ({ health }) => {
     if (health.state === 'none') return <span className="text-muted-foreground">—</span>;
+    if (health.state === 'notrequired') return <span className="text-[10px] text-muted-foreground whitespace-nowrap">Not required</span>;
     const label = health.state === 'confirmed' ? 'Confirmed'
         : health.state === 'missing' ? 'Missing'
         : `${health.done} of ${health.total}`;
@@ -110,7 +112,7 @@ const DocCell = ({ slot, kind, showId, bookingId, secret, horseDocs, slotCount, 
     };
 
     return (
-        <div className="flex items-center gap-1 min-h-[28px]">
+        <div className="flex flex-wrap items-center gap-1 min-h-[28px]">
             <input ref={inputRef} type="file" accept="application/pdf,image/*" className="hidden" onChange={(e) => upload(e.target.files?.[0])} />
             {busy ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : doc ? (
                 <>
@@ -148,12 +150,56 @@ const fmtRequested = (iso) => {
     try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return ''; }
 };
 
-export const HorseHealthDocs = ({ slots, showId, bookingId, secret, onEnsureSecret, onRequest, canEmail, requestedAt, horseDocs, onChange, readOnly }) => {
+export const HorseHealthDocs = ({ slots, showId, bookingId, secret, onEnsureSecret, onRequest, canEmail, requestedAt, horseDocs, onChange, onEditHorses, readOnly, kinds = getRequiredKinds() }) => {
     const { toast } = useToast();
     const [linking, setLinking] = useState(false);
     const [requesting, setRequesting] = useState(false);
+    // Editing the horse list (Robert 2026-11-19): rename, add, remove.
+    const [editIndex, setEditIndex] = useState(null);
+    const [draft, setDraft] = useState('');
+    const [confirmIndex, setConfirmIndex] = useState(null);
+    const [adding, setAdding] = useState(false);
+    const [newName, setNewName] = useState('');
+    const canEdit = !!onEditHorses && !readOnly;
 
-    const allDone = slots.length > 0 && slots.every((s) => s.certificate && s.coggins);
+    const startEdit = (slot) => { setEditIndex(slot.index); setDraft(slot.name); setConfirmIndex(null); };
+    const saveEdit = () => {
+        const slot = slots[editIndex];
+        const name = draft.trim();
+        setEditIndex(null);
+        if (!slot || !name || name === slot.name) return;
+        onEditHorses(buildHorsePatch(renameHorse(slots, slot.index, name)),
+            `Horse renamed: ${slot.name || `Horse ${slot.index + 1}`} to ${name}`);
+    };
+    const doAdd = () => {
+        const name = newName.trim();
+        if (!name) return;
+        const next = addHorse(slots, name);
+        if (!next) { toast({ title: 'Horse limit reached', description: `A booking can have up to ${MAX_HORSES} horses.`, variant: 'destructive' }); return; }
+        onEditHorses(buildHorsePatch(next), `Horse added: ${name}`);
+        setNewName(''); setAdding(false);
+    };
+    const doRemove = async (slot) => {
+        const next = removeHorse(slots, slot.index);
+        setConfirmIndex(null);
+        if (!next) { toast({ title: 'Cannot remove', description: 'A booking needs at least one horse.', variant: 'destructive' }); return; }
+        // Take the removed horse's uploaded papers out of storage too (best effort).
+        const files = HORSE_DOC_KINDS.map((k) => docStoragePath(slot[k.key], showId, bookingId, secret)).filter(Boolean);
+        onEditHorses(buildHorsePatch(next), `Horse removed: ${slot.name || `Horse ${slot.index + 1}`}`);
+        if (files.length) { try { await supabase.storage.from(HORSE_DOCS_BUCKET).remove(files); } catch { /* the file is simply left behind */ } }
+    };
+
+    const addRow = (
+        <div className="flex items-center gap-1.5">
+            <Input autoFocus value={newName} maxLength={MAX_HORSE_NAME} placeholder="New horse name" className="h-7 text-[11px] px-2 max-w-[180px]"
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') doAdd(); if (e.key === 'Escape') { setAdding(false); setNewName(''); } }} />
+            <Button type="button" size="sm" className="h-7 px-2 text-[11px]" disabled={!newName.trim()} onClick={doAdd}>Add</Button>
+            <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => { setAdding(false); setNewName(''); }}>Cancel</Button>
+        </div>
+    );
+
+    const allDone = slots.length > 0 && slots.every((s) => kinds.every((k) => s[k.key]));
     const sendRequest = async () => {
         setRequesting(true);
         try {
@@ -187,11 +233,22 @@ export const HorseHealthDocs = ({ slots, showId, bookingId, secret, onEnsureSecr
         }
     };
 
-    if (slots.length === 0) return <p className="italic text-muted-foreground">No horses on this booking</p>;
+    if (slots.length === 0) {
+        return (
+            <div className="space-y-1.5">
+                <p className="italic text-muted-foreground">No horses on this booking</p>
+                {canEdit && (adding ? addRow : (
+                    <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px] gap-1" onClick={() => setAdding(true)}>
+                        <Plus className="h-3 w-3" /> Add horse
+                    </Button>
+                ))}
+            </div>
+        );
+    }
     return (
         <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
-            {onRequest && !allDone && (
+            {onRequest && !allDone && kinds.length > 0 && (
                 <Button type="button" size="sm" className="h-7 px-2 text-[11px] gap-1" disabled={requesting || !canEmail}
                     title={canEmail ? 'Email this exhibitor their upload link' : 'No email on file for this exhibitor'} onClick={sendRequest}>
                     {requesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mail className="h-3 w-3" />} Request health docs
@@ -207,22 +264,58 @@ export const HorseHealthDocs = ({ slots, showId, bookingId, secret, onEnsureSecr
             <p className="text-[10px] text-muted-foreground">Last requested {fmtRequested(requestedAt)}</p>
         )}
         <div className="rounded-md border overflow-hidden bg-background">
-            <div className="grid grid-cols-[1.2fr_1fr_1fr] gap-x-2 px-2 py-1 bg-muted/60 text-[11px] font-semibold border-b">
-                <span>Horse</span>
-                {HORSE_DOC_KINDS.map((k) => <span key={k.key}>{k.label}</span>)}
-            </div>
             {slots.map((slot) => (
-                <div key={slot.index} className="grid grid-cols-[1.2fr_1fr_1fr] gap-x-2 px-2 py-1.5 items-center border-b last:border-b-0">
-                    <span className={cn('truncate', !slot.name && 'italic text-muted-foreground')}>
-                        {slot.name || `Horse ${slot.index + 1} — name not entered`}
-                    </span>
-                    {HORSE_DOC_KINDS.map((k) => (
-                        <DocCell key={k.key} slot={slot} kind={k} showId={showId} bookingId={bookingId} secret={secret}
-                            horseDocs={horseDocs} slotCount={slots.length} onChange={onChange} readOnly={readOnly} />
-                    ))}
+                <div key={slot.index} className="px-2 py-1.5 space-y-1 border-b last:border-b-0">
+                    {editIndex === slot.index ? (
+                        <Input autoFocus value={draft} maxLength={MAX_HORSE_NAME} className="h-7 text-[11px] px-2"
+                            onChange={(e) => setDraft(e.target.value)} onBlur={saveEdit}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditIndex(null); }} />
+                    ) : confirmIndex === slot.index ? (
+                        <span className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span>Remove <strong>{slot.name || `Horse ${slot.index + 1}`}</strong>{HORSE_DOC_KINDS.some((k) => slot[k.key]) ? ' and its papers' : ''}?</span>
+                            <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[11px]" onClick={() => setConfirmIndex(null)}>No</Button>
+                            <Button type="button" size="sm" className="h-6 px-2 text-[11px] bg-rose-600 hover:bg-rose-700 text-white" onClick={() => doRemove(slot)}>Yes, remove</Button>
+                        </span>
+                    ) : (
+                        <span className="flex items-center gap-1 min-w-0">
+                            <span title={slot.name} className={cn('min-w-0 break-words', !slot.name && 'italic text-muted-foreground')}>
+                                {slot.name || `Horse ${slot.index + 1} — name not entered`}
+                            </span>
+                            {canEdit && (
+                                <>
+                                    <button type="button" onClick={() => startEdit(slot)} title="Edit name" aria-label="Edit horse name"
+                                        className="shrink-0 inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted">
+                                        <Pencil className="h-3 w-3" />
+                                    </button>
+                                    {slots.length > 1 && (
+                                        <button type="button" onClick={() => { setConfirmIndex(slot.index); setEditIndex(null); }} title="Remove this horse" aria-label="Remove horse"
+                                            className="shrink-0 inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-rose-600 hover:bg-muted">
+                                            <X className="h-3 w-3" />
+                                        </button>
+                                    )}
+                                </>
+                            )}
+                        </span>
+                    )}
+                    {confirmIndex !== slot.index && kinds.length > 0 && (
+                        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(kinds.length, 3)}, minmax(0, 1fr))` }}>
+                            {kinds.map((k) => (
+                                <div key={k.key} className="min-w-0">
+                                    <p className="text-[10px] text-muted-foreground leading-tight">{k.label}</p>
+                                    <DocCell slot={slot} kind={k} showId={showId} bookingId={bookingId} secret={secret}
+                                        horseDocs={horseDocs} slotCount={slots.length} onChange={onChange} readOnly={readOnly} />
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             ))}
         </div>
+        {canEdit && (adding ? addRow : (
+            <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px] gap-1" disabled={slots.length >= MAX_HORSES} onClick={() => setAdding(true)}>
+                <Plus className="h-3 w-3" /> Add horse
+            </Button>
+        ))}
         </div>
     );
 };

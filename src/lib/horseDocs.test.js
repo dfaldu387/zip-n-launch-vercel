@@ -1,7 +1,41 @@
 import { describe, it, expect } from 'vitest';
-import { getHorseSlots, healthStatus, withHorseDoc, withHorseName, horseDocPath, docStoragePath, describeRequestResult, isRequestable } from './horseDocs';
+import { getHorseSlots, healthStatus, withHorseDoc, withHorseName, horseDocPath, docStoragePath, describeRequestResult, isRequestable, buildHorsePatch, renameHorse, addHorse, removeHorse, MAX_HORSES, getRequiredKinds, normalizeRequiredDocs } from './horseDocs';
 
 const doc = (p) => ({ path: p, name: `${p}.pdf`, uploadedAt: '2026-11-19T00:00:00Z' });
+
+describe('editing horses', () => {
+  const booking = { horseCount: 3, horseNames: ['Dixie', 'Smart Cash', 'Roasting'], horseDocs: [{ certificate: doc('a') }, { coggins: doc('b') }, {}] };
+  const slots = () => getHorseSlots(booking, 3, booking.horseNames);
+
+  it('removing a horse takes its papers with it and keeps the others in order', () => {
+    const patch = buildHorsePatch(removeHorse(slots(), 1));
+    expect(patch.horseCount).toBe(2);
+    expect(patch.horseNames).toEqual(['Dixie', 'Roasting']);
+    expect(patch.horseDocs[0].certificate).toBeTruthy();
+    expect(patch.horseDocs.some((d) => d.coggins)).toBe(false);
+  });
+  it('renaming keeps papers and count', () => {
+    const patch = buildHorsePatch(renameHorse(slots(), 0, '  Dixie Two '));
+    expect(patch.horseNames[0]).toBe('Dixie Two');
+    expect(patch.horseDocs[0].certificate).toBeTruthy();
+    expect(patch.horseCount).toBe(3);
+  });
+  it('adding appends one horse with no papers', () => {
+    const patch = buildHorsePatch(addHorse(slots(), 'New One'));
+    expect(patch.horseCount).toBe(4);
+    expect(patch.horseNames[3]).toBe('New One');
+    expect(patch.horseDocs[3]).toEqual({ name: 'New One' });
+  });
+  it('the last horse cannot be removed and the list has a limit', () => {
+    expect(removeHorse(getHorseSlots({}, 1, ['A']), 0)).toBeNull();
+    expect(addHorse(Array.from({ length: MAX_HORSES }, () => ({ name: 'x' })), 'y')).toBeNull();
+  });
+  it('a blank horse in the middle does not shift the names after an edit', () => {
+    const edited = buildHorsePatch(renameHorse(getHorseSlots({}, 3, []), 2, 'Third'));
+    const again = getHorseSlots({ horseCount: 3, ...edited }, 3, edited.horseNames);
+    expect(again.map((s) => s.name)).toEqual(['', '', 'Third']);
+  });
+});
 
 describe('getHorseSlots', () => {
   it('makes one empty slot per horse even with no names', () => {
@@ -88,4 +122,30 @@ describe('isRequestable', () => {
 describe('horseDocPath', () => {
   it('builds a safe path', () => expect(horseDocPath('s1', 'b1', 'Vet Paper.PDF', 'u')).toBe('s1/b1/u.pdf'));
   it('refuses other file types', () => expect(horseDocPath('s1', 'b1', 'virus.exe', 'u')).toBeNull());
+});
+
+describe('required documents', () => {
+  const doc = (p) => ({ path: p, name: p });
+  const slots = (docs) => getHorseSlots({ horseDocs: docs }, docs.length, []);
+  it('a show that never chose asks for Certificate + Coggins', () => {
+    expect(getRequiredKinds(undefined).map((k) => k.key)).toEqual(['certificate', 'coggins']);
+    expect(normalizeRequiredDocs({ registration: true })).toEqual({ certificate: true, coggins: true, registration: true });
+  });
+  it('only the required papers count toward Confirmed', () => {
+    const s = slots([{ certificate: doc('a') }]);
+    expect(healthStatus(s).state).toBe('partial');                                   // default: Coggins missing
+    expect(healthStatus(s, getRequiredKinds({ coggins: false })).state).toBe('confirmed');
+  });
+  it('a registration paper counts once it is required', () => {
+    const s = slots([{ certificate: doc('a'), coggins: doc('b') }]);
+    expect(healthStatus(s, getRequiredKinds({ registration: true })).state).toBe('partial');
+  });
+  it('no required papers means "notrequired"', () => {
+    const none = getRequiredKinds({ certificate: false, coggins: false, registration: false });
+    expect(healthStatus(slots([{}]), none).state).toBe('notrequired');
+  });
+  it('removing a horse keeps its registration paper out of the others', () => {
+    const patch = buildHorsePatch(removeHorse(slots([{ registration: doc('r') }, {}]), 0));
+    expect(patch.horseDocs).toEqual([{ name: '' }]);
+  });
 });

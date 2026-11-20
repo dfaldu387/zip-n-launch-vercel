@@ -23,7 +23,7 @@ import {
     ScanLine, FileText, ImagePlus, Lock, Globe, Pencil,
     ChevronDown, ChevronLeft, ChevronRight, Clock, Phone, Mail, CheckCircle2, RefreshCw,
     ClipboardList, Package, Truck, ArrowUpDown, BarChart3, Printer, MoreHorizontal,
-    Map as MapIcon, List as ListIcon, Download, CalendarDays,
+    Map as MapIcon, List as ListIcon, Download, CalendarDays, Wrench,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { LinkToExistingShow } from '@/components/shared/LinkToExistingShow';
@@ -62,6 +62,7 @@ import SupplyDeliveryMap from '@/components/housing/SupplyDeliveryMap';
 // than with the page.
 const AnalyticsCharts = lazy(() => import('@/components/housing/AnalyticsCharts'));
 const HousingCalendarPanel = lazy(() => import('@/components/housing/HousingCalendarSwitch'));
+const MaintenancePanel = lazy(() => import('@/components/housing/MaintenancePanel'));
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getRequestedStallCount, getAssignedStallsForBooking, assignStallToBooking, unassignBookingStalls, getLiveBookingIds, isStallHeld } from '@/lib/stallAssignment';
 import { campingTypeDeleteBlock, bookedQtyByType, campingTypeLabel, paintCampingType, getCampingTypes, areaFieldsFromTypes, campingTypeTotal, updateCampingType, duplicateCampingType, removeCampingType, newCampingType, assignedCountByType } from '@/lib/rvCampingTypes';
@@ -75,6 +76,7 @@ import { SUPPLY_STAGES, baseItemName, stageIndexOf, isDelivered, getSupplyLineIt
 import { printLoadSheet } from '@/lib/loadSheetPrint';
 import { newDeliverySecret } from '@/lib/deliveryLink';
 import { newHorseDocSecret } from '@/lib/horseDocLink';
+import { normalizeRequiredDocs, HORSE_DOC_KINDS } from '@/lib/horseDocs';
 import { sendStallInvoice } from '@/lib/housingCheckout';
 import { nightsInRange } from '@/lib/stallNights';
 import { mergeBookingsForSave, createSerialQueue, fieldOrUnset } from '@/lib/showDataWrite';
@@ -4710,6 +4712,9 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
     //   'at_booking'    — exhibitor pre-pays online at the moment they book
     // Read by the public booking flow (pay now vs request) and by invoicing.
     const [billingMode, setBillingMode] = useState(() => pd.stallingService?.billingMode || 'invoice_after');
+    // Which papers each horse must have (Robert 2026-11-19). Saved with the show; read by the
+    // exhibitor upload page and the Master List's Health Documents column.
+    const [requiredDocs, setRequiredDocs] = useState(() => normalizeRequiredDocs(pd.stallingService?.requiredDocs));
     const [invoicingId, setInvoicingId] = useState(null); // booking currently being emailed a Stripe invoice
 
     // Who covers Stripe's card-processing fee on an online payment, once
@@ -6329,7 +6334,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             extraRvFees: fieldOrUnset(extraRvFees, b.extraRvFees),
             supportSpaces: fieldOrUnset(supportSpaces, b.supportSpaces),
             supplies: fieldOrUnset(supplies, b.supplies),
-            bookings: bookingsRef.current, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish,
+            bookings: bookingsRef.current, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, requiredDocs, processingFeeMode, chartPublish,
         }, opts);
         // What we just sent (or, for an unsent field, what this tab already believed
         // it to be) is now the newest thing THIS tab knows — resets the comparison
@@ -6337,7 +6342,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         baselineRef.current = { barns, extraStallFees, extraRvFees, rvAreas, supplies, supportSpaces };
         setLastSavedAt(new Date());
         setIsDirty(false);
-    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish]);
+    }, [onSave, barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, requiredDocs, processingFeeMode, chartPublish]);
 
     const handleSave = () => persist();
 
@@ -6351,7 +6356,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
         const t = setTimeout(() => { persist({ silent: true }); }, 1500);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish]);
+    }, [barns, extraStallFees, rvAreas, extraRvFees, supplies, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, requiredDocs, processingFeeMode, chartPublish]);
 
     // KPI row at the top of the dashboard — the cards shown change with whichever
     // section is picked in the dropdown, so each section highlights numbers that
@@ -6487,6 +6492,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
             ],
         },
         {
+            // Robert 11-19: grounds maintenance requests - acknowledge, finish, optionally publish.
+            id: 'maintenance', label: 'Grounds Maintenance', icon: Wrench,
+            items: [
+                { value: 'maintenance', label: 'Maintenance Requests' },
+            ],
+        },
+        {
             id: 'analytics', label: 'Analytics', icon: BarChart3,
             items: [
                 { value: 'analytics', label: 'Analytics' },
@@ -6521,7 +6533,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                 this generic row would just repeat the same numbers a second time. */}
             {activeSection === 'supplyorders' ? (
                 <SupplyOrderStatTiles {...supplyOrderCounts} />
-            ) : activeSection !== 'masterlist' && activeSection !== 'branding' && activeSection !== 'calendar' && (
+            ) : activeSection !== 'masterlist' && activeSection !== 'branding' && activeSection !== 'calendar' && activeSection !== 'maintenance' && (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                     {sectionStats.map((stat, i) => {
                         const palette = STAT_COLOR_PALETTE[i % STAT_COLOR_PALETTE.length];
@@ -6896,6 +6908,36 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                                 </div>
                             )}
                           </fieldset>
+                          {/* Required documents — which papers each horse must have (Robert 2026-11-19).
+                              Drives the exhibitor upload page and the Master List's Health Documents column.
+                              Left editable on a locked show: the office may change what it asks for at any time. */}
+                          <div className="min-w-0">
+                              <div className="rounded-lg border bg-muted/20 p-3 space-y-2.5">
+                                  <div className="flex items-center gap-2">
+                                      <FileText className="h-4 w-4 text-emerald-600" />
+                                      <h4 className="text-sm font-semibold">Required documents</h4>
+                                      <span className="text-[11px] text-muted-foreground">Papers each horse needs for this show</span>
+                                  </div>
+                                  <div className="grid gap-2 sm:grid-cols-3">
+                                      {HORSE_DOC_KINDS.map((k) => {
+                                          const on = !!requiredDocs[k.key];
+                                          return (
+                                              <label key={k.key} className={cn('flex items-center gap-2 rounded-lg border p-3 cursor-pointer transition',
+                                                  on ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500' : 'border-border hover:border-emerald-400/60 hover:bg-muted/40')}>
+                                                  <input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={on}
+                                                      onChange={(e) => setRequiredDocs((p) => ({ ...p, [k.key]: e.target.checked }))} />
+                                                  <span className="text-sm font-medium">{k.label}</span>
+                                              </label>
+                                          );
+                                      })}
+                                  </div>
+                                  <p className="text-[11px] text-muted-foreground">
+                                      {HORSE_DOC_KINDS.some((k) => requiredDocs[k.key])
+                                          ? 'Exhibitors are asked for the checked papers only. The Health Documents column in the Master List follows this.'
+                                          : 'No papers are required for this show. Exhibitors are not asked to upload anything.'}
+                                  </p>
+                              </div>
+                          </div>
                           {/* Payout account status + "Manage bank account" — deliberately OUTSIDE the
                               fieldset above (and the one reopened below). This isn't show data to
                               lock; it's the organizer's own Stripe account, so it has to stay
@@ -7325,6 +7367,8 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         horseDocSecrets={pd.horseDocSecrets || {}}
                         onEnsureHorseDocSecret={async (bookingId) => (await onSaveHorseDocSecrets([bookingId]))?.[bookingId] || ''}
                         onRequestHorseDocs={requestHorseDocs}
+                        onUpdateFields={updateBookingFieldsLocal}
+                        requiredDocs={requiredDocs}
                         onUpdateField={(bookingId, field, value) => updateBooking(bookingId, field, value)}
                         onRecordPayment={recordPayment}
                         onStatusChange={changeBookingStatus}
@@ -7385,7 +7429,7 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                         publishStatus={publishStatus}
                         onApplyChartPublish={async (next) => {
                             setChartPublish(next);
-                            await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish: next });
+                            await onSave({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees, moveInDate, moveOutDate, datesLocked, billingMode, requiredDocs, processingFeeMode, chartPublish: next });
                             setLastSavedAt(new Date());
                             setIsDirty(false);
                         }}
@@ -7893,6 +7937,13 @@ const StallingDashboard = ({ show, onSave, isSaving, onUpdateBookingStatus, onUp
                             📭 No bookings yet — charts fill in as exhibitors reserve.
                         </div>
                     )}
+                </TabsContent>
+
+                {/* ── Grounds Maintenance — requests list (own table; see MaintenancePanel) ── */}
+                <TabsContent value="maintenance" className="mt-4 space-y-4">
+                    <Suspense fallback={<div className="py-8 text-center text-sm text-muted-foreground">Loading requests…</div>}>
+                        <MaintenancePanel showId={show.id} />
+                    </Suspense>
                 </TabsContent>
 
                 {/* ── Calendar Tab — day-by-day stalls / RV / horses / pre-delivered supplies ── */}
@@ -8684,7 +8735,7 @@ const HousingGroundsManagerPage = () => {
         }
     }, [user, toast]);
 
-    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, processingFeeMode, chartPublish }, { silent = false } = {}) => {
+    const handleSave = async ({ barns, extraStallFees, rvAreas, extraRvFees, supportSpaces, supplies, bookings, publishStatus, manualFees: editedManualFees, moveInDate, moveOutDate, datesLocked, billingMode, requiredDocs, processingFeeMode, chartPublish }, { silent = false } = {}) => {
         if (!selectedShowId) return;
         setIsSaving(true);
         try {
@@ -8728,6 +8779,7 @@ const HousingGroundsManagerPage = () => {
                         moveOutDate: moveOutDate ?? latestSvc.moveOutDate ?? '',
                         datesLocked: datesLocked ?? latestSvc.datesLocked ?? false,
                         billingMode: billingMode ?? latestSvc.billingMode ?? 'invoice_after',
+                        requiredDocs: requiredDocs ?? latestSvc.requiredDocs ?? normalizeRequiredDocs(null),
                         processingFeeMode: processingFeeMode ?? latestSvc.processingFeeMode ?? 'show',
                         chartPublish: chartPublish ?? latestSvc.chartPublish ?? { enabled: false, layers: ['number', 'name', 'trainer'], perBarnPages: true },
                     },

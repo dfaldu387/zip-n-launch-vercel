@@ -7,10 +7,29 @@
 // A horse slot exists as soon as the booking says "N horses" — the exhibitor does not
 // have to type names yet. A name typed later is kept in horseDocs[i].name.
 
+// Every paper a horse can carry. Which of them a show actually asks for is the show's
+// "Required documents" setting (Fees tab), kept at stallingService.requiredDocs.
 export const HORSE_DOC_KINDS = [
   { key: 'certificate', label: 'Health Certificate' },
   { key: 'coggins', label: 'Coggins' },
+  { key: 'registration', label: 'Registration Papers' },
 ];
+
+// A show that never set the option keeps today's behaviour: Certificate + Coggins.
+export const DEFAULT_REQUIRED_DOCS = { certificate: true, coggins: true, registration: false };
+
+/** The three on/off flags, with any missing one filled from the default. */
+export const normalizeRequiredDocs = (r) => {
+  const out = {};
+  HORSE_DOC_KINDS.forEach((k) => { out[k.key] = typeof r?.[k.key] === 'boolean' ? r[k.key] : DEFAULT_REQUIRED_DOCS[k.key]; });
+  return out;
+};
+
+/** The paper types this show asks for, in display order. */
+export const getRequiredKinds = (r) => {
+  const flags = normalizeRequiredDocs(r);
+  return HORSE_DOC_KINDS.filter((k) => flags[k.key]);
+};
 
 export const HORSE_DOCS_BUCKET = 'horse-health-docs';
 
@@ -35,24 +54,30 @@ export const getHorseSlots = (booking, count = 0, names = []) => {
   const total = Math.max(Number(count) || 0, names.length, docs.length);
   return Array.from({ length: total }, (_, i) => ({
     index: i,
-    name: names[i] || docs[i]?.name || '',
+    // A name saved on the horse's own entry wins (even an empty one): after an edit the
+    // entries are the exact list, while `names` has blanks removed and can shift.
+    name: (typeof docs[i]?.name === 'string' ? docs[i].name : names[i]) || '',
     certificate: isDoc(docs[i]?.certificate) ? docs[i].certificate : null,
     coggins: isDoc(docs[i]?.coggins) ? docs[i].coggins : null,
+    registration: isDoc(docs[i]?.registration) ? docs[i].registration : null,
   }));
 };
 
 /**
- * Summary for the Health Documents column.
- *   none      no horses on the booking
- *   missing   no document uploaded for any horse
- *   partial   some, but not all, papers are in
- *   confirmed every horse has both papers
+ * Summary for the Health Documents column. Only the papers the show requires count
+ * (`kinds`, from getRequiredKinds; default = Certificate + Coggins).
+ *   none         no horses on the booking
+ *   notrequired  the show asks for no papers
+ *   missing      no required paper uploaded for any horse
+ *   partial      some, but not all, required papers are in
+ *   confirmed    every horse has every required paper
  */
-export const healthStatus = (slots) => {
+export const healthStatus = (slots, kinds = getRequiredKinds()) => {
   const total = slots.length;
   if (total === 0) return { state: 'none', done: 0, total: 0, sort: -1 };
-  const done = slots.filter((s) => s.certificate && s.coggins).length;
-  const anyDoc = slots.some((s) => s.certificate || s.coggins);
+  if (kinds.length === 0) return { state: 'notrequired', done: total, total, sort: 0 };
+  const done = slots.filter((s) => kinds.every((k) => s[k.key])).length;
+  const anyDoc = slots.some((s) => kinds.some((k) => s[k.key]));
   if (done === total) return { state: 'confirmed', done, total, sort: 3 };
   if (!anyDoc) return { state: 'missing', done, total, sort: 1 };
   return { state: 'partial', done, total, sort: 2 };
@@ -75,6 +100,42 @@ export const withHorseName = (horseDocs, index, name, slotCount = 0) => {
   list[index] = { ...list[index], name: String(name || '').trim() };
   return list;
 };
+
+// ── Editing the horses of a booking (Robert 2026-11-19: rename / add / remove) ──────
+// Horses are a positional list, so one edit has to keep three fields in step:
+//   horseCount, horseNames (non-blank names, in order) and horseDocs (one entry per horse).
+// The same rules run in SQL (_horse_doc_edit) for the exhibitor's link.
+
+export const MAX_HORSES = 50;
+export const MAX_HORSE_NAME = 60;
+
+const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, MAX_HORSE_NAME);
+
+/** The booking fields that hold the horses, rebuilt from `slots` ({ name, certificate?, coggins? }). */
+export const buildHorsePatch = (slots) => {
+  const list = slots.map((s) => {
+    const entry = { name: cleanName(s.name) };
+    HORSE_DOC_KINDS.forEach((k) => { if (s[k.key]) entry[k.key] = s[k.key]; });
+    return entry;
+  });
+  return {
+    horseCount: list.length,
+    horseNames: list.map((e) => e.name).filter(Boolean),
+    horseDocs: list,
+  };
+};
+
+/** Rename horse `index`. Returns the new slot list (input is not changed). */
+export const renameHorse = (slots, index, name) =>
+  slots.map((s, i) => (i === index ? { ...s, name: cleanName(name) } : s));
+
+/** Add a horse at the end. Returns null when the booking is already full. */
+export const addHorse = (slots, name) =>
+  (slots.length >= MAX_HORSES ? null : [...slots, { index: slots.length, name: cleanName(name), certificate: null, coggins: null }]);
+
+/** Take horse `index` out, with its papers. Returns null when it is the only horse. */
+export const removeHorse = (slots, index) =>
+  (slots.length <= 1 ? null : slots.filter((_, i) => i !== index));
 
 const SKIP_REASONS = {
   no_email: 'no email on file',

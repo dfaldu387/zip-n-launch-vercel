@@ -21,7 +21,7 @@ import { formatNightDates } from '@/lib/stallNights';
 import { getBookingRef, getBookingKind } from '@/lib/bookingRef';
 import { AssignedChips, HorseChips } from '@/components/housing/AssignedChips';
 import { getSupplyStage, getSupplyLastUpdate, getItemStatus, SUPPLY_STAGES } from '@/lib/supplyStatus';
-import { getHorseSlots, healthStatus, describeRequestResult, isRequestable } from '@/lib/horseDocs';
+import { getHorseSlots, healthStatus, describeRequestResult, isRequestable, getRequiredKinds } from '@/lib/horseDocs';
 import { useToast } from '@/components/ui/use-toast';
 import { HorseHealthDocs, HealthBadge } from '@/components/housing/HorseHealthDocs';
 
@@ -121,14 +121,14 @@ const fmtDateTime = (iso) => {
 };
 
 // Build one flat row per booking with everything the table + export need.
-const buildRow = (booking, barns, extraStallFees, rvWithSpots) => {
+const buildRow = (booking, barns, extraStallFees, rvWithSpots, docKinds) => {
     const requested = getRequestedStallCount(booking);
     const assigned = getAssignedStallsForBooking(booking, barns);
     const rvSpots = getAssignedRvSpotsForBooking(booking, rvWithSpots);
     const supplies = getSupplies(booking);
     const horseNamesArr = getHorseNames(booking);
     const horseSlots = getHorseSlots(booking, getHorseCount(booking), horseNamesArr);
-    const health = healthStatus(horseSlots);
+    const health = healthStatus(horseSlots, docKinds);
     const supplyStage = getSupplyStage(booking);
     // Live-priced, same as the invoice/balance-due figures elsewhere in this
     // page — never the stored totalAmount, which freezes at booking time and
@@ -403,7 +403,7 @@ const SupplyFulfillmentBox = ({ row, isCurrent, showTitle, showId, deliverySecre
 // can hold local draft/confirm state without re-rendering the whole table.
 const MasterListRow = ({
     r, isOpen, onToggleExpand, supplyOrders = [], showId, deliverySecrets = {},
-    horseDocSecrets = {}, onEnsureHorseDocSecret, onRequestHorseDocs,
+    horseDocSecrets = {}, onEnsureHorseDocSecret, onRequestHorseDocs, onUpdateFields, docKinds,
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
 }) => {
     const booking = r.booking;
@@ -850,6 +850,7 @@ const MasterListRow = ({
                                     <p className="font-semibold text-foreground">Health Documents</p>
                                     <HorseHealthDocs
                                         slots={r.horseSlots}
+                                        kinds={docKinds}
                                         showId={showId}
                                         bookingId={booking.id}
                                         horseDocs={booking.horseDocs}
@@ -859,6 +860,7 @@ const MasterListRow = ({
                                         canEmail={!!r.email}
                                         requestedAt={r.docsRequestedAt}
                                         onChange={(next) => onUpdateField?.(booking.id, 'horseDocs', next)}
+                                        onEditHorses={onUpdateFields ? (patch, msg) => onUpdateFields(booking.id, { ...patch, _activityMessage: msg }) : null}
                                     />
                                 </div>
 
@@ -1050,7 +1052,7 @@ const MasterListRow = ({
 
 const MasterListPanel = ({
     bookings = [], barns = [], rvAreas = [], extraStallFees = [], showName = 'Show', showId, deliverySecrets = {},
-    horseDocSecrets = {}, onEnsureHorseDocSecret, onRequestHorseDocs,
+    horseDocSecrets = {}, onEnsureHorseDocSecret, onRequestHorseDocs, onUpdateFields, requiredDocs,
     onUpdateField, onRecordPayment, onStatusChange, onRemove, onDownloadInvoice, onEmailInvoice, invoicingId, onLogActivity,
     addBookingSlot,
 }) => {
@@ -1073,9 +1075,11 @@ const MasterListPanel = ({
     // so a booking's actual spot shows up here instead of just a request count.
     const rvWithSpots = useMemo(() => ensureAllRvSpots(rvAreas), [rvAreas]);
 
+    // Which papers this show asks for (Fees tab → Required documents).
+    const docKinds = useMemo(() => getRequiredKinds(requiredDocs), [requiredDocs]);
     const rows = useMemo(
-        () => (bookings || []).filter(Boolean).map(b => buildRow(b, barns, extraStallFees, rvWithSpots)),
-        [bookings, barns, extraStallFees, rvWithSpots]
+        () => (bookings || []).filter(Boolean).map(b => buildRow(b, barns, extraStallFees, rvWithSpots, docKinds)),
+        [bookings, barns, extraStallFees, rvWithSpots, docKinds]
     );
 
     // Every order with supplies, grouped by customer (email + exhibitor name), so
@@ -1523,6 +1527,8 @@ const MasterListPanel = ({
                                     horseDocSecrets={horseDocSecrets}
                                     onEnsureHorseDocSecret={onEnsureHorseDocSecret}
                                     onRequestHorseDocs={onRequestHorseDocs}
+                                    onUpdateFields={onUpdateFields}
+                                    docKinds={docKinds}
                                     onUpdateField={onUpdateField}
                                     onRecordPayment={onRecordPayment}
                                     onStatusChange={onStatusChange}

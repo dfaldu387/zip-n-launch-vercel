@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { Loader2, FileCheck2, AlertTriangle, Upload, CheckCircle2 } from 'lucide-react';
+import { Loader2, FileCheck2, AlertTriangle, Upload, CheckCircle2, Trash2, Plus } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/lib/supabaseClient';
 import { parseHorseDocToken } from '@/lib/horseDocLink';
-import { HORSE_DOC_KINDS, HORSE_DOCS_BUCKET, horseDocPath } from '@/lib/horseDocs';
+import { HORSE_DOCS_BUCKET, horseDocPath, MAX_HORSES, getRequiredKinds } from '@/lib/horseDocs';
 import { cn } from '@/lib/utils';
 
 // Opened from the private link the show office sends (Robert, 2026-11-18): no login.
@@ -40,11 +40,17 @@ const UploadSlot = ({ kind, doc, busy, onPick }) => {
 const HorseDocsUploadPage = () => {
     const { token } = useParams();
     const link = useMemo(() => parseHorseDocToken(token), [token]);
-    const [view, setView] = useState(null);
+    const [view, setViewRaw] = useState(null);
+    // Replies to a rename / add / remove do not repeat the show's required papers; keep the ones we had.
+    const setView = (next) => setViewRaw((prev) => (next && !next.required && prev?.required ? { ...next, required: prev.required } : next));
     const [loadError, setLoadError] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [names, setNames] = useState({});     // typed but not yet saved names, by horse index
     const [busyKey, setBusyKey] = useState('');
+    const [adding, setAdding] = useState(false);
+    const [newName, setNewName] = useState('');
+    const [confirmRemove, setConfirmRemove] = useState(null);   // index of the horse waiting for "Yes, remove"
+    const [structBusy, setStructBusy] = useState(false);
     const [message, setMessage] = useState({ text: '', ok: true });
 
     useEffect(() => {
@@ -62,17 +68,49 @@ const HorseDocsUploadPage = () => {
 
     const horses = view?.horses || [];
     const total = horses.length;
-    const complete = horses.filter((h) => h.certificate && h.coggins).length;
+    // Only the papers this show asks for are drawn and counted.
+    const kinds = useMemo(() => getRequiredKinds(view?.required), [view?.required]);
+    const complete = horses.filter((h) => kinds.every((k) => h[k.key])).length;
+    const listOfKinds = kinds.map((k) => k.label);
 
     const saveName = async (index) => {
         const typed = (names[index] ?? '').trim();
         const current = horses.find((h) => h.index === index)?.name || '';
-        if (typed === current) return;
+        // An empty name is not saved: the box goes back to the saved name.
+        if (typed === current || typed === '') { setNames((p) => { const n = { ...p }; delete n[index]; return n; }); return; }
         const { data, error } = await supabase.rpc('set_horse_doc_name', {
             p_show_id: link.showId, p_booking_id: link.bookingId, p_secret: link.secret, p_index: index, p_horse_name: typed,
         });
         if (error) { setMessage({ text: error.message || 'Could not save the name.', ok: false }); return; }
         setView(data);
+        setNames((p) => { const n = { ...p }; delete n[index]; return n; });
+        setMessage({ text: 'Name saved.', ok: true });
+    };
+
+    // Add / remove a horse. Horses are a numbered list, so typed-but-unsaved names are cleared.
+    const addHorse = async () => {
+        const typed = newName.trim();
+        if (!typed) { setMessage({ text: 'Please type the horse\'s name.', ok: false }); return; }
+        setStructBusy(true);
+        const { data, error } = await supabase.rpc('add_horse_doc_horse', {
+            p_show_id: link.showId, p_booking_id: link.bookingId, p_secret: link.secret, p_horse_name: typed,
+        });
+        setStructBusy(false);
+        if (error) { setMessage({ text: error.message || 'Could not add the horse.', ok: false }); return; }
+        setView(data); setNames({}); setNewName(''); setAdding(false);
+        setMessage({ text: `${typed} added.`, ok: true });
+    };
+
+    const removeHorse = async (h) => {
+        setStructBusy(true);
+        const { data, error } = await supabase.rpc('remove_horse_doc_horse', {
+            p_show_id: link.showId, p_booking_id: link.bookingId, p_secret: link.secret, p_index: h.index,
+        });
+        setStructBusy(false);
+        setConfirmRemove(null);
+        if (error) { setMessage({ text: error.message || 'Could not remove the horse.', ok: false }); return; }
+        setView(data); setNames({});
+        setMessage({ text: `${h.name || `Horse ${h.index + 1}`} removed.`, ok: true });
     };
 
     const upload = async (index, kind, file) => {
@@ -134,12 +172,17 @@ const HorseDocsUploadPage = () => {
                                 <p className="text-xs text-muted-foreground">{view.showName} · Booking #{view.orderRef}</p>
                                 <p className="text-xl font-bold leading-tight">{view.exhibitor}</p>
                                 <p className="text-sm text-muted-foreground">
-                                    Please upload a <strong>Health Certificate (CVI)</strong> and a <strong>Coggins test</strong> for each horse. A PDF or a clear photo is fine.
+                                    {kinds.length > 0 ? (
+                                        <>Please upload {listOfKinds.map((l, i) => (
+                                            <React.Fragment key={l}>{i > 0 && (i === listOfKinds.length - 1 ? ' and ' : ', ')}<strong>{l}</strong></React.Fragment>
+                                        ))} for each horse. A PDF or a clear photo is fine.</>
+                                    ) : 'No papers are required for this show.'}
+                                    {' '}Switching horses? You can change a name, add a horse or remove one below.
                                 </p>
                             </CardContent>
                         </Card>
 
-                        {total > 0 && (
+                        {total > 0 && kinds.length > 0 && (
                             <p className={cn('text-sm text-center font-medium', complete === total ? 'text-emerald-700' : 'text-muted-foreground')}>
                                 {complete === total ? 'All papers received. Thank you!' : `${complete} of ${total} horse${total === 1 ? '' : 's'} complete`}
                             </p>
@@ -150,23 +193,40 @@ const HorseDocsUploadPage = () => {
                         {horses.map((h) => (
                             <Card key={h.index}>
                                 <CardContent className="p-4 space-y-3">
-                                    {h.nameLocked ? (
-                                        <p className="font-semibold">{h.name}</p>
-                                    ) : (
-                                        <div className="space-y-1">
-                                            <label className="text-xs text-muted-foreground" htmlFor={`horse-${h.index}`}>Horse {h.index + 1} name</label>
+                                    <div className="space-y-1">
+                                        <label className="text-xs text-muted-foreground" htmlFor={`horse-${h.index}`}>Horse {h.index + 1} name</label>
+                                        <div className="flex items-center gap-2">
                                             <Input
                                                 id={`horse-${h.index}`}
                                                 value={names[h.index] ?? h.name}
                                                 onChange={(e) => setNames((p) => ({ ...p, [h.index]: e.target.value }))}
                                                 onBlur={() => saveName(h.index)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                                                 placeholder="e.g., Dixie"
                                                 maxLength={60}
                                                 className="h-11 text-base"
                                             />
+                                            {total > 1 && confirmRemove !== h.index && (
+                                                <Button type="button" variant="ghost" size="icon" className="h-11 w-11 shrink-0 text-muted-foreground hover:text-rose-600"
+                                                    title="Remove this horse" aria-label={`Remove ${h.name || `horse ${h.index + 1}`}`} disabled={structBusy}
+                                                    onClick={() => setConfirmRemove(h.index)}>
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                         </div>
-                                    )}
-                                    {HORSE_DOC_KINDS.map((k) => (
+                                        {confirmRemove === h.index && (
+                                            <div className="flex items-center justify-between gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 dark:bg-rose-500/10 dark:border-rose-500/30">
+                                                <p className="text-sm">Remove {h.name || `Horse ${h.index + 1}`}? Any papers uploaded for this horse are removed too.</p>
+                                                <div className="flex gap-1.5 shrink-0">
+                                                    <Button type="button" size="sm" variant="outline" className="h-9" disabled={structBusy} onClick={() => setConfirmRemove(null)}>No</Button>
+                                                    <Button type="button" size="sm" className="h-9 bg-rose-600 hover:bg-rose-700 text-white" disabled={structBusy} onClick={() => removeHorse(h)}>
+                                                        {structBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Yes, remove'}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {kinds.map((k) => (
                                         <UploadSlot key={k.key} kind={k} doc={h[k.key]} busy={busyKey === `${h.index}:${k.key}`}
                                             onPick={(f) => upload(h.index, k, f)} />
                                     ))}
@@ -176,6 +236,29 @@ const HorseDocsUploadPage = () => {
 
                         {total === 0 && (
                             <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">This booking has no horses listed.</CardContent></Card>
+                        )}
+
+                        {total < MAX_HORSES && (
+                            adding ? (
+                                <Card>
+                                    <CardContent className="p-4 space-y-2">
+                                        <label className="text-xs text-muted-foreground" htmlFor="new-horse">New horse name</label>
+                                        <Input id="new-horse" autoFocus value={newName} maxLength={60} placeholder="e.g., Dixie" className="h-11 text-base"
+                                            onChange={(e) => setNewName(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') addHorse(); }} />
+                                        <div className="flex gap-2">
+                                            <Button type="button" variant="outline" className="h-10 flex-1" disabled={structBusy} onClick={() => { setAdding(false); setNewName(''); }}>Cancel</Button>
+                                            <Button type="button" className="h-10 flex-1" disabled={structBusy} onClick={addHorse}>
+                                                {structBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add horse'}
+                                            </Button>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <Button type="button" variant="outline" className="w-full h-11 gap-1.5" onClick={() => setAdding(true)}>
+                                    <Plus className="h-4 w-4" /> Add a horse
+                                </Button>
+                            )
                         )}
                     </>
                 )}

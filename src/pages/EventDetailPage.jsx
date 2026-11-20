@@ -19,6 +19,7 @@ import { isShowPublished } from '@/lib/showPublishing';
 import { isHiddenOnPublicPage, publicText, mapsUrl, formatShowDate, publicLogo, publicWelcome, isEventPagePublished } from '@/lib/publicPage';
 import PublicContactCards from '@/components/public/PublicContactCards';
 import PublicScheduleCard from '@/components/public/PublicScheduleCard';
+import PublicMaintenanceCard from '@/components/public/PublicMaintenanceCard';
 
 // Some patterns are organizer-uploaded PDFs (custom requests) rather than database
 // image-patterns. Render their first page inline with react-pdf — worker set once here.
@@ -31,6 +32,7 @@ const EventDetailPage = () => {
   const [projectData, setProjectData] = useState(null);
   // Schedule & Arena Setup, only present once the owner has published it.
   const [publicSchedule, setPublicSchedule] = useState(null);
+  const [maintenanceNotices, setMaintenanceNotices] = useState([]);
   const [patternsData, setPatternsData] = useState([]);
   const [scoresheetsData, setScoresheetsData] = useState([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
@@ -462,6 +464,25 @@ const EventDetailPage = () => {
         if (!error && data) { setPublicSchedule(data); return; }
       }
       setPublicSchedule(null);
+    })();
+    return () => { cancelled = true; };
+  }, [event]);
+
+  // Grounds notices the office chose to publish (Housing -> Grounds Maintenance). The
+  // function returns only the public fields of published requests. Requests are kept under
+  // the housing show's id; the page can be reached through a sibling, so every id is tried.
+  useEffect(() => {
+    if (!event?.isFromProjects) { setMaintenanceNotices([]); return undefined; }
+    let cancelled = false;
+    const ids = [...new Set([event.id, event.project?.id, event.pattern_book_id].filter(Boolean))];
+    (async () => {
+      const found = [];
+      for (const pid of ids) {
+        const { data, error } = await supabase.rpc('get_public_maintenance_notices', { p_id: pid });
+        if (cancelled) return;
+        if (!error && Array.isArray(data)) found.push(...data);
+      }
+      setMaintenanceNotices(found);
     })();
     return () => { cancelled = true; };
   }, [event]);
@@ -1379,6 +1400,9 @@ const EventDetailPage = () => {
             {publicSchedule && (
               <PublicScheduleCard schedule={publicSchedule} publicPage={projectData?.publicPage} />
             )}
+
+            {/* Grounds notices the office published */}
+            <PublicMaintenanceCard notices={maintenanceNotices} />
 
             {/* Class Schedule - Show for regular events */}
             {event.classes && event.classes.length > 0 && (

@@ -63,10 +63,23 @@ const slotsOf = (b: any) => {
     name: names[i] || docs[i]?.name || `Horse ${i + 1}`,
     certificate: hasDoc(docs[i]?.certificate),
     coggins: hasDoc(docs[i]?.coggins),
+    registration: hasDoc(docs[i]?.registration),
   }));
 };
 
-const emailHtml = (opts: { name: string; showName: string; link: string; lines: string[] }) => `
+// Which papers the show asks for (Housing -> Fees -> Required documents). Same defaults as
+// src/lib/horseDocs.js: Certificate + Coggins on, Registration off.
+const REQUIRED_KINDS = [
+  { key: "certificate", label: "Health Certificate", def: true },
+  { key: "coggins", label: "Coggins", def: true },
+  { key: "registration", label: "Registration Papers", def: false },
+];
+const requiredKindsOf = (data: any) => {
+  const r = data?.stallingService?.requiredDocs;
+  return REQUIRED_KINDS.filter((k) => (typeof r?.[k.key] === "boolean" ? r[k.key] : k.def));
+};
+
+const emailHtml = (opts: { name: string; showName: string; link: string; lines: string[]; kinds: string[] }) => `
 <!DOCTYPE html>
 <html>
   <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;color:#333;">
@@ -76,8 +89,8 @@ const emailHtml = (opts: { name: string; showName: string; link: string; lines: 
       </div>
       <div style="background:#ffffff;padding:28px;border:1px solid #e5e7eb;">
         <p>Hi <strong>${escapeHtml(opts.name)}</strong>,</p>
-        <p>To keep check-in quick at <strong>${escapeHtml(opts.showName)}</strong>, please upload a
-          <strong>Health Certificate (CVI)</strong> and a <strong>Coggins test</strong> for each horse you are bringing.</p>
+        <p>To keep check-in quick at <strong>${escapeHtml(opts.showName)}</strong>, please upload
+          ${opts.kinds.map((l, i) => `${i > 0 ? (i === opts.kinds.length - 1 ? " and " : ", ") : ""}<strong>${escapeHtml(l)}</strong>`).join("")} for each horse you are bringing.</p>
         <div style="background:#f9fafb;border-radius:6px;padding:14px;margin:18px 0;font-size:14px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:bold;margin-bottom:6px;">Still needed</div>
           ${opts.lines.map((l) => `<div style="padding:2px 0;">${escapeHtml(l)}</div>`).join("")}
@@ -134,6 +147,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     const bookings: any[] = project.project_data?.stallingService?.bookings || [];
     const secrets = project.project_data?.horseDocSecrets || {};
+    const kinds = requiredKindsOf(project.project_data);
 
     const sent: { bookingId: string; to: string }[] = [];
     const skipped: { bookingId: string; reason: string }[] = [];
@@ -149,9 +163,10 @@ const handler = async (req: Request): Promise<Response> => {
       const slots = slotsOf(booking);
       if (slots.length === 0) { skipped.push({ bookingId, reason: "no_horses" }); continue; }
 
+      if (kinds.length === 0) { skipped.push({ bookingId, reason: "complete" }); continue; }
       const missing: string[] = [];
       for (const s of slots) {
-        const parts = [!s.certificate ? "Health Certificate" : "", !s.coggins ? "Coggins" : ""].filter(Boolean);
+        const parts = kinds.filter((k) => !(s as any)[k.key]).map((k) => k.label);
         if (parts.length) missing.push(`${s.name}: ${parts.join(" and ")}`);
       }
       if (missing.length === 0) { skipped.push({ bookingId, reason: "complete" }); continue; }
@@ -179,6 +194,7 @@ const handler = async (req: Request): Promise<Response> => {
             showName: project.project_name || "the show",
             link,
             lines: missing,
+            kinds: kinds.map((k) => k.label),
           }),
           MessageStream: "outbound",
         }),
