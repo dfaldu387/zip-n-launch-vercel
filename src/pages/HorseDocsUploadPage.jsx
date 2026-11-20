@@ -17,21 +17,20 @@ import { cn } from '@/lib/utils';
 
 const MAX_BYTES = 15 * 1024 * 1024;
 
-// One paper of one horse.
+// One paper of one horse. Compact: the papers of a horse sit side by side, so a booking with
+// many horses does not need endless scrolling.
 const UploadSlot = ({ kind, doc, busy, onPick }) => {
     const ref = useRef(null);
     return (
-        <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2.5">
-            <div className="min-w-0">
-                <p className="text-sm font-medium">{kind.label}</p>
-                {doc
-                    ? <p className="text-xs text-emerald-700 flex items-center gap-1 truncate"><CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> {doc.name || 'Uploaded'}</p>
-                    : <p className="text-xs text-muted-foreground">Not uploaded yet</p>}
-            </div>
+        <div className="flex min-w-0 flex-col gap-1 rounded-md border p-2">
+            <p className="text-xs font-medium leading-tight">{kind.label}</p>
+            {doc
+                ? <p className="text-[11px] text-emerald-700 flex items-center gap-1 min-w-0"><CheckCircle2 className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{doc.name || 'Uploaded'}</span></p>
+                : <p className="text-[11px] text-muted-foreground">Not uploaded</p>}
             <input ref={ref} type="file" accept="application/pdf,image/*" className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; onPick(f); }} />
-            <Button type="button" variant={doc ? 'outline' : 'default'} size="sm" className="h-10 shrink-0" disabled={busy} onClick={() => ref.current?.click()}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Upload className="h-4 w-4 mr-1.5" />{doc ? 'Replace' : 'Upload'}</>}
+            <Button type="button" variant={doc ? 'outline' : 'default'} size="sm" className="mt-auto h-10 w-full px-2" disabled={busy} onClick={() => ref.current?.click()}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Upload className="h-4 w-4 mr-1.5 shrink-0" />{doc ? 'Replace' : 'Upload'}</>}
             </Button>
         </div>
     );
@@ -150,7 +149,7 @@ const HorseDocsUploadPage = () => {
     return (
         <div className="min-h-screen bg-muted/30 flex justify-center px-4 py-6">
             <Helmet><title>Horse health papers — {view?.showName || 'EquiPatterns'}</title></Helmet>
-            <div className="w-full max-w-md space-y-4">
+            <div className="w-full max-w-xl space-y-3">
                 <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                     <FileCheck2 className="h-4 w-4" /> Horse health papers
                 </div>
@@ -192,7 +191,7 @@ const HorseDocsUploadPage = () => {
 
                         {horses.map((h) => (
                             <Card key={h.index}>
-                                <CardContent className="p-4 space-y-3">
+                                <CardContent className="p-3 space-y-2">
                                     <div className="space-y-1">
                                         <label className="text-xs text-muted-foreground" htmlFor={`horse-${h.index}`}>Horse {h.index + 1} name</label>
                                         <div className="flex items-center gap-2">
@@ -226,10 +225,14 @@ const HorseDocsUploadPage = () => {
                                             </div>
                                         )}
                                     </div>
-                                    {kinds.map((k) => (
-                                        <UploadSlot key={k.key} kind={k} doc={h[k.key]} busy={busyKey === `${h.index}:${k.key}`}
-                                            onPick={(f) => upload(h.index, k, f)} />
-                                    ))}
+                                    {kinds.length > 0 && (
+                                        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(kinds.length, 3)}, minmax(0, 1fr))` }}>
+                                            {kinds.map((k) => (
+                                                <UploadSlot key={k.key} kind={k} doc={h[k.key]} busy={busyKey === `${h.index}:${k.key}`}
+                                                    onPick={(f) => upload(h.index, k, f)} />
+                                            ))}
+                                        </div>
+                                    )}
                                 </CardContent>
                             </Card>
                         ))}
