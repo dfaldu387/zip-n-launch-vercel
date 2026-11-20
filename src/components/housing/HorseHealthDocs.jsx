@@ -112,30 +112,30 @@ const DocCell = ({ slot, kind, showId, bookingId, secret, horseDocs, slotCount, 
     };
 
     return (
-        <div className="flex flex-wrap items-center gap-1 min-h-[28px]">
+        <div className="flex items-center gap-0.5 min-h-[24px]">
             <input ref={inputRef} type="file" accept="application/pdf,image/*" className="hidden" onChange={(e) => upload(e.target.files?.[0])} />
             {busy ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : doc ? (
                 <>
                     <button type="button" onClick={open} title={`View ${doc.name || kind.label}`}
-                        className="inline-flex items-center justify-center h-7 w-7 rounded border bg-background hover:bg-muted">
-                        <FileText className="h-4 w-4 text-red-600" />
+                        className="inline-flex items-center justify-center h-6 w-6 rounded border bg-background hover:bg-muted">
+                        <FileText className="h-3.5 w-3.5 text-red-600" />
                     </button>
                     <button type="button" onClick={download} title="Download"
-                        className="inline-flex items-center justify-center h-7 w-7 rounded border bg-background hover:bg-muted">
-                        <Download className="h-3.5 w-3.5" />
+                        className="inline-flex items-center justify-center h-6 w-6 rounded border bg-background hover:bg-muted">
+                        <Download className="h-3 w-3" />
                     </button>
                     {!readOnly && (
                         <button type="button" onClick={remove} title="Remove this file"
-                            className="inline-flex items-center justify-center h-7 w-7 rounded text-muted-foreground hover:text-rose-600">
-                            <Trash2 className="h-3.5 w-3.5" />
+                            className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-rose-600">
+                            <Trash2 className="h-3 w-3" />
                         </button>
                     )}
                 </>
             ) : readOnly ? (
-                <span className="text-muted-foreground italic">Missing</span>
+                <span className="text-[10px] text-muted-foreground italic">Missing</span>
             ) : (
-                <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px] gap-1" onClick={() => inputRef.current?.click()}>
-                    <Upload className="h-3 w-3" /> Upload
+                <Button type="button" size="sm" className="h-6 w-6 p-0" title={`Upload ${kind.label}`} aria-label={`Upload ${kind.label}`} onClick={() => inputRef.current?.click()}>
+                    <Upload className="h-3 w-3" />
                 </Button>
             )}
         </div>
@@ -263,53 +263,61 @@ export const HorseHealthDocs = ({ slots, showId, bookingId, secret, onEnsureSecr
         {requestedAt && !allDone && (
             <p className="text-[10px] text-muted-foreground">Last requested {fmtRequested(requestedAt)}</p>
         )}
-        <div className="rounded-md border overflow-hidden bg-background">
-            {slots.map((slot) => (
-                <div key={slot.index} className="px-2 py-1.5 space-y-1 border-b last:border-b-0">
-                    {editIndex === slot.index ? (
-                        <Input autoFocus value={draft} maxLength={MAX_HORSE_NAME} className="h-7 text-[11px] px-2"
-                            onChange={(e) => setDraft(e.target.value)} onBlur={saveEdit}
-                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditIndex(null); }} />
-                    ) : confirmIndex === slot.index ? (
-                        <span className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                            <span>Remove <strong>{slot.name || `Horse ${slot.index + 1}`}</strong>{HORSE_DOC_KINDS.some((k) => slot[k.key]) ? ' and its papers' : ''}?</span>
-                            <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[11px]" onClick={() => setConfirmIndex(null)}>No</Button>
-                            <Button type="button" size="sm" className="h-6 px-2 text-[11px] bg-rose-600 hover:bg-rose-700 text-white" onClick={() => doRemove(slot)}>Yes, remove</Button>
-                        </span>
-                    ) : (
-                        <span className="flex items-center gap-1 min-w-0">
-                            <span title={slot.name} className={cn('min-w-0 break-words', !slot.name && 'italic text-muted-foreground')}>
-                                {slot.name || `Horse ${slot.index + 1} — name not entered`}
-                            </span>
-                            {canEdit && (
-                                <>
-                                    <button type="button" onClick={() => startEdit(slot)} title="Edit name" aria-label="Edit horse name"
-                                        className="shrink-0 inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted">
-                                        <Pencil className="h-3 w-3" />
-                                    </button>
-                                    {slots.length > 1 && (
-                                        <button type="button" onClick={() => { setConfirmIndex(slot.index); setEditIndex(null); }} title="Remove this horse" aria-label="Remove horse"
-                                            className="shrink-0 inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-rose-600 hover:bg-muted">
-                                            <X className="h-3 w-3" />
-                                        </button>
-                                    )}
-                                </>
-                            )}
-                        </span>
-                    )}
-                    {confirmIndex !== slot.index && kinds.length > 0 && (
-                        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(kinds.length, 3)}, minmax(0, 1fr))` }}>
-                            {kinds.map((k) => (
-                                <div key={k.key} className="min-w-0">
-                                    <p className="text-[10px] text-muted-foreground leading-tight">{k.label}</p>
-                                    <DocCell slot={slot} kind={k} showId={showId} bookingId={bookingId} secret={secret}
-                                        horseDocs={horseDocs} slotCount={slots.length} onChange={onChange} readOnly={readOnly} />
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            ))}
+        <div className="rounded-md border bg-background max-h-80 overflow-auto">
+            {(() => {
+                const cols = { gridTemplateColumns: `minmax(64px,1fr) repeat(${kinds.length}, 76px)` };
+                return (
+                    <>
+                        {kinds.length > 0 && (
+                            <div className="grid gap-x-1 px-2 py-1 bg-muted/60 text-[10px] font-semibold border-b sticky top-0 z-10" style={cols}>
+                                <span>Horse</span>
+                                {kinds.map((k) => <span key={k.key} title={k.label}>{k.short || k.label}</span>)}
+                            </div>
+                        )}
+                        {slots.map((slot) => (
+                            <div key={slot.index} className="grid gap-x-1 px-2 py-1 items-center border-b last:border-b-0" style={cols}>
+                                {editIndex === slot.index ? (
+                                    <Input autoFocus value={draft} maxLength={MAX_HORSE_NAME} className="h-6 text-[11px] px-2 col-span-full"
+                                        onChange={(e) => setDraft(e.target.value)} onBlur={saveEdit}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEditIndex(null); }} />
+                                ) : confirmIndex === slot.index ? (
+                                    <span className="col-span-full flex flex-wrap items-center gap-1.5 text-[11px]">
+                                        <span>Remove <strong>{slot.name || `Horse ${slot.index + 1}`}</strong>{HORSE_DOC_KINDS.some((k) => slot[k.key]) ? ' and its papers' : ''}?</span>
+                                        <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[11px]" onClick={() => setConfirmIndex(null)}>No</Button>
+                                        <Button type="button" size="sm" className="h-6 px-2 text-[11px] bg-rose-600 hover:bg-rose-700 text-white" onClick={() => doRemove(slot)}>Yes, remove</Button>
+                                    </span>
+                                ) : (
+                                    <>
+                                        <span className="flex items-center min-w-0">
+                                            <span title={slot.name} className={cn('min-w-0 truncate text-[11px]', !slot.name && 'italic text-muted-foreground')}>
+                                                {slot.name || `Horse ${slot.index + 1}`}
+                                            </span>
+                                            {canEdit && (
+                                                <>
+                                                    <button type="button" onClick={() => startEdit(slot)} title="Edit name" aria-label="Edit horse name"
+                                                        className="shrink-0 inline-flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-foreground hover:bg-muted">
+                                                        <Pencil className="h-3 w-3" />
+                                                    </button>
+                                                    {slots.length > 1 && (
+                                                        <button type="button" onClick={() => { setConfirmIndex(slot.index); setEditIndex(null); }} title="Remove this horse" aria-label="Remove horse"
+                                                            className="shrink-0 inline-flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-rose-600 hover:bg-muted">
+                                                            <X className="h-3 w-3" />
+                                                        </button>
+                                                    )}
+                                                </>
+                                            )}
+                                        </span>
+                                        {kinds.map((k) => (
+                                            <DocCell key={k.key} slot={slot} kind={k} showId={showId} bookingId={bookingId} secret={secret}
+                                                horseDocs={horseDocs} slotCount={slots.length} onChange={onChange} readOnly={readOnly} />
+                                        ))}
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </>
+                );
+            })()}
         </div>
         {canEdit && (adding ? addRow : (
             <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px] gap-1" disabled={slots.length >= MAX_HORSES} onClick={() => setAdding(true)}>

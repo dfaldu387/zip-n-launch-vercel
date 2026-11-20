@@ -10,9 +10,9 @@
 // Every paper a horse can carry. Which of them a show actually asks for is the show's
 // "Required documents" setting (Fees tab), kept at stallingService.requiredDocs.
 export const HORSE_DOC_KINDS = [
-  { key: 'certificate', label: 'Health Certificate' },
-  { key: 'coggins', label: 'Coggins' },
-  { key: 'registration', label: 'Registration Papers' },
+  { key: 'certificate', label: 'Health Certificate', short: 'Cert' },
+  { key: 'coggins', label: 'Coggins', short: 'Coggins' },
+  { key: 'registration', label: 'Registration Papers', short: 'Reg.' },
 ];
 
 // A show that never set the option keeps today's behaviour: Certificate + Coggins.

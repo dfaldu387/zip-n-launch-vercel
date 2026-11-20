@@ -950,7 +950,7 @@ const MasterListRow = ({
                             {/* Notes | Supply Fulfillment (middle) | Activity Log. Fulfillment has one row
                                 per line item, each with its own stage, since a delivery can reach the
                                 Shavings before the Hay. */}
-                            <div className={cn('grid gap-3', r.supplies.length > 0 ? 'lg:grid-cols-[1fr_1.5fr_1fr]' : 'lg:grid-cols-2')}>
+                            <div className={cn('grid gap-3 items-start', r.supplies.length > 0 ? 'lg:grid-cols-[1fr_1.5fr_1fr]' : 'lg:grid-cols-2')}>
                                 {/* Notes — its own Edit button, saves independently of the fields above. */}
                                 <div className="rounded-md border bg-background/60 p-2.5">
                                     <div className="flex items-center gap-1.5 mb-1">
