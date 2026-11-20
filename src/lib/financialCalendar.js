@@ -25,7 +25,16 @@ export const ORDER_KINDS = [
     { id: 'atshow', label: 'At-show supplies' },
 ];
 
-const isoDay = (d) => (d ? String(d).slice(0, 10) : '');
+// Full UTC timestamps become the viewer's LOCAL day (an evening booking must not slip to tomorrow).
+const isoDay = (d) => {
+    if (!d) return '';
+    const s = String(d);
+    if (s.length > 10 && /T.*(Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+        const dt = new Date(s);
+        if (!Number.isNaN(dt.getTime())) return format(dt, 'yyyy-MM-dd');
+    }
+    return s.slice(0, 10);
+};
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const shareOf = (assigned, idKey, picked) => {

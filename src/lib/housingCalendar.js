@@ -23,6 +23,13 @@ const isoDay = (d) => {
     if (!d) return '';
     // Handles 'yyyy-MM-dd' and full ISO timestamps alike.
     const s = String(d);
+    // A full timestamp (UTC, ends in Z or +hh:mm) must become the viewer's LOCAL day,
+    // or an evening delivery (Nov 19, 7:30 PM) lands on the next day (Nov 20).
+    // Robert 2026-11-20. Plain dates (yyyy-MM-dd) are already a calendar day: keep them.
+    if (s.length > 10 && /T.*(Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+        const dt = new Date(s);
+        if (!Number.isNaN(dt.getTime())) return format(dt, 'yyyy-MM-dd');
+    }
     return s.length >= 10 ? s.slice(0, 10) : s;
 };
 
