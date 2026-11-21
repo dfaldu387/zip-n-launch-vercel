@@ -72,6 +72,8 @@ const AdminDisciplineManagementPage = () => {
     const [deletingDiscipline, setDeletingDiscipline] = useState(null);
     const [page, setPage] = useState(0);
     const [count, setCount] = useState(0);
+    // 'all' = every association, 'none' = disciplines with no association.
+    const [associationFilter, setAssociationFilter] = useState('all');
     const RPP = 10;
 
     const fetchData = useCallback(async () => {
@@ -81,6 +83,8 @@ const AdminDisciplineManagementPage = () => {
 
         let query = supabase.from('disciplines').select('*', { count: 'exact' });
         if (searchTerm) { query = query.ilike('name', `%${searchTerm}%`); }
+        if (associationFilter === 'none') { query = query.is('association_id', null); }
+        else if (associationFilter !== 'all') { query = query.eq('association_id', associationFilter); }
         query = query.order('sort_order').order('name').range(from, to);
 
         const { data, error, count } = await query;
@@ -92,7 +96,7 @@ const AdminDisciplineManagementPage = () => {
         else { setAssociations(associationsData); }
 
         setIsLoading(false);
-    }, [toast, page, searchTerm]);
+    }, [toast, page, searchTerm, associationFilter]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -146,8 +150,16 @@ const AdminDisciplineManagementPage = () => {
 
                         <Card>
                             <CardHeader>
-                                <div className="flex justify-between items-center">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
                                     <CardTitle>All Disciplines ({count})</CardTitle>
+                                    <Select value={associationFilter} onValueChange={v => { setAssociationFilter(v); setPage(0); }}>
+                                        <SelectTrigger className="w-full sm:w-52"><SelectValue placeholder="All associations" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All associations</SelectItem>
+                                            <SelectItem value="none">No association</SelectItem>
+                                            {associations.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                                        </SelectContent>
+                                    </Select>
                                     <div className="relative w-full sm:max-w-sm">
                                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                         <Input placeholder="Search disciplines..." className="pl-9" value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setPage(0); }} />

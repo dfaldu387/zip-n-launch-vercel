@@ -1872,17 +1872,21 @@ const ActivePatternBookCard = ({ project, onRefresh, profile, user }) => {
                 {/* h-[100dvh], not h-screen: on iPad/iPhone Safari 100vh ignores the
                     browser chrome, so the bottom of the dialog -- and the last rows of
                     whichever list is open -- sat off-screen with no way to reach them. */}
-                <DialogContent className="w-[95vw] h-[100dvh] max-w-none max-h-none p-0 m-0 rounded-none overflow-hidden">
+                <DialogContent className="w-[95vw] h-[100dvh] max-w-none max-h-none p-0 m-0 rounded-none overflow-y-auto overflow-x-hidden">
                     <DialogTitle className="sr-only">Pattern Books &amp; Score Sheets</DialogTitle>
-                    <PatternBookDialogContent
-                        project={project}
-                        profile={profile}
-                        user={user}
-                        associationsData={associationsData}
-                        onClose={() => setPatternBookDialogOpen(false)}
-                        onRefresh={onRefresh}
-                        initialTab={dialogInitialTab}
-                    />
+                    {/* Never shorter than 720px: on a short window the dialog scrolls
+                        instead of squeezing the list down to two cards. */}
+                    <div style={{ height: 'max(720px, 100dvh)' }}>
+                        <PatternBookDialogContent
+                            project={project}
+                            profile={profile}
+                            user={user}
+                            associationsData={associationsData}
+                            onClose={() => setPatternBookDialogOpen(false)}
+                            onRefresh={onRefresh}
+                            initialTab={dialogInitialTab}
+                        />
+                    </div>
                 </DialogContent>
             </Dialog>
         </motion.div>

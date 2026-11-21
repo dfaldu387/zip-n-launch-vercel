@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { BookOpen, Users, BarChart2, DollarSign, Settings, Layers, Code, HardDrive, FileText, Bot, PenTool, Gauge, FileImage, Receipt, Image, Calendar, Megaphone, ArrowRightLeft } from 'lucide-react';
+import { BookOpen, Users, BarChart2, DollarSign, Settings, Layers, Code, HardDrive, FileText, Bot, PenTool, Gauge, FileImage, Receipt, Image, Calendar, Megaphone, ArrowRightLeft, ClipboardList } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/lib/supabaseClient';
@@ -33,6 +33,7 @@ const AdminPage = () => {
     { name: 'Sponsorship Packages', path: '/admin/sponsorship-packages', icon: DollarSign, description: 'Create and manage sponsorship tiers.' },
     { name: 'Pattern Extractor', path: '/admin/pattern-extractor', icon: Bot, description: 'AI-powered PDF pattern data extraction.' },
     { name: 'Manual Pattern Entry', path: '/admin/manual-pattern-entry', icon: PenTool, description: 'Manually input pattern data.' },
+    { name: 'Scoring Manager', path: '/admin/scoring-manager', icon: ClipboardList, description: 'Starting score, penalties and maneuver scores for each discipline.' },
     { name: 'Scoresheet Upload', path: '/admin/scoresheet-upload', icon: FileImage, description: 'Upload scoresheet images and link to patterns.' },
     { name: 'Pattern Review', path: '/admin/pattern-review', icon: FileText, description: 'Review and approve submitted patterns.' },
     { name: 'Billing & Revenue', path: '/admin/billing-report', icon: Receipt, description: 'View all subscriptions, purchases, and revenue.' },

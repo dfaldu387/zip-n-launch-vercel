@@ -74,7 +74,10 @@ const ShowPatternsScoresheetsPage = () => {
     <>
       <Helmet><title>{showName} - Patterns & Scoresheets</title></Helmet>
       {/* 100dvh, not 100vh: iPad Safari's 100vh ignores the browser chrome. */}
-      <div className="flex h-[100dvh] flex-col bg-background">
+      {/* The whole page scrolls when the window is short (a laptop with the dock up,
+          a small browser window). Without this the filters + tabs + toolbar ate the
+          screen and only two score sheets were reachable. */}
+      <div className="h-[100dvh] overflow-y-auto bg-background">
         <Navigation />
         <div className="flex items-center gap-3 border-b px-4 py-2">
           <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground hover:text-foreground" onClick={backToShow}>
@@ -88,7 +91,8 @@ const ShowPatternsScoresheetsPage = () => {
           </Button>
         </div>
 
-        <div className="min-h-0 flex-1">
+        {/* Fills the screen under the header, but never shorter than 720px. */}
+        <div style={{ height: 'max(720px, calc(100dvh - 7rem))' }}>
           {isLoading ? (
             <div className="flex h-full items-center justify-center">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

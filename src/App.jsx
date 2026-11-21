@@ -114,6 +114,7 @@ const AdminRoleManagementPage = lazy(() => import('@/pages/AdminRoleManagementPa
 const AdminPatternExtractorPage = lazy(() => import('@/pages/AdminPatternExtractorPage'));
 const ManualPatternEntryPage = lazy(() => import('@/pages/ManualPatternEntryPage'));
 const AdminTrackingUserPage = lazy(() => import('@/pages/AdminTrackingUserPage'));
+const AdminScoringManagerPage = lazy(() => import('@/pages/AdminScoringManagerPage'));
 const AdminPatternLevelManagementPage = lazy(() => import('@/pages/AdminPatternLevelManagementPage'));
 const AccountSecurityPage = lazy(() => import('@/pages/AccountSecurityPage'));
 const PolicyPage = lazy(() => import('@/pages/PolicyPage'));
@@ -240,7 +241,8 @@ function App() {
                   <Route path="/admin/pattern-extractor" element={<AdminRoute><AdminPatternExtractorPage /></AdminRoute>} />
                   <Route path="/admin/manual-pattern-entry" element={<AdminRoute><ManualPatternEntryPage /></AdminRoute>} />
                   <Route path="/admin/tracking-user" element={<AdminRoute><AdminTrackingUserPage /></AdminRoute>} />
-                  <Route path="/admin/pattern-levels" element={<AdminRoute><AdminPatternLevelManagementPage /></AdminRoute>} />
+                  <Route path="/admin/scoring-manager" element={<AdminRoute><AdminScoringManagerPage /></AdminRoute>} />
+                  <Route path="/admin/pattern-levels"element={<AdminRoute><AdminPatternLevelManagementPage /></AdminRoute>} />
                   <Route path="/admin/scoresheet-upload" element={<AdminRoute><ScoresheetUploadPage /></AdminRoute>} />
                   <Route path="/admin/customer-asset-library" element={<AdminRoute><CustomerAssetLibraryPage /></AdminRoute>} />
                   <Route path="/admin/show-management" element={<AdminRoute><AdminShowManagementPage /></AdminRoute>} />
