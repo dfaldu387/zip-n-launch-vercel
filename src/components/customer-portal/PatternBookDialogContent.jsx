@@ -1129,7 +1129,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            window.URL.revokeObjectURL(blobUrl);
+            setTimeout(() => window.URL.revokeObjectURL(blobUrl), 10000); // Safari needs time to read the file
 
             toast({
                 title: "Download started",
@@ -1343,7 +1343,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
                     document.body.removeChild(link);
                     
                     // Clean up blob URL
-                    window.URL.revokeObjectURL(blobUrl);
+                    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 10000);
                     
                     toast({
                         title: "Download complete",
@@ -1521,7 +1521,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
 
             const failedCount = total - built.length;
             toast({
@@ -1786,7 +1786,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
 
             const addedCount = rendered.length;
             const failedCount = totalToRender - addedCount;
@@ -1890,7 +1890,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
+            { const u = link.href; setTimeout(() => URL.revokeObjectURL(u), 10000); }
 
             toast({
                 title: 'Download complete',
@@ -4603,7 +4603,7 @@ const PatternBookDialogContent = ({ project, profile, user, associationsData, on
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
             
             const successMessage = failedCount > 0 
                 ? `Downloaded ${downloadedCount} item(s), ${failedCount} failed`

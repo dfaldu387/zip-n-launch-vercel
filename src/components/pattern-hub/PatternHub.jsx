@@ -450,7 +450,9 @@ export const PatternHub = ({ projectId }) => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        URL.revokeObjectURL(blobUrl);
+        // Safari starts reading the file after click(). Revoking right away kills
+        // the link ("Safari can't open blob:..."), so wait before cleaning up.
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
     };
 
     const handleGenerate = async () => {

@@ -1077,7 +1077,11 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
     // no file yet) does NOT count — the slot is still empty. This mirrors
     // getPublishReadiness() in patternBookReadiness.js so the Step 5 badge and
     // the publish gate never disagree.
-    const assignableGroups = groups.filter(g => g.divisions && g.divisions.length > 0);
+    // Hub mode can skip Configure Classes, so its group has no divisions: every
+    // real (non-extra) group is assignable there.
+    const assignableGroups = isHubMode
+      ? groups.filter(g => !g._hubExtra)
+      : groups.filter(g => g.divisions && g.divisions.length > 0);
     if (assignableGroups.length === 0) return false;
 
     return assignableGroups.every(group => {
@@ -1347,7 +1351,8 @@ export const Step6_PatternAndLayout = ({ formData, setFormData, associationsData
                   return displayDisciplines.map((discipline) => {
                     const disciplineIndex = (formData.disciplines || []).findIndex(d => d.id === discipline.id);
                     // Only count groups that have divisions assigned (exclude empty placeholder groups)
-                    const groups = (discipline.patternGroups || []).filter(g => g.divisions && g.divisions.length > 0);
+                    // Hub mode can skip Configure Classes, so its group has no divisions.
+                    const groups = (discipline.patternGroups || []).filter(g => isHubMode || (g.divisions && g.divisions.length > 0));
                     const isComplete = isDisciplineComplete(discipline, disciplineIndex);
                     const isScoresheetOnly = discipline.pattern_type === 'scoresheet_only' || (!discipline.pattern && discipline.scoresheet);
 
