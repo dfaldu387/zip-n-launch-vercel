@@ -67,18 +67,37 @@ export const setManeuverScore = (scores, index, value, length) => {
  * Add a penalty chosen from the rules. The same normal penalty twice raises its count
  * (two breaks of gait = x2). ZERO and DQ only make sense once.
  */
-export const addPenalty = (penalties, rule) => {
+export const addPenalty = (penalties, rule, maneuver = null) => {
     const list = (penalties || []).map((p) => ({ ...p }));
     const key = penaltyKey(rule);
     const kind = rule.kind || 'normal';
-    const existing = list.find((p) => penaltyKey(p) === key);
+    // A normal penalty counts up per maneuver column; ZERO / DQ are kept once for the whole horse.
+    const existing = list.find((p) => penaltyKey(p) === key && (kind !== 'normal' || (p.maneuver ?? null) === (maneuver ?? null)));
     if (existing) {
         if (kind === 'normal') existing.count = (Number(existing.count) || 1) + 1;
         return list;
     }
-    list.push({ id: rule.id ?? null, name: rule.name, kind, points: Number(rule.points) || 0, count: 1 });
+    const entry = { id: rule.id ?? null, name: rule.name, kind, points: Number(rule.points) || 0, count: 1 };
+    if (maneuver !== null && maneuver !== undefined) entry.maneuver = maneuver;
+    list.push(entry);
     return list;
 };
+
+/** Menu order for the penalty list: small deductions first (-3, -5, -10), then ZERO, then DQ. */
+export const sortPenaltyRules = (rules) => {
+    const rank = (r) => (r.kind === 'dq' ? 2 : r.kind === 'zero' ? 1 : 0);
+    return [...(rules || [])].sort((a, b) => rank(a) - rank(b) || (Number(a.points) || 0) - (Number(b.points) || 0));
+};
+
+/** Menu text with the number first: "-3  Break of gait", "DQ  Illegal equipment". */
+export const penaltyMenuLabel = (r) => {
+    if (r.kind === 'dq') return `DQ  ${r.name}`;
+    if (r.kind === 'zero') return `ZERO  ${r.name}`;
+    return `-${formatScore(r.points)}  ${r.name}`;
+};
+
+/** Short text for a chip inside a maneuver column: "-3", "DQ", "ZERO". */
+export const penaltyChipText = (p) => (p.kind === 'dq' ? 'DQ' : p.kind === 'zero' ? 'ZERO' : `-${formatScore(p.points)}`);
 
 /** Take one off a penalty; at zero it disappears. */
 export const removePenaltyOnce = (penalties, index) => {

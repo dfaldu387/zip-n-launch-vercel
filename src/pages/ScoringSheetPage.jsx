@@ -53,10 +53,17 @@ const ScoringSheetPage = () => {
       setRulesLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [sheet]);
+    // Depend on the plain values, not the `sheet` object: that object is rebuilt every time
+    // the show is re-read (for example when the browser tab is focused again), and the
+    // rules do not change when that happens. Using the object made the whole page flash.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet?.key, sheet?.disciplineId, sheet?.associationId, sheet?.disciplineName]);
 
   const usingDefaults = !rulesLoading && !rules;
   const effective = rules || DEFAULT_RULES;
+  // The Final Maneuver (if the discipline has one) is always the last column on the sheet.
+  const finalOn = !!(effective.final_maneuver?.enabled && effective.final_maneuver?.label);
+  const sheetManeuvers = finalOn ? [...SAMPLE_MANEUVERS, effective.final_maneuver.label] : SAMPLE_MANEUVERS;
 
   return (
     <>
@@ -97,7 +104,7 @@ const ScoringSheetPage = () => {
               <p className="mb-2 text-xs text-muted-foreground">
                 The maneuver names are a sample list for now. They will come from the pattern.
               </p>
-              <ScoringHorseList showId={showId} sheetKey={sheet.key} rules={effective} maneuvers={SAMPLE_MANEUVERS} />
+              <ScoringHorseList showId={showId} sheetKey={sheet.key} rules={effective} maneuvers={sheetManeuvers} />
             </>
           )}
         </div>

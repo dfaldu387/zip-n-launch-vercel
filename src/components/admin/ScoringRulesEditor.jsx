@@ -24,12 +24,21 @@ export const formatScore = (n) => {
 
 const KIND_LABEL = { normal: 'Normal (subtract points)', zero: 'ZERO (total becomes 0)', dq: 'DQ (disqualified)' };
 const PRESET_SCORES = [-1.5, -1, -0.5, 0, 0.5, 1, 1.5];
+const WIDE_PRESET_SCORES = [-3, -2.5, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3];
 
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `p-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
 // What gets compared to know whether there are unsaved changes.
-const snapshot = (startingScore, penalties, scores) =>
-    JSON.stringify({ s: String(startingScore), p: penalties.map(p => [p.name, String(p.points), p.kind]), m: scores });
+const snapshot = (startingScore, penalties, scores, final) =>
+    JSON.stringify({ s: String(startingScore), p: penalties.map(p => [p.name, String(p.points), p.kind]), m: scores, f: [final.enabled, final.label, final.scores] });
+
+const FINAL_PRESET_SCORES = [0, 1, 2, 3, 4, 5];
+const EMPTY_FINAL = { enabled: false, label: '', scores: [] };
+const readFinal = (f) => ({
+    enabled: !!f?.enabled,
+    label: f?.label || '',
+    scores: [...(f?.scores || [])].map(Number).sort((a, b) => a - b),
+});
 
 // Pick a discipline that already has rules and hand them back. Nothing is saved here.
 const CopyRulesDialog = ({ open, onOpenChange, currentDisciplineId, onPick }) => {
@@ -114,6 +123,8 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
     const [isSaving, setIsSaving] = useState(false);
     const [savedSnapshot, setSavedSnapshot] = useState('');
     const [copyOpen, setCopyOpen] = useState(false);
+    const [finalM, setFinalM] = useState(EMPTY_FINAL);
+    const [newFinalScore, setNewFinalScore] = useState('');
 
     // Fill the form from another discipline's rules. Not saved until Save is clicked.
     const applyCopied = (source) => {
@@ -121,6 +132,8 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
         setPenalties((source.penalties || []).map(x => ({ id: newId(), name: x.name || '', points: x.points ?? '', kind: x.kind || 'normal' })));
         setScores([...(source.maneuver_scores || [])].map(Number).sort((a, b) => a - b));
         setNewScore('');
+        setFinalM(readFinal(source.final_maneuver));
+        setNewFinalScore('');
         setCopyOpen(false);
         toast({ title: 'Rules copied into the form', description: 'Check them, then click Save.' });
     };
@@ -134,10 +147,20 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
         setPenalties(p);
         setScores(m);
         setNewScore('');
-        setSavedSnapshot(snapshot(s, p, m));
+        const f = readFinal(rules.final_maneuver);
+        setFinalM(f);
+        setNewFinalScore('');
+        setSavedSnapshot(snapshot(s, p, m, f));
     }, [rules]);
 
-    const isDirty = useMemo(() => snapshot(startingScore, penalties, scores) !== savedSnapshot, [startingScore, penalties, scores, savedSnapshot]);
+    const isDirty = useMemo(() => snapshot(startingScore, penalties, scores, finalM) !== savedSnapshot, [startingScore, penalties, scores, finalM, savedSnapshot]);
+
+    const addFinalScore = (value) => {
+        const n = Number(value);
+        if (value === '' || !Number.isFinite(n)) return;
+        setFinalM(f => (f.scores.includes(n) ? f : { ...f, scores: [...f.scores, n].sort((a, b) => a - b) }));
+        setNewFinalScore('');
+    };
 
     const updatePenalty = (id, patch) => setPenalties(list => list.map(p => (p.id === id ? { ...p, ...patch } : p)));
     const addPenalty = (kind = 'normal') => setPenalties(list => [...list, { id: newId(), name: kind === 'zero' ? 'ZERO' : kind === 'dq' ? 'DQ' : '', points: '', kind }]);
@@ -162,6 +185,10 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 return;
             }
         }
+        if (finalM.enabled) {
+            if (!finalM.label.trim()) { toast({ title: 'Final Maneuver needs a name', description: 'For example: Form & Effectiveness.', variant: 'destructive' }); return; }
+            if (finalM.scores.length === 0) { toast({ title: 'Final Maneuver needs scores', description: 'Add the scores a judge can give, for example 0 to 5.', variant: 'destructive' }); return; }
+        }
         const cleanPenalties = penalties.map(p => ({
             id: p.id,
             name: p.name.trim(),
@@ -178,6 +205,7 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 starting_score: start,
                 penalties: cleanPenalties,
                 maneuver_scores: scores,
+                final_maneuver: finalM.enabled ? { enabled: true, label: finalM.label.trim(), scores: finalM.scores } : null,
                 updated_at: new Date().toISOString(),
             }, { onConflict: 'discipline_id' })
             .select()
@@ -262,8 +290,49 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addScore(newScore); } }} />
                     <Button variant="outline" size="sm" onClick={() => addScore(newScore)}><PlusCircle className="mr-1.5 h-4 w-4" />Add score</Button>
                     <Button variant="ghost" size="sm" onClick={() => setScores(PRESET_SCORES)}>Use -1½ to +1½</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setScores(WIDE_PRESET_SCORES)}>Use -3 to +3</Button>
                     {scores.length > 0 && <Button variant="ghost" size="sm" onClick={() => setScores([])}>Clear</Button>}
                 </div>
+            </section>
+
+            {/* Final Maneuver */}
+            <section className="space-y-3">
+                <div>
+                    <h3 className="text-base font-semibold">Final Maneuver</h3>
+                    <p className="text-sm text-muted-foreground">An extra last column on every score sheet, with its own scores (for example Form &amp; Effectiveness, 0 to 5).</p>
+                </div>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                    <input type="checkbox" className="h-4 w-4" checked={finalM.enabled}
+                        onChange={e => setFinalM(f => ({ ...f, enabled: e.target.checked }))} />
+                    This discipline has a Final Maneuver
+                </label>
+                {finalM.enabled && (
+                    <div className="space-y-3 rounded-md border p-3">
+                        <div className="space-y-1">
+                            <Label htmlFor="final-label">Name shown on the sheet</Label>
+                            <Input id="final-label" className="max-w-sm" placeholder="e.g. Form & Effectiveness"
+                                value={finalM.label} onChange={e => setFinalM(f => ({ ...f, label: e.target.value }))} />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {finalM.scores.length === 0 && <p className="w-full rounded-md border border-dashed p-3 text-sm text-muted-foreground">No scores yet.</p>}
+                            {finalM.scores.map(s => (
+                                <span key={s} className="inline-flex items-center gap-1 rounded-full bg-secondary px-3 py-1 text-sm font-medium">
+                                    {formatScore(s)}
+                                    <button type="button" aria-label={`Remove ${s}`} className="rounded-full p-0.5 hover:bg-background"
+                                        onClick={() => setFinalM(f => ({ ...f, scores: f.scores.filter(x => x !== s) }))}><X className="h-3.5 w-3.5" /></button>
+                                </span>
+                            ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Input type="number" step="0.5" inputMode="decimal" placeholder="e.g. 3" className="w-32"
+                                value={newFinalScore} onChange={e => setNewFinalScore(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addFinalScore(newFinalScore); } }} />
+                            <Button variant="outline" size="sm" onClick={() => addFinalScore(newFinalScore)}><PlusCircle className="mr-1.5 h-4 w-4" />Add score</Button>
+                            <Button variant="ghost" size="sm" onClick={() => setFinalM(f => ({ ...f, scores: FINAL_PRESET_SCORES }))}>Use 0 to 5</Button>
+                            {finalM.scores.length > 0 && <Button variant="ghost" size="sm" onClick={() => setFinalM(f => ({ ...f, scores: [] }))}>Clear</Button>}
+                        </div>
+                    </div>
+                )}
             </section>
 
             {/* Save */}

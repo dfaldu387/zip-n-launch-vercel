@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Plus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Loader2, Plus, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
@@ -14,11 +15,35 @@ import ScoringHorseCard from '@/components/scoring/ScoringHorseCard';
  */
 const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const [completedAt, setCompletedAt] = useState(null);
+  const [confirmComplete, setConfirmComplete] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [entries, setEntries] = useState([]);
   const entriesRef = useRef([]);
   const [loading, setLoading] = useState(true);
   const [backNumber, setBackNumber] = useState('');
   const [saving, setSaving] = useState(false);
+  const addInputRef = useRef(null);
+  const [scrollToId, setScrollToId] = useState(null);
+
+  // After "Done": jump up to the Add horse box so the next back number can be typed at once.
+  const goToAddBox = () => {
+    setTimeout(() => {
+      addInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      addInputRef.current?.focus({ preventScroll: true });
+    }, 50);
+  };
+
+  // After "Add horse": the new horse is the one at the bottom; scroll down to it.
+  useEffect(() => {
+    if (!scrollToId) return;
+    const t = setTimeout(() => {
+      document.getElementById(`horse-${scrollToId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setScrollToId(null);
+    }, 80);
+    return () => clearTimeout(t);
+  }, [scrollToId, entries]);
 
   const placings = useMemo(
     () => buildPlacings(entries, rules.starting_score, maneuvers.length),
@@ -48,9 +73,9 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
       return;
     }
     setSaving(true);
-    const { error } = await supabase.from('scoring_entries').insert({
+    const { data: created, error } = await supabase.from('scoring_entries').insert({
       show_id: showId, sheet_key: sheetKey, back_number: bn, work_order: nextWorkOrder(entries),
-    });
+    }).select('id').single();
     setSaving(false);
     if (error) {
       // 23505 = another device added a horse at the same moment; reload and let them retry.
@@ -60,6 +85,7 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
     }
     setBackNumber('');
     await load();
+    if (created?.id) setScrollToId(created.id);
   };
 
   // Show the change at once, then save it. If saving fails, put the saved data back.
@@ -71,6 +97,41 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
       toast({ title: 'Could not save that score', description: error.message, variant: 'destructive' });
       await load();
     }
+  };
+
+  // Is this class already completed? (the saved placings snapshot exists)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from('scoring_class_results')
+        .select('completed_at').eq('show_id', showId).eq('sheet_key', sheetKey).maybeSingle();
+      if (!cancelled) setCompletedAt(data?.completed_at || null);
+    })();
+    return () => { cancelled = true; };
+  }, [showId, sheetKey]);
+
+  const notDone = entries.filter((x) => !x.is_done).length;
+
+  // Save the placings as they are now, then go back to the class list to pick the next class.
+  const completeClass = async () => {
+    setCompleting(true);
+    const results = placings.ranked.map((x) => ({
+      placing: x.placing, back_number: x.backNumber, work_order: x.workOrder, total: x.total, status: x.status,
+    }));
+    const { error } = await supabase.from('scoring_class_results').upsert(
+      { show_id: showId, sheet_key: sheetKey, results, completed_at: new Date().toISOString() },
+      { onConflict: 'show_id,sheet_key' },
+    );
+    setCompleting(false);
+    if (error) { toast({ title: 'Could not complete the class', description: error.message, variant: 'destructive' }); return; }
+    toast({ title: 'Class completed', description: 'The placings are saved.' });
+    navigate(`/horse-show-manager/scoring-portal/${showId}`);
+  };
+
+  const reopenClass = async () => {
+    const { error } = await supabase.from('scoring_class_results').delete().eq('show_id', showId).eq('sheet_key', sheetKey);
+    if (error) { toast({ title: 'Could not reopen the class', description: error.message, variant: 'destructive' }); return; }
+    setCompletedAt(null);
   };
 
   const remove = async (id) => {
@@ -85,6 +146,7 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
         <h2 className="mb-3 font-medium">Horses in this class ({entries.length})</h2>
         <form onSubmit={add} className="flex flex-wrap items-center gap-2">
           <Input
+            ref={addInputRef}
             value={backNumber}
             onChange={(e) => setBackNumber(e.target.value)}
             placeholder="Back number, e.g. 1001"
@@ -96,14 +158,43 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
             Add horse
           </Button>
         </form>
+
+        <div className="mt-3 border-t pt-3">
+          {completedAt ? (
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-300">
+                <CheckCircle2 className="h-4 w-4" /> Class completed. Placings are saved.
+              </span>
+              <Button size="sm" variant="outline" onClick={completeClass} disabled={completing}>Save placings again</Button>
+              <Button size="sm" variant="ghost" onClick={reopenClass}>Reopen class</Button>
+            </div>
+          ) : confirmComplete ? (
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span>
+                {notDone > 0
+                  ? `${notDone} horse${notDone === 1 ? ' is' : 's are'} not marked Done. Complete the class anyway?`
+                  : 'Complete this class and save the placings?'}
+              </span>
+              <Button size="sm" onClick={completeClass} disabled={completing}>
+                {completing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}
+                Yes, complete class
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setConfirmComplete(false)}>Cancel</Button>
+            </div>
+          ) : (
+            <Button variant="outline" disabled={entries.length === 0} onClick={() => setConfirmComplete(true)}>
+              <CheckCircle2 className="mr-1.5 h-4 w-4" /> Complete class
+            </Button>
+          )}
+        </div>
       </div>
 
       {placings.ranked.length > 0 && (
-        <div className="mb-3 rounded-lg border-2 border-emerald-300 bg-emerald-50 p-4">
+        <div className="mb-3 rounded-lg border-2 border-emerald-300 bg-emerald-50 p-4 dark:border-emerald-700 dark:bg-emerald-950/40">
           <h2 className="mb-2 font-semibold">Placings</h2>
           <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {placings.ranked.map((x) => (
-              <li key={x.id} className="flex items-center gap-3 rounded-md bg-white px-3 py-2 shadow-sm">
+              <li key={x.id} className="flex items-center gap-3 rounded-md bg-white px-3 py-2 shadow-sm dark:bg-emerald-900/30">
                 <span className={`w-12 text-xl font-bold ${x.placing ? '' : 'text-red-700 text-sm'}`}>
                   {x.placing ? ordinal(x.placing) : 'DQ'}
                 </span>
@@ -137,6 +228,7 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
             placing={placings.ranked.find((r) => r.id === x.id)?.placing ?? null}
             onChange={(patch) => change(x.id, patch)}
             onRemove={() => remove(x.id)}
+            onDone={goToAddBox}
           />
         ))
       )}

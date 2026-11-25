@@ -30,7 +30,10 @@ export function useShowScoringClasses(showId) {
       setIsLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [user, showId]);
+    // user?.id, not `user`: the user object is replaced whenever the browser tab is focused
+    // again, but the person is the same, so there is nothing to reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, showId]);
 
   const rows = useMemo(() => (book ? buildScoringClasses(book.project_data) : []), [book]);
   return { isLoading, show, book, rows };
