@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, ClipboardList, ChevronRight, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Loader2, ClipboardList, ChevronRight, CheckCircle2, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Navigation from '@/components/Navigation';
 import { useShowScoringClasses } from '@/hooks/useShowScoringClasses';
@@ -27,6 +27,42 @@ const ShowScoringPortalPage = () => {
     })();
     return () => { cancelled = true; };
   }, [showId]);
+  const [filters, setFilters] = useState({ association: '', discipline: '', division: '', go: '', judge: '', date: '', status: '' });
+  const setFilter = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
+  const goText = (r) => (r.goNumber ? `Go ${r.goNumber}` : '—');
+  const FILTER_FIELDS = [
+    { k: 'association', label: 'Association', get: (r) => r.associationId || '—' },
+    { k: 'discipline', label: 'Discipline', get: (r) => r.disciplineName || '—' },
+    { k: 'division', label: 'Division', get: (r) => r.divisionName || '—' },
+    { k: 'go', label: 'Go', get: goText },
+    { k: 'judge', label: 'Judge', get: (r) => r.judgeName || '—' },
+    { k: 'date', label: 'Date', get: (r) => (r.date ? formatSheetDate(r.date) : '—'), sortBy: (r) => r.date || '' },
+  ];
+  const optionsFor = (f) => {
+    const seen = new Map();
+    rows.forEach((r) => { const v = f.get(r); if (!seen.has(v)) seen.set(v, f.sortBy ? f.sortBy(r) : v); });
+    return [...seen.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), undefined, { numeric: true })).map(([v]) => v);
+  };
+  // Same class = same association, discipline, division and go. Every judge of that class is one sheet.
+  const classKey = (r) => [r.associationId, r.disciplineName, r.divisionName, r.goNumber || 0].join('|');
+  const classJudges = useMemo(() => {
+    const m = new Map();
+    rows.forEach((r) => {
+      const k = classKey(r);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push({ name: r.judgeName || 'Judge', done: !!completed[r.key] });
+    });
+    return m;
+  }, [rows, completed]);
+  const allDone = (r) => { const j = classJudges.get(classKey(r)) || []; return j.length > 0 && j.every((x) => x.done); };
+  const filteredRows = rows.filter((r) => {
+    if (filters.status === 'alldone' && !allDone(r)) return false;
+    if (!FILTER_FIELDS.every((f) => !filters[f.k] || f.get(r) === filters[f.k])) return false;
+    if (filters.status === 'completed' && !completed[r.key]) return false;
+    if (filters.status === 'open' && completed[r.key]) return false;
+    return true;
+  });
+  const anyFilter = Object.values(filters).some(Boolean);
   const back =() => navigate(`/horse-show-manager/patterns-scoresheets/${showId}`);
   const open = (r) => navigate(`/horse-show-manager/scoring-portal/${showId}/sheet?key=${encodeURIComponent(r.key)}`);
 
@@ -55,6 +91,42 @@ const ShowScoringPortalPage = () => {
           ) : rows.length === 0 ? (
             <p className="py-10 text-center text-muted-foreground">No classes with a pattern or score sheet were found.</p>
           ) : (
+            <>
+            <div className="mb-3 flex flex-wrap items-end gap-3 rounded-xl border bg-muted/30 p-3 shadow-sm">
+              <span className="flex items-center gap-1.5 pb-2 text-sm font-semibold"><Filter className="h-4 w-4" /> Filters</span>
+              {FILTER_FIELDS.map((f) => (
+                <label key={f.k} className="flex flex-col text-xs font-medium text-muted-foreground">
+                  {f.label}
+                  <select
+                    className={`mt-1 h-9 rounded-lg border px-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${filters[f.k] ? 'border-primary bg-primary/10 font-medium' : 'bg-background'}`}
+                    value={filters[f.k]}
+                    onChange={(e) => setFilter(f.k, e.target.value)}
+                  >
+                    <option value="">All</option>
+                    {optionsFor(f).map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
+              ))}
+              <label className="flex flex-col text-xs font-medium text-muted-foreground">
+                Status
+                <select
+                  className={`mt-1 h-9 rounded-lg border px-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${filters.status ? 'border-primary bg-primary/10 font-medium' : 'bg-background'}`}
+                  value={filters.status}
+                  onChange={(e) => setFilter('status', e.target.value)}
+                >
+                  <option value="">All</option>
+                  <option value="completed">Completed</option>
+                  <option value="open">Not completed</option>
+                  <option value="alldone">All judges done</option>
+                </select>
+              </label>
+              {anyFilter && (
+                <Button variant="outline" size="sm" className="h-9" onClick={() => setFilters({ association: '', discipline: '', division: '', go: '', judge: '', date: '', status: '' })}>
+                  Clear
+                </Button>
+              )}
+              <span className="ml-auto rounded-full bg-background px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">Showing {filteredRows.length} of {rows.length}</span>
+            </div>
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left">
@@ -67,11 +139,15 @@ const ShowScoringPortalPage = () => {
                     <th className="px-3 py-2">Judge</th>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">Judges done</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r, i) => {
+                  {filteredRows.length === 0 && (
+                    <tr><td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">No score sheets match these filters.</td></tr>
+                  )}
+                  {filteredRows.map((r, i) => {
                     const done = completed[r.key];
                     return (
                       <React.Fragment key={r.key}>
@@ -80,7 +156,7 @@ const ShowScoringPortalPage = () => {
                           <td className="px-3 py-3">{r.associationId || '—'}</td>
                           <td className="px-3 py-3">{r.disciplineName}</td>
                           <td className="px-3 py-3">{r.divisionName}</td>
-                          <td className="px-3 py-3">{r.goNumber ? `Go ${r.goNumber}` : '—'}</td>
+                          <td className="px-3 py-3">{goText(r)}</td>
                           <td className="px-3 py-3">{r.judgeName || '—'}</td>
                           <td className="px-3 py-3">{formatSheetDate(r.date)}</td>
                           <td className="px-3 py-3">
@@ -94,11 +170,29 @@ const ShowScoringPortalPage = () => {
                               </button>
                             ) : <span className="text-xs text-muted-foreground">Not completed</span>}
                           </td>
+                          <td className="px-3 py-3">
+                            {(() => {
+                              const js = classJudges.get(classKey(r)) || [];
+                              const n = js.filter((x) => x.done).length;
+                              const every = js.length > 0 && n === js.length;
+                              return (
+                                <span
+                                  title={js.map((x) => `${x.done ? '✔' : '○'} ${x.name}`).join('\n')}
+                                  className={every
+                                    ? 'inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-100'
+                                    : 'text-xs text-muted-foreground'}
+                                >
+                                  {every ? <><CheckCircle2 className="h-3.5 w-3.5" /> All judges done</> : `${n} of ${js.length}`}
+                                  {js.length > 1 && <span className="ml-1 tracking-wide">{js.map((x) => (x.done ? '✔' : '○')).join(' ')}</span>}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="px-3 py-3 text-muted-foreground"><ChevronRight className="h-4 w-4" /></td>
                         </tr>
                         {done && openKey === r.key && (
                           <tr className="border-t bg-emerald-50/60 dark:bg-emerald-950/20">
-                            <td colSpan={9} className="px-3 py-3">
+                            <td colSpan={10} className="px-3 py-3">
                               <p className="mb-2 text-xs font-medium text-muted-foreground">
                                 Placings for {r.judgeName || 'this judge'} · {r.divisionName}
                               </p>
@@ -127,6 +221,7 @@ const ShowScoringPortalPage = () => {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       </div>
