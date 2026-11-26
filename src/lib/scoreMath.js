@@ -77,21 +77,42 @@ export function computeScore({ startingScore, maneuverScores = [], penalties = [
 /**
  * Placings for one class. Highest total wins. Disqualified horses get no placing.
  *
- * Ties are an open question for Robert (Q3). For now tied horses SHARE a placing and
- * the next placing is skipped (1, 1, 3). This is the only place to change if he
- * wants a tie-breaker instead.
+ * Tiebreakers are chosen by the judge for each class, as an ordered list of steps.
+ * Steps: { type: 'penalties' } - the horse with the LOWER penalty total wins the tie.
+ *        { type: 'maneuvers', order: [0, 4, 6] } - look at those maneuvers in that order
+ *        (0 = first maneuver); the horse with the HIGHER score on the first one that differs
+ *        wins. Only the maneuver score counts, never penalties. Horses that are still equal after every step share a placing (1, 1, 3).
  *
- * @param {Array<{ key:string, total:number, status?:string }>} entries
+ * @param {Array<{ key:string, total:number, status?:string, penaltyTotal?:number }>} entries
+ * @param {Array<{ type:string }>} [tiebreakSteps]
  * @returns {Array<{ key:string, total:number, status:string, placing:number|null }>}
  */
-export function rankEntries(entries) {
+export function rankEntries(entries, tiebreakSteps = []) {
+    const steps = Array.isArray(tiebreakSteps) ? tiebreakSteps : [];
+    // Compare two horses that have the same total: negative means `a` ranks first, 0 means still tied.
+    const tieCompare = (a, b) => {
+        for (const step of steps) {
+            if (step?.type === 'penalties') {
+                const d = (Number(a.penaltyTotal) || 0) - (Number(b.penaltyTotal) || 0);
+                if (d !== 0) return d;
+            } else if (step?.type === 'maneuvers') {
+                for (const i of step.order || []) {
+                    const d = (Number(b.scores?.[i]) || 0) - (Number(a.scores?.[i]) || 0);
+                    if (d !== 0) return d;
+                }
+            }
+        }
+        return 0;
+    };
+    const compare = (a, b) => (b.total - a.total) || tieCompare(a, b);
+
     const withStatus = entries.map(e => ({ ...e, status: e.status || 'ok' }));
-    const ranked = withStatus.filter(e => e.status !== 'dq').sort((a, b) => b.total - a.total);
+    const ranked = withStatus.filter(e => e.status !== 'dq').sort(compare);
 
     const placingByKey = new Map();
     ranked.forEach((e, i) => {
         const prev = ranked[i - 1];
-        placingByKey.set(e.key, prev && prev.total === e.total ? placingByKey.get(prev.key) : i + 1);
+        placingByKey.set(e.key, prev && compare(prev, e) === 0 ? placingByKey.get(prev.key) : i + 1);
     });
 
     // Keep the ranked order first, disqualified horses last (no placing).

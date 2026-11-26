@@ -106,3 +106,64 @@ describe('ordinal', () => {
         expect([1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal)).toEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd']);
     });
 });
+
+describe('rankEntries with a penalties tiebreaker', () => {
+    const tied = () => [
+        { key: 'a', total: 60, penaltyTotal: 9 },
+        { key: 'b', total: 60, penaltyTotal: 7 },
+        { key: 'c', total: 55, penaltyTotal: 0 },
+    ];
+    it('without a tiebreaker, equal totals share a placing', () => {
+        const r = rankEntries(tied());
+        expect(r.filter(x => x.placing === 1)).toHaveLength(2);
+    });
+    it('fewer penalties wins the tie', () => {
+        const r = rankEntries(tied(), [{ type: 'penalties' }]);
+        expect(r.map(x => [x.key, x.placing])).toEqual([['b', 1], ['a', 2], ['c', 3]]);
+    });
+    it('still tied after the tiebreaker shares the placing', () => {
+        const r = rankEntries([{ key: 'a', total: 60, penaltyTotal: 4 }, { key: 'b', total: 60, penaltyTotal: 4 }], [{ type: 'penalties' }]);
+        expect(r.map(x => x.placing)).toEqual([1, 1]);
+    });
+    it('does not change a higher total', () => {
+        const r = rankEntries([{ key: 'a', total: 61, penaltyTotal: 20 }, { key: 'b', total: 60, penaltyTotal: 0 }], [{ type: 'penalties' }]);
+        expect(r[0].key).toBe('a');
+    });
+});
+
+describe('rankEntries with a maneuver tiebreaker', () => {
+    const a = { key: 'a', total: 68.5, penaltyTotal: 0, scores: [1, 0, 0, 2, 0, 0, -1] };
+    const b = { key: 'b', total: 68.5, penaltyTotal: 5, scores: [0, 1, 0, 1, 0, 0, 1] };
+    it('higher score on the first chosen maneuver wins', () => {
+        expect(rankEntries([b, a], [{ type: 'maneuvers', order: [0] }])[0].key).toBe('a');
+        expect(rankEntries([a, b], [{ type: 'maneuvers', order: [1] }])[0].key).toBe('b');
+    });
+    it('moves on to the next maneuver when the first is equal', () => {
+        expect(rankEntries([b, a], [{ type: 'maneuvers', order: [2, 3] }])[0].key).toBe('a');
+        expect(rankEntries([a, b], [{ type: 'maneuvers', order: [2, 6] }])[0].key).toBe('b');
+    });
+    it('ignores penalties and an empty order', () => {
+        expect(rankEntries([a, b], [{ type: 'maneuvers', order: [2] }]).map(x => x.placing)).toEqual([1, 1]);
+        expect(rankEntries([a, b], [{ type: 'maneuvers', order: [] }]).map(x => x.placing)).toEqual([1, 1]);
+    });
+});
+
+describe('rankEntries with two tiebreakers in order', () => {
+    const a = { key: 'a', total: 60, penaltyTotal: 7, scores: [0, 2] };
+    const b = { key: 'b', total: 60, penaltyTotal: 7, scores: [1, 0] };
+    const c = { key: 'c', total: 60, penaltyTotal: 3, scores: [-1, -1] };
+    it('penalties first, then maneuvers', () => {
+        const r = rankEntries([a, b, c], [{ type: 'penalties' }, { type: 'maneuvers', order: [0] }]);
+        expect(r.map(x => [x.key, x.placing])).toEqual([['c', 1], ['b', 2], ['a', 3]]);
+    });
+    it('maneuvers first, then penalties', () => {
+        const r = rankEntries([a, b, c], [{ type: 'maneuvers', order: [1] }, { type: 'penalties' }]);
+        expect(r.map(x => x.key)).toEqual(['a', 'b', 'c']);
+        const r2 = rankEntries([b, c], [{ type: 'maneuvers', order: [1] }, { type: 'penalties' }]);
+        expect(r2.map(x => x.key)).toEqual(['b', 'c']);
+    });
+    it('second tiebreaker only used when the first is equal', () => {
+        const r = rankEntries([a, b], [{ type: 'penalties' }, { type: 'maneuvers', order: [1] }]);
+        expect(r[0].key).toBe('a');
+    });
+});

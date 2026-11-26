@@ -29,7 +29,12 @@ const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove
   // The last column is the Final Maneuver when the discipline has one; it has its own scores.
   const finalOn = !!(rules.final_maneuver?.enabled && rules.final_maneuver?.label);
   const isFinalCol = (i) => finalOn && i === maneuvers.length - 1;
-  const scoreOptionsFor = (i) => (isFinalCol(i) ? (rules.final_maneuver.scores || []) : (rules.maneuver_scores || []));
+  // Plus numbers on top, minus numbers at the bottom.
+  const scoreOptionsFor = (i) => [...(isFinalCol(i) ? (rules.final_maneuver.scores || []) : (rules.maneuver_scores || []))]
+    .sort((x, y) => Number(y) - Number(x));
+  // Done is only allowed once every maneuver has a score. Penalties are optional.
+  const missingScores = scores.slice(0, maneuvers.length).filter((v) => v === null || v === undefined).length;
+  const canFinish = missingScores === 0;
 
   const penaltyRules = useMemo(() => sortPenaltyRules(rules.penalties), [rules.penalties]);
 
@@ -89,10 +94,18 @@ const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove
               </Button>
             </>
           ) : (
-            <Button size="sm" onClick={() => { setConfirming(false); onChange({ is_done: true }); onDone?.(); }}>
+            <Button
+              size="sm"
+              disabled={!canFinish}
+              title={canFinish ? undefined : `Give a score for every maneuver first (${missingScores} left)`}
+              onClick={() => { setConfirming(false); onChange({ is_done: true }); onDone?.(); }}
+            >
               <Check className="mr-1 h-4 w-4" />
               Done
             </Button>
+          )}
+          {!locked && !canFinish && (
+            <span className="text-xs text-muted-foreground">{missingScores} score{missingScores === 1 ? '' : 's'} left</span>
           )}
           {confirming && !locked ? (
             <span className="inline-flex items-center gap-2 text-sm">
@@ -143,25 +156,6 @@ const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove
             </tr>
           </thead>
           <tbody>
-            <tr className="bg-sky-50 dark:bg-sky-950/40">
-              <td className="whitespace-nowrap px-2 py-1 font-medium">Score</td>
-              {maneuvers.map((m, i) => (
-                <td key={m} className="px-1 py-1">
-                  <select
-                    className={selectClass}
-                    disabled={locked}
-                    value={scores[i] === null ? '' : String(scores[i])}
-                    onChange={(e) => onScore(i, e.target.value)}
-                    aria-label={`Score for ${m}`}
-                  >
-                    <option value="">—</option>
-                    {scoreOptionsFor(i).map((s) => (
-                      <option key={s} value={String(s)}>{formatScore(s)}</option>
-                    ))}
-                  </select>
-                </td>
-              ))}
-            </tr>
             <tr className="bg-orange-50 align-top dark:bg-orange-950/30">
               <td className="whitespace-nowrap px-2 py-1 font-medium">Penalty</td>
               {maneuvers.map((m, i) => (
@@ -195,6 +189,25 @@ const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove
                       </button>
                     ))}
                   </div>
+                </td>
+              ))}
+            </tr>
+            <tr className="bg-sky-50 dark:bg-sky-950/40">
+              <td className="whitespace-nowrap px-2 py-1 font-medium">Score</td>
+              {maneuvers.map((m, i) => (
+                <td key={m} className="px-1 py-1">
+                  <select
+                    className={selectClass}
+                    disabled={locked}
+                    value={scores[i] === null ? '' : String(scores[i])}
+                    onChange={(e) => onScore(i, e.target.value)}
+                    aria-label={`Score for ${m}`}
+                  >
+                    <option value="">—</option>
+                    {scoreOptionsFor(i).map((s) => (
+                      <option key={s} value={String(s)}>{formatScore(s)}</option>
+                    ))}
+                  </select>
                 </td>
               ))}
             </tr>

@@ -128,7 +128,7 @@ export const penaltyLabel = (p) => {
  * @returns {{ ranked: Array<{ id, backNumber, workOrder, total, status, placing }>,
  *             resultById: Map<string, object>, waiting: number }}
  */
-export const buildPlacings = (entries, startingScore, maneuverCount) => {
+export const buildPlacings = (entries, startingScore, maneuverCount, tiebreakSteps = []) => {
     const resultById = new Map();
     const scored = [];
     let waiting = 0;
@@ -140,11 +140,11 @@ export const buildPlacings = (entries, startingScore, maneuverCount) => {
         });
         resultById.set(e.id, r);
         if (r.scoredCount > 0 || (e.penalties || []).length > 0) {
-            scored.push({ key: e.id, total: r.total, status: r.status, backNumber: e.back_number, workOrder: e.work_order });
+            scored.push({ key: e.id, total: r.total, penaltyTotal: r.penaltyTotal, scores: padScores(e.maneuver_scores, maneuverCount), status: r.status, backNumber: e.back_number, workOrder: e.work_order });
         } else {
             waiting += 1;
         }
     });
-    const ranked = rankEntries(scored).map((x) => ({ ...x, id: x.key }));
+    const ranked = rankEntries(scored, tiebreakSteps).map((x) => ({ ...x, id: x.key }));
     return { ranked, resultById, waiting };
 };
