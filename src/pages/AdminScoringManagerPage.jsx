@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import ScoringRulesEditor from '@/components/admin/ScoringRulesEditor';
+import DisciplineSearchSelect from '@/components/admin/DisciplineSearchSelect';
 import { SHEET_TYPES } from '@/lib/scoringSheetTypes';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -100,14 +101,13 @@ const AdminScoringManagerPage = () => {
                                 </div>
                                 <div className="space-y-1.5">
                                     <Label>Discipline</Label>
-                                    <Select value={disciplineId} onValueChange={setDisciplineId} disabled={!associationId || loadingDisciplines}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder={!associationId ? 'Pick an association first' : loadingDisciplines ? 'Loading...' : disciplines.length === 0 ? 'No disciplines' : 'Pick a discipline'} />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {disciplines.map(d => <SelectItem key={d.id} value={String(d.id)}>{disciplineLabel(d)}</SelectItem>)}
-                                        </SelectContent>
-                                    </Select>
+                                    <DisciplineSearchSelect
+                                        value={disciplineId}
+                                        onChange={setDisciplineId}
+                                        disabled={!associationId || loadingDisciplines}
+                                        options={disciplines.map(d => ({ value: String(d.id), label: disciplineLabel(d) }))}
+                                        placeholder={!associationId ? 'Pick an association first' : loadingDisciplines ? 'Loading...' : disciplines.length === 0 ? 'No disciplines' : 'Pick a discipline'}
+                                    />
                                 </div>
                             </CardContent>
                         </Card>
