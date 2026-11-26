@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
+import { SHEET_TYPES, DEFAULT_SHEET_TYPE } from '@/lib/scoringSheetTypes';
 
 // 1.5 -> "1½", -0.5 -> "-½", 0.25 -> "¼". Anything else stays a plain number.
 const FRACTIONS = { 0.25: '¼', 0.5: '½', 0.75: '¾' };
@@ -29,8 +30,10 @@ const WIDE_PRESET_SCORES = [-3, -2.5, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `p-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
 // What gets compared to know whether there are unsaved changes.
-const snapshot = (startingScore, penalties, scores, final) =>
-    JSON.stringify({ s: String(startingScore), p: penalties.map(p => [p.name, String(p.points), p.kind]), m: scores, f: [final.enabled, final.label, final.scores] });
+const snapshot = (startingScore, penalties, scores, final, sheetType) =>
+    JSON.stringify({ s: String(startingScore), p: penalties.map(p => [p.name, String(p.points), p.kind]), m: scores, f: [final.enabled, final.label, final.scores], t: sheetType });
+
+export { SHEET_TYPES };
 
 const FINAL_PRESET_SCORES = [0, 1, 2, 3, 4, 5];
 const EMPTY_FINAL = { enabled: false, label: '', scores: [] };
@@ -125,6 +128,7 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
     const [copyOpen, setCopyOpen] = useState(false);
     const [finalM, setFinalM] = useState(EMPTY_FINAL);
     const [newFinalScore, setNewFinalScore] = useState('');
+    const [sheetType, setSheetType] = useState(DEFAULT_SHEET_TYPE);
 
     // Fill the form from another discipline's rules. Not saved until Save is clicked.
     const applyCopied = (source) => {
@@ -150,10 +154,12 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
         const f = readFinal(rules.final_maneuver);
         setFinalM(f);
         setNewFinalScore('');
-        setSavedSnapshot(snapshot(s, p, m, f));
+        const t = SHEET_TYPES[rules.sheet_type] ? rules.sheet_type : DEFAULT_SHEET_TYPE;
+        setSheetType(t);
+        setSavedSnapshot(snapshot(s, p, m, f, t));
     }, [rules]);
 
-    const isDirty = useMemo(() => snapshot(startingScore, penalties, scores, finalM) !== savedSnapshot, [startingScore, penalties, scores, finalM, savedSnapshot]);
+    const isDirty = useMemo(() => snapshot(startingScore, penalties, scores, finalM, sheetType) !== savedSnapshot, [startingScore, penalties, scores, finalM, sheetType, savedSnapshot]);
 
     const addFinalScore = (value) => {
         const n = Number(value);
@@ -202,6 +208,7 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
             .upsert({
                 discipline_id: String(disciplineId),
                 association_id: associationId ? String(associationId) : null,
+                sheet_type: sheetType,
                 starting_score: start,
                 penalties: cleanPenalties,
                 maneuver_scores: scores,
@@ -219,6 +226,34 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
 
     return (
         <div className="space-y-8">
+            {/* Score sheet type */}
+            <section className="space-y-2">
+                <Label className="text-base font-semibold">Score sheet type</Label>
+                <p className="text-sm text-muted-foreground">Which kind of score sheet does this class use?</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                    {Object.entries(SHEET_TYPES).map(([key, t]) => (
+                        <button key={key} type="button" onClick={() => setSheetType(key)}
+                            className={`rounded-md border p-3 text-left transition-colors ${sheetType === key ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-accent'}`}>
+                            <span className="flex items-center gap-2 font-medium">
+                                <span className={`h-4 w-4 rounded-full border ${sheetType === key ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
+                                {t.label}
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-foreground">{t.help}</span>
+                        </button>
+                    ))}
+                </div>
+                {sheetType === 'scores' && (
+                    <p className="rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
+                        The Scoring Portal opens the {SHEET_TYPES[sheetType].label} screen for this class. That screen is still being built, so judges see a "coming soon" page for now. The fields below will be used by it.
+                    </p>
+                )}
+                {(sheetType === 'notes' || sheetType === 'time') && (
+                    <p className="rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
+                        The Scoring Portal opens the {SHEET_TYPES[sheetType].label} screen for this class. The score fields below are not used by this type.
+                    </p>
+                )}
+            </section>
+
             {/* Starting score */}
             <section className="space-y-2">
                 <Label htmlFor="starting-score" className="text-base font-semibold">Starting score</Label>

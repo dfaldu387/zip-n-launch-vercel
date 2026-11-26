@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import ScoringRulesEditor from '@/components/admin/ScoringRulesEditor';
+import { SHEET_TYPES } from '@/lib/scoringSheetTypes';
 import { supabase } from '@/lib/supabaseClient';
 
 // Scoring Manager: per-discipline starting score, penalties and maneuver scores.
@@ -119,6 +120,7 @@ const AdminScoringManagerPage = () => {
                                         {rules && (rules.exists
                                             ? <Badge variant="secondary">Rules saved</Badge>
                                             : <Badge variant="outline">No rules yet</Badge>)}
+                                        {rules?.exists && <Badge>{(SHEET_TYPES[rules.sheet_type] || SHEET_TYPES.general).label}</Badge>}
                                     </div>
                                 </CardHeader>
                                 <CardContent>

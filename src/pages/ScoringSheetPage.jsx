@@ -6,6 +6,10 @@ import { Button } from '@/components/ui/button';
 import Navigation from '@/components/Navigation';
 import { supabase } from '@/lib/supabaseClient';
 import ScoringHorseList from '@/components/scoring/ScoringHorseList';
+import ScoringNotesBoard from '@/components/scoring/ScoringNotesBoard';
+import ScoringTimeBoard from '@/components/scoring/ScoringTimeBoard';
+import ScoringTypeComingSoon from '@/components/scoring/ScoringTypeComingSoon';
+import { SHEET_TYPES } from '@/lib/scoringSheetTypes';
 import { useShowScoringClasses } from '@/hooks/useShowScoringClasses';
 import { formatSheetDate, formatScore, SAMPLE_MANEUVERS, DEFAULT_RULES } from '@/lib/scoringSheetInfo';
 
@@ -59,6 +63,8 @@ const ScoringSheetPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet?.key, sheet?.disciplineId, sheet?.associationId, sheet?.disciplineName]);
 
+  // Which kind of score sheet this class uses (set in Scoring Manager). No rules = General.
+  const sheetType = SHEET_TYPES[rules?.sheet_type] ? rules.sheet_type : 'general';
   const usingDefaults = !rulesLoading && !rules;
   const effective = rules || DEFAULT_RULES;
   // The Final Maneuver (if the discipline has one) is always the last column on the sheet.
@@ -91,9 +97,10 @@ const ScoringSheetPage = () => {
                   <span><b>Association:</b> {sheet.associationId || '—'}</span>
                   <span><b>Judge:</b> {sheet.judgeName || '—'}</span>
                   <span><b>Date:</b> {formatSheetDate(sheet.date)}</span>
-                  <span><b>Starting score:</b> {formatScore(effective.starting_score)}</span>
+                  <span><b>Type:</b> {SHEET_TYPES[sheetType].label}</span>
+                  {sheetType === 'general' && <span><b>Starting score:</b> {formatScore(effective.starting_score)}</span>}
                 </div>
-                {usingDefaults && (
+                {usingDefaults && sheetType === 'general' && (
                   <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-900">
                     No scoring rules are set for this discipline yet, so the default starting score of 70 is shown.
                     An admin can set them in Scoring Manager.
@@ -101,10 +108,20 @@ const ScoringSheetPage = () => {
                 )}
               </div>
 
-              <p className="mb-2 text-xs text-muted-foreground">
-                The maneuver names are a sample list for now. They will come from the pattern.
-              </p>
-              <ScoringHorseList showId={showId} sheetKey={sheet.key} rules={effective} maneuvers={sheetManeuvers} />
+              {sheetType === 'general' ? (
+                <>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    The maneuver names are a sample list for now. They will come from the pattern.
+                  </p>
+                  <ScoringHorseList showId={showId} sheetKey={sheet.key} rules={effective} maneuvers={sheetManeuvers} />
+                </>
+              ) : sheetType === 'notes' ? (
+                <ScoringNotesBoard showId={showId} sheetKey={sheet.key} />
+              ) : sheetType === 'time' ? (
+                <ScoringTimeBoard showId={showId} sheetKey={sheet.key} />
+              ) : (
+                <ScoringTypeComingSoon typeLabel={SHEET_TYPES[sheetType].label} help={SHEET_TYPES[sheetType].help} />
+              )}
             </>
           )}
         </div>

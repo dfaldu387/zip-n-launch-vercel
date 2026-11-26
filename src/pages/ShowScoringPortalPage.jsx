@@ -202,12 +202,12 @@ const ShowScoringPortalPage = () => {
                                 <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                                   {done.results.map((x) => (
                                     <li key={`${x.work_order}-${x.back_number}`} className="flex items-center gap-3 rounded-md border bg-background px-3 py-2">
-                                      <span className="w-12 font-bold">{x.placing ? ordinal(x.placing) : 'DQ'}</span>
+                                      <span className="w-12 font-bold">{x.placing ? ordinal(x.placing) : x.status === 'no_time' ? 'NT' : 'DQ'}</span>
                                       <span className="flex-1">
                                         <span className="block font-medium">Back # {x.back_number}</span>
                                         <span className="block text-xs text-muted-foreground">{workOrderLabel(x.work_order)}</span>
                                       </span>
-                                      <span className="font-semibold">{x.status === 'dq' ? '—' : formatScore(x.total)}</span>
+                                      <span className="font-semibold">{x.status === 'dq' || x.total == null ? '—' : x.status === 'timed' ? `${Number(x.total).toFixed(3)}s` : formatScore(x.total)}</span>
                                     </li>
                                   ))}
                                 </ol>
