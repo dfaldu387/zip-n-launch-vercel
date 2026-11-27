@@ -13,8 +13,21 @@ const selectClass = 'h-9 w-full min-w-[64px] rounded-md border bg-background px-
  * One horse on the score sheet: a score and a penalty box for every maneuver, and the
  * totals. Every change is saved straight away through `onChange`.
  */
-const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove, onDone }) => {
+const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove, onDone, onBackNumber, classCompleted }) => {
   const [confirming, setConfirming] = useState(false);
+  // Pencil next to the back number: edit it in place.
+  const [editingBn, setEditingBn] = useState(false);
+  const [bnText, setBnText] = useState('');
+  const [bnError, setBnError] = useState('');
+  const [bnSaving, setBnSaving] = useState(false);
+  const startBnEdit = () => { setBnText(String(entry.back_number)); setBnError(''); setEditingBn(true); };
+  const saveBn = async (e) => {
+    e?.preventDefault();
+    setBnSaving(true);
+    const err = await onBackNumber?.(bnText);
+    setBnSaving(false);
+    if (err) setBnError(err); else setEditingBn(false);
+  };
   // "Done" is saved with the horse: scores are locked and the card collapses to one line.
   const locked = !!entry.is_done;
   const [peek, setPeek] = useState(false);
@@ -80,7 +93,37 @@ const ScoringHorseCard = ({ entry, rules, maneuvers, placing, onChange, onRemove
       <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-1.5">
         <span className="font-semibold">{workOrderLabel(entry.work_order)}</span>
         <span className="text-sm text-muted-foreground">Back number</span>
-        <span className="text-lg font-semibold">{entry.back_number}</span>
+        {editingBn ? (
+          <form onSubmit={saveBn} className="flex flex-wrap items-center gap-1.5">
+            <input
+              autoFocus
+              value={bnText}
+              onChange={(e) => { setBnText(e.target.value); setBnError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Escape') setEditingBn(false); }}
+              inputMode="numeric"
+              aria-label="New back number"
+              className="h-8 w-28 rounded-md border bg-background px-2 text-base font-semibold"
+            />
+            <Button type="submit" size="sm" disabled={bnSaving}><Check className="mr-1 h-4 w-4" />Save</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setEditingBn(false)}>Cancel</Button>
+            {bnError && <span className="text-xs text-red-600">{bnError}</span>}
+          </form>
+        ) : (
+          <>
+            <span className="text-lg font-semibold">{entry.back_number}</span>
+            {!classCompleted && onBackNumber && (
+              <button
+                type="button"
+                onClick={startBnEdit}
+                title="Edit the back number"
+                aria-label="Edit the back number"
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+            )}
+          </>
+        )}
         {placing ? <span className="rounded bg-emerald-100 px-2 py-0.5 text-sm font-semibold text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-100">{ordinal(placing)} place</span> : null}
         {result.status === 'dq' && <span className="rounded bg-red-100 px-2 py-0.5 text-sm text-red-800 dark:bg-red-900/60 dark:text-red-100">DISQUALIFIED</span>}
         {result.status === 'zero' && <span className="rounded bg-orange-100 px-2 py-0.5 text-sm text-orange-800 dark:bg-orange-900/60 dark:text-orange-100">ZERO</span>}

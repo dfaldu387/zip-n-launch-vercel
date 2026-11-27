@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Plus, CheckCircle2 } from 'lucide-react';
+import { Loader2, Plus, CheckCircle2, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
@@ -46,40 +46,42 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
   }, [scrollToId, entries]);
 
   // Tiebreaker chosen by the judge for this class: an ordered list of steps ([] = none).
-  const [tiebreak, setTiebreak] = useState([]);
+  // The two tiebreakers are locked: 1) overall penalty score (lower wins), 2) maneuver scores.
+  // Only the maneuver order can be changed.
+  const [savedOrder, setSavedOrder] = useState([]);
+  const tiebreak = useMemo(
+    () => [{ type: 'penalties' }, { type: 'maneuvers', order: savedOrder }],
+    [savedOrder],
+  );
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const { data } = await supabase.from('scoring_class_settings')
         .select('tiebreak').eq('show_id', showId).eq('sheet_key', sheetKey).maybeSingle();
-      if (!cancelled) setTiebreak(Array.isArray(data?.tiebreak) ? data.tiebreak : []);
+      const saved = Array.isArray(data?.tiebreak) ? data.tiebreak.find((t) => t.type === 'maneuvers') : null;
+      if (!cancelled) setSavedOrder(Array.isArray(saved?.order) ? saved.order : []);
     })();
     return () => { cancelled = true; };
   }, [showId, sheetKey]);
 
-  const saveTiebreak = async (steps) => {
-    const before = tiebreak;
-    setTiebreak(steps);
+  const setManeuverOrder = async (order) => {
+    const before = savedOrder;
+    setSavedOrder(order);
     const { error } = await supabase.from('scoring_class_settings').upsert(
-      { show_id: showId, sheet_key: sheetKey, tiebreak: steps, updated_at: new Date().toISOString() },
+      {
+        show_id: showId, sheet_key: sheetKey,
+        tiebreak: [{ type: 'penalties' }, { type: 'maneuvers', order }],
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: 'show_id,sheet_key' },
     );
     if (error) {
-      setTiebreak(before);
+      setSavedOrder(before);
       toast({ title: 'Could not save the tiebreaker', description: error.message, variant: 'destructive' });
     }
   };
-
-  // Up to two tiebreakers, checked in order. Each kind can be used once.
-  const stepType = (n) => tiebreak[n]?.type || 'none';
-  const maneuverOrder = tiebreak.find((t) => t.type === 'maneuvers')?.order || [];
-  const setSlot = (n, type) => {
-    const slots = [tiebreak[0] || null, tiebreak[1] || null];
-    slots[n] = type === 'none' ? null : type === 'maneuvers' ? { type, order: slots[n]?.type === 'maneuvers' ? slots[n].order : [] } : { type };
-    saveTiebreak(slots.filter(Boolean));
-  };
-  const setManeuverOrder = (order) => saveTiebreak(tiebreak.map((t) => (t.type === 'maneuvers' ? { ...t, order } : t)));
-  const hasManeuvers = tiebreak.some((t) => t.type === 'maneuvers');
+  const maneuverOrder = savedOrder;
+  const hasManeuvers = true;
 
   const placings = useMemo(
     () => buildPlacings(entries, rules.starting_score, maneuvers.length, tiebreak),
@@ -135,6 +137,22 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
     }
   };
 
+  // Change a horse's back number. Returns an error message, or null when it saved.
+  const changeBackNumber = async (id, value) => {
+    const bn = cleanBackNumber(value);
+    if (!bn) return 'Type a back number first';
+    const current = entriesRef.current.find((x) => x.id === id);
+    if (current && current.back_number === bn) return null;
+    if (entriesRef.current.some((x) => x.id !== id && x.back_number.toLowerCase() === bn.toLowerCase())) {
+      return `Back number ${bn} is already on this sheet`;
+    }
+    const { error } = await supabase.from('scoring_entries')
+      .update({ back_number: bn, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) return error.code === '23505' ? `Back number ${bn} is already on this sheet` : error.message;
+    setAll(entriesRef.current.map((x) => (x.id === id ? { ...x, back_number: bn } : x)));
+    return null;
+  };
+
   // Is this class already completed? (the saved placings snapshot exists)
   useEffect(() => {
     let cancelled = false;
@@ -181,25 +199,15 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
       <div className="mb-3 rounded-lg border px-4 py-2 text-sm">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="font-medium">Tiebreakers</span>
-          {[0, 1].map((n) => {
-            const other = stepType(n === 0 ? 1 : 0);
-            return (
-              <label key={n} className="flex items-center gap-2">
-                <span className="text-muted-foreground">{n === 0 ? 'First' : 'Second'}</span>
-                <select
-                  className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
-                  value={stepType(n)}
-                  disabled={n === 1 && tiebreak.length === 0}
-                  onChange={(e) => setSlot(n, e.target.value)}
-                  aria-label={`${n === 0 ? 'First' : 'Second'} tiebreaker`}
-                >
-                  <option value="none">{n === 0 ? 'None (tied horses share the placing)' : 'None'}</option>
-                  <option value="penalties" disabled={other === 'penalties'}>Penalties (fewer wins)</option>
-                  <option value="maneuvers" disabled={other === 'maneuvers'}>Maneuver scores (higher wins)</option>
-                </select>
-              </label>
-            );
-          })}
+          {['Overall penalty score', 'Maneuver scores'].map((label, n) => (
+            <span key={label} className="flex items-center gap-2">
+              <span className="text-muted-foreground">{n === 0 ? 'First' : 'Second'}</span>
+              <span className="inline-flex h-9 items-center gap-1.5 rounded-md border bg-muted px-3 text-sm" title="Locked">
+                <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                {label}
+              </span>
+            </span>
+          ))}
         </div>
         {hasManeuvers && (
           <div className="mt-2">
@@ -321,6 +329,8 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
             placing={placings.ranked.find((r) => r.id === x.id)?.placing ?? null}
             onChange={(patch) => change(x.id, patch)}
             onRemove={() => remove(x.id)}
+            onBackNumber={(value) => changeBackNumber(x.id, value)}
+            classCompleted={!!completedAt}
             onDone={goToAddBox}
           />
         ))

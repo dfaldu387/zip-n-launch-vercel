@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Plus, Trash2, Check, CheckCircle2 } from 'lucide-react';
+import { Loader2, Plus, Trash2, Check, CheckCircle2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
@@ -215,6 +215,54 @@ const ScoringLiveBoard = ({ showId, sheetKey, rules, maneuvers, finalScores = nu
     if (activePenalty) applyPenalty(entry, activePenalty);
     else if (mode === 'score' && activeScore !== null) applyScore(entry, activeScore);
   };
+
+  // Pencil next to the back number: edit it in place (selected panel and scorecard).
+  const [editingBn, setEditingBn] = useState(false);
+  const [bnText, setBnText] = useState('');
+  const [bnError, setBnError] = useState('');
+  const [bnSaving, setBnSaving] = useState(false);
+  useEffect(() => { setEditingBn(false); setBnError(''); }, [selectedId]);
+  const startBnEdit = () => { if (locked) { lockedToast(); return; } setBnText(String(selected?.back_number ?? '')); setBnError(''); setEditingBn(true); };
+  const saveBn = async (e) => {
+    e?.preventDefault();
+    if (!selected) return;
+    const bn = cleanBackNumber(bnText);
+    if (!bn) { setBnError('Type a back number first'); return; }
+    if (bn === selected.back_number) { setEditingBn(false); return; }
+    if (entriesRef.current.some((x) => x.id !== selected.id && x.back_number.toLowerCase() === bn.toLowerCase())) {
+      setBnError(`Back number ${bn} is already in this class`);
+      return;
+    }
+    setBnSaving(true);
+    const { error } = await supabase.from('scoring_entries')
+      .update({ back_number: bn, updated_at: new Date().toISOString() }).eq('id', selected.id);
+    setBnSaving(false);
+    if (error) { setBnError(error.code === '23505' ? `Back number ${bn} is already in this class` : error.message); return; }
+    setAll(entriesRef.current.map((x) => (x.id === selected.id ? { ...x, back_number: bn } : x)));
+    setEditingBn(false);
+  };
+  const bnEditor = (
+    <form onSubmit={saveBn} className="flex flex-wrap items-center gap-1.5">
+      <input
+        autoFocus
+        value={bnText}
+        onChange={(e) => { setBnText(e.target.value); setBnError(''); }}
+        onKeyDown={(e) => { if (e.key === 'Escape') setEditingBn(false); }}
+        inputMode="numeric"
+        aria-label="New back number"
+        className="h-8 w-24 rounded-md border bg-background px-2 text-base font-semibold"
+      />
+      <Button type="submit" size="sm" disabled={bnSaving}><Check className="mr-1 h-4 w-4" />Save</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => setEditingBn(false)}>Cancel</Button>
+      {bnError && <span className="w-full text-xs text-red-600">{bnError}</span>}
+    </form>
+  );
+  const bnPencil = (
+    <button type="button" onClick={startBnEdit} title="Edit the back number" aria-label="Edit the back number"
+      className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+      <Pencil className="h-4 w-4" />
+    </button>
+  );
 
   const remove = async () => {
     if (!selected) return;
@@ -442,7 +490,9 @@ const ScoringLiveBoard = ({ showId, sheetKey, rules, maneuvers, finalScores = nu
                     return (
                       <>
                         <div className="flex items-start justify-between">
-                          <p className="text-3xl font-bold">#{selected.back_number}</p>
+                          {editingBn ? bnEditor : (
+                            <p className="flex items-center gap-1 text-3xl font-bold">#{selected.back_number}{!locked && bnPencil}</p>
+                          )}
                           <div className="text-right">
                             <p className="text-xs text-muted-foreground">Total score</p>
                             <p className="text-2xl font-bold">{formatScore(t?.total) || 0}</p>
@@ -513,7 +563,12 @@ const ScoringLiveBoard = ({ showId, sheetKey, rules, maneuvers, finalScores = nu
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-medium">
                 Scorecard <span className="ml-2 text-sm font-normal text-muted-foreground">Back number</span>{' '}
-                <span className="text-lg font-bold">{selected.back_number}</span>
+                {editingBn ? <span className="inline-block align-middle">{bnEditor}</span> : (
+                  <>
+                    <span className="text-lg font-bold">{selected.back_number}</span>
+                    {!locked && <span className="ml-1 inline-block align-middle">{bnPencil}</span>}
+                  </>
+                )}
                 {placingOf && <span className="ml-2 text-sm font-semibold text-emerald-600">Place {placingOf}</span>}
               </h2>
               <div className="flex items-center gap-2">
