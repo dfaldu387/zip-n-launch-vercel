@@ -30,8 +30,16 @@ const WIDE_PRESET_SCORES = [-3, -2.5, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `p-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
 // What gets compared to know whether there are unsaved changes.
-const snapshot = (startingScore, penalties, scores, final, sheetType) =>
-    JSON.stringify({ s: String(startingScore), p: penalties.map(p => [p.name, String(p.points), p.kind]), m: scores, f: [final.enabled, final.label, final.scores], t: sheetType });
+const snapshot = (startingScore, penalties, scores, final, sheetType, labels = {}) =>
+    JSON.stringify({ s: String(startingScore), p: penalties.map(p => [p.name, String(p.points), p.kind]), m: scores, f: [final.enabled, final.label, final.scores], t: sheetType, l: Object.keys(labels).sort().map(k => [k, labels[k]]) });
+
+// Keep only labels for scores that exist and are not blank. Keys are the score as text ("1.5").
+const cleanLabels = (labels, scores) => {
+    const out = {};
+    scores.forEach(s => { const t = String(labels?.[String(s)] ?? '').trim(); if (t) out[String(s)] = t; });
+    return out;
+};
+const NAMED_PRESET = { scores: [-2, -1, 0, 1, 2], labels: { '2': 'Excellent', '1': 'Good', '0': 'Average', '-1': 'Below Average', '-2': 'Poor' } };
 
 export { SHEET_TYPES };
 
@@ -129,12 +137,14 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
     const [finalM, setFinalM] = useState(EMPTY_FINAL);
     const [newFinalScore, setNewFinalScore] = useState('');
     const [sheetType, setSheetType] = useState(DEFAULT_SHEET_TYPE);
+    const [labels, setLabels] = useState({});
 
     // Fill the form from another discipline's rules. Not saved until Save is clicked.
     const applyCopied = (source) => {
         setStartingScore(String(source.starting_score ?? 70));
         setPenalties((source.penalties || []).map(x => ({ id: newId(), name: x.name || '', points: x.points ?? '', kind: x.kind || 'normal' })));
         setScores([...(source.maneuver_scores || [])].map(Number).sort((a, b) => a - b));
+        setLabels({ ...(source.score_labels || {}) });
         setNewScore('');
         setFinalM(readFinal(source.final_maneuver));
         setNewFinalScore('');
@@ -150,16 +160,27 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
         setStartingScore(s);
         setPenalties(p);
         setScores(m);
+        const l = cleanLabels(rules.score_labels, m);
+        setLabels(l);
         setNewScore('');
         const f = readFinal(rules.final_maneuver);
         setFinalM(f);
         setNewFinalScore('');
         const t = SHEET_TYPES[rules.sheet_type] ? rules.sheet_type : DEFAULT_SHEET_TYPE;
         setSheetType(t);
-        setSavedSnapshot(snapshot(s, p, m, f, t));
+        setSavedSnapshot(snapshot(s, p, m, f, t, l));
     }, [rules]);
 
-    const isDirty = useMemo(() => snapshot(startingScore, penalties, scores, finalM, sheetType) !== savedSnapshot, [startingScore, penalties, scores, finalM, sheetType, savedSnapshot]);
+    const isTime = sheetType === 'time';
+
+    // Picking "by Time": start at 0.00. Penalty kinds are never changed here, so switching back
+    // to another type loses nothing. The time screen only uses "normal" penalties (seconds).
+    const pickSheetType = (key) => {
+        setSheetType(key);
+        if (key === 'time' && String(startingScore) === '70') setStartingScore('0');
+    };
+
+    const isDirty = useMemo(() => snapshot(startingScore, penalties, scores, finalM, sheetType, cleanLabels(labels, scores)) !== savedSnapshot, [startingScore, penalties, scores, finalM, sheetType, labels, savedSnapshot]);
 
     const addFinalScore = (value) => {
         const n = Number(value);
@@ -181,17 +202,17 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
     const handleSave = async () => {
         const start = Number(startingScore);
         if (startingScore === '' || !Number.isFinite(start)) {
-            toast({ title: 'Starting score needed', description: 'Enter a number, for example 70.', variant: 'destructive' });
+            toast({ title: isTime ? 'Starting time needed' : 'Starting score needed', description: isTime ? 'Enter a number, normally 0.' : 'Enter a number, for example 70.', variant: 'destructive' });
             return;
         }
         for (const p of penalties) {
             if (!p.name.trim()) { toast({ title: 'A penalty has no name', description: 'Give every penalty a name or remove it.', variant: 'destructive' }); return; }
             if (p.kind === 'normal' && (p.points === '' || !Number.isFinite(Number(p.points)) || Number(p.points) < 0)) {
-                toast({ title: `Points needed for "${p.name}"`, description: 'Enter the points to subtract, for example 1 or 0.5.', variant: 'destructive' });
+                toast({ title: `Points needed for "${p.name}"`, description: isTime ? 'Enter the seconds to add, for example 5.' : 'Enter the points to subtract, for example 1 or 0.5.', variant: 'destructive' });
                 return;
             }
         }
-        if (finalM.enabled) {
+        if (finalM.enabled && !isTime) {
             if (!finalM.label.trim()) { toast({ title: 'Final Maneuver needs a name', description: 'For example: Form & Effectiveness.', variant: 'destructive' }); return; }
             if (finalM.scores.length === 0) { toast({ title: 'Final Maneuver needs scores', description: 'Add the scores a judge can give, for example 0 to 5.', variant: 'destructive' }); return; }
         }
@@ -212,7 +233,8 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 starting_score: start,
                 penalties: cleanPenalties,
                 maneuver_scores: scores,
-                final_maneuver: finalM.enabled ? { enabled: true, label: finalM.label.trim(), scores: finalM.scores } : null,
+                score_labels: cleanLabels(labels, scores),
+                final_maneuver: finalM.enabled && !isTime ? { enabled: true, label: finalM.label.trim(), scores: finalM.scores } : null,
                 updated_at: new Date().toISOString(),
             }, { onConflict: 'discipline_id' })
             .select()
@@ -232,7 +254,7 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 <p className="text-sm text-muted-foreground">Which kind of score sheet does this class use?</p>
                 <div className="grid gap-2 sm:grid-cols-2">
                     {Object.entries(SHEET_TYPES).map(([key, t]) => (
-                        <button key={key} type="button" onClick={() => setSheetType(key)}
+                        <button key={key} type="button" onClick={() => pickSheetType(key)}
                             className={`rounded-md border p-3 text-left transition-colors ${sheetType === key ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-accent'}`}>
                             <span className="flex items-center gap-2 font-medium">
                                 <span className={`h-4 w-4 rounded-full border ${sheetType === key ? 'border-primary bg-primary' : 'border-muted-foreground'}`} />
@@ -244,20 +266,25 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 </div>
                 {sheetType === 'scores' && (
                     <p className="rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
-                        The Scoring Portal opens the {SHEET_TYPES[sheetType].label} screen for this class. That screen is still being built, so judges see a "coming soon" page for now. The fields below will be used by it.
+                        The Scoring Portal opens the {SHEET_TYPES[sheetType].label} screen for this class. It uses the starting score, penalties and maneuver scores below.
                     </p>
                 )}
-                {(sheetType === 'notes' || sheetType === 'time') && (
+                {sheetType === 'notes' && (
                     <p className="rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
                         The Scoring Portal opens the {SHEET_TYPES[sheetType].label} screen for this class. The score fields below are not used by this type.
+                    </p>
+                )}
+                {isTime && (
+                    <p className="rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
+                        The Scoring Portal opens the {SHEET_TYPES[sheetType].label} screen for this class. Penalties add seconds to the time. There are no maneuver scores.
                     </p>
                 )}
             </section>
 
             {/* Starting score */}
             <section className="space-y-2">
-                <Label htmlFor="starting-score" className="text-base font-semibold">Starting score</Label>
-                <p className="text-sm text-muted-foreground">Every horse starts the class with this score.</p>
+                <Label htmlFor="starting-score" className="text-base font-semibold">{isTime ? 'Starting time (seconds)' : 'Starting score'}</Label>
+                <p className="text-sm text-muted-foreground">{isTime ? 'Added to every horse\'s time. Normally 0.00.' : 'Every horse starts the class with this score.'}</p>
                 <Input id="starting-score" type="number" step="0.5" inputMode="decimal" className="w-32"
                     value={startingScore} onChange={e => setStartingScore(e.target.value)} />
             </section>
@@ -267,12 +294,14 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                         <h3 className="text-base font-semibold">Penalties</h3>
-                        <p className="text-sm text-muted-foreground">A horse can have several penalties. ZERO and DQ are special.</p>
+                        <p className="text-sm text-muted-foreground">
+                            {isTime ? 'Each penalty adds seconds to the time, for example Barrel Knocked Down = 5 seconds. A horse with no time is marked "DQ / No time" on the score sheet.' : 'A horse can have several penalties. ZERO and DQ are special.'}
+                        </p>
                     </div>
                     <div className="flex gap-2">
                         <Button variant="outline" size="sm" onClick={() => addPenalty('normal')}><PlusCircle className="mr-1.5 h-4 w-4" />Add penalty</Button>
-                        <Button variant="outline" size="sm" onClick={() => addPenalty('zero')}>+ ZERO</Button>
-                        <Button variant="outline" size="sm" onClick={() => addPenalty('dq')}>+ DQ</Button>
+                        {!isTime && <Button variant="outline" size="sm" onClick={() => addPenalty('zero')}>+ ZERO</Button>}
+                        {!isTime && <Button variant="outline" size="sm" onClick={() => addPenalty('dq')}>+ DQ</Button>}
                     </div>
                 </div>
 
@@ -281,18 +310,18 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 ) : (
                     <div className="space-y-2">
                         <div className="hidden sm:grid grid-cols-[1fr_110px_230px_40px] gap-2 px-1 text-xs font-medium text-muted-foreground">
-                            <span>Name</span><span>Points</span><span>Type</span><span />
+                            <span>Name</span><span>{isTime ? 'Seconds' : 'Points'}</span><span>Type</span><span />
                         </div>
                         {penalties.map(p => (
                             <div key={p.id} className="grid grid-cols-1 sm:grid-cols-[1fr_110px_230px_40px] gap-2 items-center rounded-md border p-2 sm:border-0 sm:p-0">
                                 <Input placeholder="Penalty name" value={p.name} onChange={e => updatePenalty(p.id, { name: e.target.value })} />
-                                <Input type="number" step="0.5" min="0" inputMode="decimal" placeholder={p.kind === 'normal' ? 'e.g. 1' : '—'}
+                                <Input type="number" step="0.5" min="0" inputMode="decimal" placeholder={p.kind === 'normal' ? (isTime ? 'e.g. 5' : 'e.g. 1') : '—'}
                                     disabled={p.kind !== 'normal'} value={p.kind === 'normal' ? p.points : ''}
                                     onChange={e => updatePenalty(p.id, { points: e.target.value })} />
                                 <Select value={p.kind} onValueChange={v => updatePenalty(p.id, { kind: v })}>
                                     <SelectTrigger><SelectValue /></SelectTrigger>
                                     <SelectContent>
-                                        {Object.entries(KIND_LABEL).map(([k, label]) => <SelectItem key={k} value={k}>{label}</SelectItem>)}
+                                        {Object.entries(isTime ? { ...KIND_LABEL, normal: 'Normal (add seconds)' } : KIND_LABEL).map(([k, label]) => <SelectItem key={k} value={k}>{label}</SelectItem>)}
                                     </SelectContent>
                                 </Select>
                                 <Button variant="ghost" size="icon" className="text-destructive" aria-label="Remove penalty"
@@ -303,8 +332,8 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                 )}
             </section>
 
-            {/* Maneuver scores */}
-            <section className="space-y-3">
+            {/* Maneuver scores (not used by "by Time") */}
+            {!isTime && <section className="space-y-3">
                 <div>
                     <h3 className="text-base font-semibold">Maneuver scores</h3>
                     <p className="text-sm text-muted-foreground">The scores a judge can give for one maneuver. Fractions are fine (0.5 shows as ½).</p>
@@ -326,12 +355,28 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                     <Button variant="outline" size="sm" onClick={() => addScore(newScore)}><PlusCircle className="mr-1.5 h-4 w-4" />Add score</Button>
                     <Button variant="ghost" size="sm" onClick={() => setScores(PRESET_SCORES)}>Use -1½ to +1½</Button>
                     <Button variant="ghost" size="sm" onClick={() => setScores(WIDE_PRESET_SCORES)}>Use -3 to +3</Button>
-                    {scores.length > 0 && <Button variant="ghost" size="sm" onClick={() => setScores([])}>Clear</Button>}
+                    <Button variant="ghost" size="sm" onClick={() => { setScores(NAMED_PRESET.scores); setLabels({ ...NAMED_PRESET.labels }); }}>Use -2 to +2 with names</Button>
+                    {scores.length > 0 && <Button variant="ghost" size="sm" onClick={() => { setScores([]); setLabels({}); }}>Clear</Button>}
                 </div>
-            </section>
+                {scores.length > 0 && (
+                    <div className="space-y-2 rounded-md border p-3">
+                        <p className="text-sm font-medium">Score names (optional)</p>
+                        <p className="text-xs text-muted-foreground">Shown next to the score in the Live Scoring screen, for example Excellent, Good, Average.</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            {[...scores].sort((a, b) => b - a).map(s => (
+                                <div key={s} className="flex items-center gap-2">
+                                    <span className={`w-12 shrink-0 text-right text-sm font-semibold ${s > 0 ? 'text-emerald-600' : s < 0 ? 'text-red-600' : ''}`}>{s > 0 ? `+${formatScore(s)}` : (formatScore(s) || 0)}</span>
+                                    <Input value={labels[String(s)] || ''} placeholder="Name, e.g. Good" maxLength={24}
+                                        onChange={e => setLabels(l => ({ ...l, [String(s)]: e.target.value }))} />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </section>}
 
-            {/* Final Maneuver */}
-            <section className="space-y-3">
+            {/* Final Maneuver (not used by "by Time") */}
+            {!isTime && <section className="space-y-3">
                 <div>
                     <h3 className="text-base font-semibold">Final Maneuver</h3>
                     <p className="text-sm text-muted-foreground">An extra last column on every score sheet, with its own scores (for example Form &amp; Effectiveness, 0 to 5).</p>
@@ -368,7 +413,7 @@ const ScoringRulesEditor = ({ disciplineId, associationId, rules, onSaved }) => 
                         </div>
                     </div>
                 )}
-            </section>
+            </section>}
 
             {/* Save */}
             <div className="flex items-center gap-3 border-t pt-4">

@@ -7,10 +7,13 @@ import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabaseClient';
 import { nextWorkOrder, cleanBackNumber, workOrderLabel } from '@/lib/scoringSheetInfo';
 import { ordinal } from '@/lib/scoreMath';
-import { parseTime, formatTime, rankByTime } from '@/lib/scoringTime';
+import { parseTime, formatTime, rankByTime, penaltySeconds } from '@/lib/scoringTime';
 
-// One horse: type its time, or mark "No time". The time is saved when you leave the box or press Enter.
-const TimeRow = ({ entry, placing, locked, onTime, onNoTime, onRemove }) => {
+// One horse: type its time, add penalties (seconds), or mark "DQ / No time".
+// The time is saved when you leave the box or press Enter.
+const TimeRow = ({ entry, placing, finalSeconds, rules, locked, onTime, onNoTime, onPenalty, onRemove }) => {
+  const penalties = (rules?.penalties || []).filter((p) => !p.kind || p.kind === 'normal');
+  const extra = penaltySeconds(entry, rules);
   const [draft, setDraft] = useState(entry.time_seconds != null ? formatTime(entry.time_seconds) : '');
   useEffect(() => { setDraft(entry.time_seconds != null ? formatTime(entry.time_seconds) : ''); }, [entry.time_seconds]);
 
@@ -23,7 +26,7 @@ const TimeRow = ({ entry, placing, locked, onTime, onNoTime, onRemove }) => {
 
   return (
     <div className={`flex flex-wrap items-center gap-3 rounded-lg border p-3 ${entry.no_time ? 'bg-muted/50' : 'bg-card'}`}>
-      <span className="w-14 text-lg font-bold">{entry.no_time ? 'NT' : placing ? ordinal(placing) : '—'}</span>
+      <span className="w-14 text-lg font-bold">{entry.no_time ? 'DQ' : placing ? ordinal(placing) : '—'}</span>
       <span className="min-w-[90px]">
         <span className="block text-xl font-bold">#{entry.back_number}</span>
         <span className="block text-[10px] text-muted-foreground">{workOrderLabel(entry.work_order)}</span>
@@ -40,10 +43,36 @@ const TimeRow = ({ entry, placing, locked, onTime, onNoTime, onRemove }) => {
         className="h-11 w-40 text-base"
       />
       <span className="text-sm text-muted-foreground">sec</span>
+      {!entry.no_time && finalSeconds !== null && (
+        <span className="text-sm">
+          <span className="text-muted-foreground">Final </span>
+          <b className="text-base">{formatTime(finalSeconds)}</b>
+          {extra > 0 && <span className="text-xs text-muted-foreground"> (+{extra} sec penalties)</span>}
+        </span>
+      )}
+      {!entry.no_time && penalties.length > 0 && (
+        <div className="flex basis-full flex-wrap items-center gap-1.5">
+          {penalties.map((p) => {
+            const count = Number(entry.time_penalties?.[p.id]) || 0;
+            return (
+              <span key={p.id} className={`inline-flex items-center overflow-hidden rounded-md border text-xs ${count > 0 ? 'border-red-300 bg-red-50 dark:bg-red-950/30' : ''}`}>
+                <button type="button" disabled={locked} onClick={() => onPenalty(p.id, count + 1)}
+                  className="px-2 py-1.5 hover:bg-accent disabled:opacity-60">
+                  + {p.name} ({Number(p.points)} sec){count > 0 && <b className="ml-1 text-red-700 dark:text-red-300">×{count}</b>}
+                </button>
+                {count > 0 && !locked && (
+                  <button type="button" aria-label={`Remove one ${p.name}`} onClick={() => onPenalty(p.id, count - 1)}
+                    className="border-l px-2 py-1.5 font-bold hover:bg-accent">−</button>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
       {!locked && (
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" variant={entry.no_time ? 'default' : 'outline'} onClick={onNoTime}>
-            <Ban className="mr-1.5 h-4 w-4" />{entry.no_time ? 'Add a time' : 'No time'}
+            <Ban className="mr-1.5 h-4 w-4" />{entry.no_time ? 'Add a time' : 'DQ / No time'}
           </Button>
           <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemove} aria-label="Remove exhibitor">
             <Trash2 className="h-4 w-4" />
@@ -59,7 +88,7 @@ const TimeRow = ({ entry, placing, locked, onTime, onNoTime, onRemove }) => {
  * The fastest time places first. Rows stay in the order they were added, so they do not
  * jump around while typing; the placings are shown in their own box above.
  */
-const ScoringTimeBoard = ({ showId, sheetKey }) => {
+const ScoringTimeBoard = ({ showId, sheetKey, rules }) => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [entries, setEntries] = useState([]);
@@ -73,8 +102,14 @@ const ScoringTimeBoard = ({ showId, sheetKey }) => {
   const addInputRef = useRef(null);
 
   const setAll = useCallback((next) => { entriesRef.current = next; setEntries(next); }, []);
-  const ranking = useMemo(() => rankByTime(entries), [entries]);
+  const ranking = useMemo(() => rankByTime(entries, rules), [entries, rules]);
   const placingOf = (id) => ranking.ranked.find((x) => x.id === id)?.placing ?? null;
+  const finalOf = (id) => ranking.ranked.find((x) => x.id === id)?.time ?? null;
+  const setPenalty = (entry, penaltyId, count) => {
+    const next = { ...(entry.time_penalties || {}) };
+    if (count > 0) next[penaltyId] = count; else delete next[penaltyId];
+    change(entry.id, { time_penalties: next });
+  };
 
   const load = useCallback(async () => {
     const { data, error } = await supabase.from('scoring_entries').select('*')
@@ -144,6 +179,8 @@ const ScoringTimeBoard = ({ showId, sheetKey }) => {
       work_order: x.work_order,
       total: x.time,
       status: x.no_time ? 'no_time' : x.time !== null ? 'timed' : 'no_time',
+      raw_time: x.time_seconds != null ? Number(x.time_seconds) : null,
+      penalty_seconds: penaltySeconds(x, rules),
     }));
     const { error } = await supabase.from('scoring_class_results').upsert(
       { show_id: showId, sheet_key: sheetKey, results, completed_at: new Date().toISOString() },
@@ -234,7 +271,8 @@ const ScoringTimeBoard = ({ showId, sheetKey }) => {
         <div className="space-y-2">
           {locked && <p className="text-xs text-muted-foreground">The class is completed. Reopen it to change the times.</p>}
           {entries.map((x) => (
-            <TimeRow key={x.id} entry={x} placing={placingOf(x.id)} locked={locked}
+            <TimeRow key={x.id} entry={x} placing={placingOf(x.id)} finalSeconds={finalOf(x.id)} rules={rules} locked={locked}
+              onPenalty={(pid, count) => setPenalty(x, pid, count)}
               onTime={(t) => change(x.id, { time_seconds: t })}
               onNoTime={() => change(x.id, x.no_time ? { no_time: false } : { no_time: true })}
               onRemove={() => remove(x.id)} />

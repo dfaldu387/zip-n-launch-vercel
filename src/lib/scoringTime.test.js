@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTime, formatTime, rankByTime } from './scoringTime';
+import { parseTime, formatTime, rankByTime, penaltySeconds, finalTime } from './scoringTime';
 
 const e = (id, work_order, time_seconds, no_time = false) => ({ id, work_order, time_seconds, no_time });
 
@@ -15,6 +15,22 @@ describe('parseTime / formatTime', () => {
   it('shows three decimals', () => {
     expect(formatTime(17.3)).toBe('17.300');
     expect(formatTime(null)).toBe('');
+  });
+});
+
+describe('time penalties', () => {
+  const rules = { starting_score: 0, penalties: [{ id: 'p1', name: 'Barrel', points: 5, kind: 'normal' }, { id: 'p2', name: 'X', points: 0, kind: 'dq' }] };
+  it('adds seconds for each penalty, ignores special kinds', () => {
+    expect(penaltySeconds({ time_penalties: { p1: 2, p2: 1 } }, rules)).toBe(10);
+    expect(finalTime({ time_seconds: '17.1', time_penalties: { p1: 1 } }, rules)).toBe(22.1);
+    expect(finalTime({ time_seconds: '' }, rules)).toBeNull();
+  });
+  it('penalties change the placings', () => {
+    const { ranked } = rankByTime([
+      { id: 'a', work_order: 1, time_seconds: '17', time_penalties: { p1: 1 } },
+      { id: 'b', work_order: 2, time_seconds: '20' },
+    ], rules);
+    expect(ranked.map((x) => [x.id, x.placing])).toEqual([['b', 1], ['a', 2]]);
   });
 });
 

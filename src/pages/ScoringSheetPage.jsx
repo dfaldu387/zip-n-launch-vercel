@@ -8,8 +8,10 @@ import { supabase } from '@/lib/supabaseClient';
 import ScoringHorseList from '@/components/scoring/ScoringHorseList';
 import ScoringNotesBoard from '@/components/scoring/ScoringNotesBoard';
 import ScoringTimeBoard from '@/components/scoring/ScoringTimeBoard';
+import ScoringLiveBoard from '@/components/scoring/ScoringLiveBoard';
 import ScoringTypeComingSoon from '@/components/scoring/ScoringTypeComingSoon';
 import { SHEET_TYPES } from '@/lib/scoringSheetTypes';
+import { LIVE_SAMPLE_MANEUVERS } from '@/lib/scoringLive';
 import { useShowScoringClasses } from '@/hooks/useShowScoringClasses';
 import { formatSheetDate, formatScore, SAMPLE_MANEUVERS, DEFAULT_RULES } from '@/lib/scoringSheetInfo';
 
@@ -118,7 +120,16 @@ const ScoringSheetPage = () => {
               ) : sheetType === 'notes' ? (
                 <ScoringNotesBoard showId={showId} sheetKey={sheet.key} />
               ) : sheetType === 'time' ? (
-                <ScoringTimeBoard showId={showId} sheetKey={sheet.key} />
+                <ScoringTimeBoard showId={showId} sheetKey={sheet.key} rules={effective} />
+              ) : sheetType === 'scores' ? (
+                <>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    The maneuver names are a sample list for now. They will come from the pattern.
+                  </p>
+                  <ScoringLiveBoard showId={showId} sheetKey={sheet.key} rules={effective}
+                    maneuvers={finalOn ? [...LIVE_SAMPLE_MANEUVERS, effective.final_maneuver.label] : LIVE_SAMPLE_MANEUVERS}
+                    finalScores={finalOn ? effective.final_maneuver.scores || [] : null} />
+                </>
               ) : (
                 <ScoringTypeComingSoon typeLabel={SHEET_TYPES[sheetType].label} help={SHEET_TYPES[sheetType].help} />
               )}

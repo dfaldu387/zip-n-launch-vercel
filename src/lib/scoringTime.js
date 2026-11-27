@@ -11,14 +11,33 @@ export const parseTime = (v) => {
 // 17.3 -> "17.300". Three decimals, like a timer shows.
 export const formatTime = (n) => (Number.isFinite(Number(n)) && n !== null && n !== '' ? Number(n).toFixed(3) : '');
 
+// Seconds added by penalties. entry.time_penalties = { [penaltyId]: howManyTimes }.
+export const penaltySeconds = (entry, rules) => {
+  const counts = entry?.time_penalties || {};
+  return (rules?.penalties || []).reduce((sum, p) => {
+    if (p.kind && p.kind !== 'normal') return sum;
+    const n = Number(counts[p.id]) || 0;
+    return sum + n * (Number(p.points) || 0);
+  }, 0);
+};
+
+// Starting time + typed time + penalty seconds. null when no valid time is typed.
+// Rounded to 3 decimals so 17.1 + 5 does not show as 22.099999.
+export const finalTime = (entry, rules) => {
+  const t = parseTime(entry?.time_seconds);
+  if (t === null) return null;
+  const start = Number(rules?.starting_score) || 0;
+  return Math.round((start + t + penaltySeconds(entry, rules)) * 1000) / 1000;
+};
+
 // Ranks the horses by time. Equal times share a placing (1, 1, 3). Horses with no time typed yet, or
 // marked "No time", get placing null. Returns { ranked, waiting, noTime }.
 //   ranked: timed horses first (fastest first), then horses with no time yet, then "No time" horses.
-export const rankByTime = (entries) => {
+export const rankByTime = (entries, rules) => {
   const list = entries || [];
   const timed = list
     .filter((e) => !e.no_time && parseTime(e.time_seconds) !== null)
-    .map((e) => ({ ...e, time: parseTime(e.time_seconds) }))
+    .map((e) => ({ ...e, time: finalTime(e, rules) }))
     .sort((a, b) => a.time - b.time || (Number(a.work_order) || 0) - (Number(b.work_order) || 0));
   let lastTime = null;
   let lastPlace = 0;
