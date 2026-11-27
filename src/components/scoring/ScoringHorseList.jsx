@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Plus, CheckCircle2, Lock } from 'lucide-react';
+import { Loader2, Plus, CheckCircle2, Lock, Unlock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
@@ -59,27 +59,38 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
       const { data } = await supabase.from('scoring_class_settings')
         .select('tiebreak').eq('show_id', showId).eq('sheet_key', sheetKey).maybeSingle();
       const saved = Array.isArray(data?.tiebreak) ? data.tiebreak.find((t) => t.type === 'maneuvers') : null;
-      if (!cancelled) setSavedOrder(Array.isArray(saved?.order) ? saved.order : []);
+      if (cancelled) return;
+      const order = Array.isArray(saved?.order) ? saved.order : [];
+      setSavedOrder(order);
+      // A class that already has an order opens locked, so it can't be changed by accident.
+      setTbLocked(typeof saved?.locked === 'boolean' ? saved.locked : order.length > 0);
     })();
     return () => { cancelled = true; };
   }, [showId, sheetKey]);
 
-  const setManeuverOrder = async (order) => {
-    const before = savedOrder;
+  // Lock / Unlock for the maneuver order. Saved with the class so it survives a reload.
+  const [tbLocked, setTbLocked] = useState(true);
+  const saveTiebreakSettings = async (order, locked) => {
+    const beforeOrder = savedOrder;
+    const beforeLocked = tbLocked;
     setSavedOrder(order);
+    setTbLocked(locked);
     const { error } = await supabase.from('scoring_class_settings').upsert(
       {
         show_id: showId, sheet_key: sheetKey,
-        tiebreak: [{ type: 'penalties' }, { type: 'maneuvers', order }],
+        tiebreak: [{ type: 'penalties' }, { type: 'maneuvers', order, locked }],
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'show_id,sheet_key' },
     );
     if (error) {
-      setSavedOrder(before);
+      setSavedOrder(beforeOrder);
+      setTbLocked(beforeLocked);
       toast({ title: 'Could not save the tiebreaker', description: error.message, variant: 'destructive' });
     }
   };
+  const setManeuverOrder = (order) => { if (!tbLocked) saveTiebreakSettings(order, false); };
+  const toggleTbLock = () => saveTiebreakSettings(savedOrder, !tbLocked);
   const maneuverOrder = savedOrder;
   const hasManeuvers = true;
 
@@ -202,12 +213,18 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
           {['Overall penalty score', 'Maneuver scores'].map((label, n) => (
             <span key={label} className="flex items-center gap-2">
               <span className="text-muted-foreground">{n === 0 ? 'First' : 'Second'}</span>
-              <span className="inline-flex h-9 items-center gap-1.5 rounded-md border bg-muted px-3 text-sm" title="Locked">
-                <Lock className="h-3.5 w-3.5 text-muted-foreground" />
-                {label}
-              </span>
+              <span className="inline-flex h-9 items-center rounded-md border bg-muted px-3 text-sm">{label}</span>
             </span>
           ))}
+          <Button
+            size="sm"
+            variant={tbLocked ? 'outline' : 'default'}
+            className="ml-auto"
+            onClick={toggleTbLock}
+            title={tbLocked ? 'Unlock to change the maneuver order' : 'Lock the maneuver order'}
+          >
+            {tbLocked ? <><Unlock className="mr-1.5 h-4 w-4" />Unlock</> : <><Lock className="mr-1.5 h-4 w-4" />Lock</>}
+          </Button>
         </div>
         {hasManeuvers && (
           <div className="mt-2">
@@ -223,7 +240,8 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
                     key={`${m}-${i}`}
                     type="button"
                     onClick={() => setManeuverOrder(on ? maneuverOrder.filter((x) => x !== i) : [...maneuverOrder, i])}
-                    className={`inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs ${on ? 'border-primary bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+                    disabled={tbLocked}
+                    className={`inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs disabled:cursor-not-allowed disabled:opacity-70 ${on ?'border-primary bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
                     title={on ? 'Click to take out of the order' : 'Click to add to the order'}
                   >
                     {on && (
@@ -235,7 +253,7 @@ const ScoringHorseList = ({ showId, sheetKey, rules, maneuvers }) => {
                   </button>
                 );
               })}
-              {maneuverOrder.length > 0 && (
+              {maneuverOrder.length > 0 && !tbLocked && (
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setManeuverOrder([])}>Clear order</Button>
               )}
             </div>
