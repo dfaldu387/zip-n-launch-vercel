@@ -7,6 +7,7 @@
 // PatternBookDialogContent.jsx) but has no screen filters and no PDF lookups, so the
 // portal gets a stable list. If a rule changes in one place, change it in both.
 import { resolveDivisionDates } from '@/lib/divisionDates';
+import { parseDivisionId } from '@/lib/showBillUtils';
 import { forEachPatternSelection, getForcedAssocForDivision } from '@/lib/patternSelectionHelpers';
 
 // "Amateur - Amateur (19 & Over)" -> "Amateur (19 & Over)"
@@ -137,6 +138,19 @@ export function buildScoringClasses(projectData) {
                 });
             });
 
+            // Score-sheet-only classes (no patterns) cannot be grouped in Group Patterns, so they
+            // have no patternGroups. Fall back to the divisions picked and dated in tabs 1-2.
+            (discipline.divisionOrder || []).forEach((divId) => {
+                const parsed = parseDivisionId(divId);
+                const name = extractDivisionName(String(parsed.divisionName || divId).replace(/^custom-/i, '')).trim();
+                if (!name) return;
+                if (assocNorm && parsed.assocId && isValidAssocKey(parsed.assocId) && upper(parsed.assocId) !== assocNorm) return;
+                if ([...entries.values()].some((e) => e.name === name)) return;
+                const entry = { name, goNumber: null, dates: [] };
+                resolveDivisionDates(discipline, { id: divId }).forEach((d) => { if (!entry.dates.includes(d)) entry.dates.push(d); });
+                entries.set(`${name}|0`, entry);
+            });
+
             // A class split into Go 1 / Go 2 must not also appear as a go-less third sheet.
             const goNames = new Set([...entries.values()].filter((e) => e.goNumber).map((e) => e.name));
             [...entries].forEach(([key, e]) => { if (!e.goNumber && goNames.has(e.name)) entries.delete(key); });
@@ -166,5 +180,48 @@ export function buildScoringClasses(projectData) {
         });
     });
 
+    return rows;
+}
+
+// Timed classes and Additional Performance classes have no pattern or score sheet, so the
+// pattern book never lists them. They live in the SHOW (Schedule & Arena Setup), so read
+// them from there: discipline_group 'timed' / 'additional', one row per division + judge.
+export const EXTRA_CLASS_GROUPS = ['timed', 'additional'];
+
+export function buildShowExtraScoringClasses(showData) {
+    const disciplines = (showData?.disciplines || []).filter((d) => EXTRA_CLASS_GROUPS.includes(d.discipline_group));
+    if (disciplines.length === 0) return [];
+    const { all: allJudges, byAssoc } = collectJudges(showData);
+
+    // Day each division was scheduled on (Schedule Layout), if it has been placed yet.
+    const dayOf = {};
+    (showData?.showBill?.days || []).forEach((day) => (day.arenas || []).forEach((arena) => (arena.items || []).forEach((item) => {
+        if (item.type === 'classBox') (item.classes || []).forEach((id) => { if (!dayOf[id]) dayOf[id] = day.date; });
+    })));
+
+    const rows = [];
+    disciplines.forEach((discipline) => {
+        const disciplineName = (discipline.name || 'Unknown Discipline').trim();
+        (discipline.divisionOrder || []).forEach((divisionId) => {
+            const { assocId, divisionName } = parseDivisionId(divisionId);
+            const name = extractDivisionName(String(divisionName || '').replace(/^custom-/i, '')) || disciplineName;
+            const assocNorm = isValidAssocKey(assocId) ? upper(assocId) : (getDisciplineAssocIds(discipline, showData)[0] || null);
+            let judges = allJudges;
+            if (assocNorm && byAssoc[assocNorm]?.size > 0) judges = [...byAssoc[assocNorm]];
+            (judges.length > 0 ? judges : ['']).forEach((judgeName) => {
+                rows.push({
+                    key: `${assocNorm || ''}-${disciplineName}-${name}-${judgeName}`,
+                    disciplineId: discipline.id ?? null,
+                    disciplineName,
+                    associationId: assocNorm,
+                    divisionName: name,
+                    goNumber: null,
+                    judgeName,
+                    date: resolveDivisionDates(discipline, { id: divisionId })[0] || dayOf[divisionId] || showData?.startDate || null,
+                    classGroup: discipline.discipline_group,
+                });
+            });
+        });
+    });
     return rows;
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
-import { buildScoringClasses } from '@/lib/scoringClasses';
+import { buildScoringClasses, buildShowExtraScoringClasses } from '@/lib/scoringClasses';
 
 // Same link the Patterns & Scoresheets page uses: the book that belongs to this show.
 const bookShowLink = (book) => {
@@ -35,6 +35,12 @@ export function useShowScoringClasses(showId) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, showId]);
 
-  const rows = useMemo(() => (book ? buildScoringClasses(book.project_data) : []), [book]);
+  // Pattern-book classes first, then the show's timed / additional performance classes.
+  const rows = useMemo(() => {
+    const fromBook = book ? buildScoringClasses(book.project_data) : [];
+    const seen = new Set(fromBook.map((r) => r.key));
+    const extra = buildShowExtraScoringClasses(show?.project_data).filter((r) => !seen.has(r.key));
+    return [...fromBook, ...extra];
+  }, [book, show]);
   return { isLoading, show, book, rows };
 }

@@ -8,6 +8,7 @@ import { useShowScoringClasses } from '@/hooks/useShowScoringClasses';
 import { formatSheetDate, formatScore, workOrderLabel } from '@/lib/scoringSheetInfo';
 import { ordinal } from '@/lib/scoreMath';
 import { supabase } from '@/lib/supabaseClient';
+import { SHEET_TYPES, DEFAULT_SHEET_TYPE } from '@/lib/scoringSheetTypes';
 
 /**
  * Scoring Portal: one row per class + judge. Click a row to open that judge's
@@ -27,7 +28,38 @@ const ShowScoringPortalPage = () => {
     })();
     return () => { cancelled = true; };
   }, [showId]);
-  const [filters, setFilters] = useState({ association: '', discipline: '', division: '', go: '', judge: '', date: '', status: '' });
+  // Sheet type per class (set in Scoring Manager). Same lookup as the sheet page: the show's
+  // discipline id first, then association + discipline name. No rule = General.
+  const [typeByKey, setTypeByKey] = useState({});
+  const nameKey = (assoc, name) => `${String(assoc || '').toUpperCase()}|${String(name || '').trim().toLowerCase()}`;
+  const pairsKey = [...new Set(rows.map((r) => `${r.disciplineId ?? ''}~${r.associationId || ''}~${r.disciplineName || ''}`))].sort().join('^');
+  useEffect(() => {
+    if (!pairsKey) return undefined;
+    let cancelled = false;
+    (async () => {
+      const [{ data: assocs }, { data: rules }] = await Promise.all([
+        supabase.from('associations').select('id, abbreviation'),
+        supabase.from('scoring_rules').select('discipline_id, sheet_type'),
+      ]);
+      const ruleById = Object.fromEntries((rules || []).map((r) => [String(r.discipline_id), r.sheet_type]));
+      const abbrById = Object.fromEntries((assocs || []).map((a) => [String(a.id), String(a.abbreviation || '').toUpperCase()]));
+      const ruleIds = Object.keys(ruleById);
+      const { data: discs } = ruleIds.length
+        ? await supabase.from('disciplines').select('id, name, association_id').in('id', ruleIds)
+        : { data: [] };
+      const map = {};
+      (discs || []).forEach((d) => { map[nameKey(abbrById[String(d.association_id)], d.name)] = ruleById[String(d.id)]; });
+      Object.keys(ruleById).forEach((id) => { map[`id:${id}`] = ruleById[id]; });
+      if (!cancelled) setTypeByKey(map);
+    })();
+    return () => { cancelled = true; };
+  }, [pairsKey]);
+  const typeOf = (r) => {
+    const t = typeByKey[`id:${r.disciplineId}`] || typeByKey[nameKey(r.associationId, r.disciplineName)];
+    return SHEET_TYPES[t] ? t : DEFAULT_SHEET_TYPE;
+  };
+  const typeLabel = (r) => SHEET_TYPES[typeOf(r)].label;
+  const [filters, setFilters] = useState({ association: '', discipline: '', division: '', go: '', judge: '', date: '', type: '', status: '' });
   const setFilter = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
   const goText = (r) => (r.goNumber ? `Go ${r.goNumber}` : '—');
   const FILTER_FIELDS = [
@@ -36,6 +68,7 @@ const ShowScoringPortalPage = () => {
     { k: 'division', label: 'Division', get: (r) => r.divisionName || '—' },
     { k: 'go', label: 'Go', get: goText },
     { k: 'judge', label: 'Judge', get: (r) => r.judgeName || '—' },
+    { k: 'type', label: 'Type', get: typeLabel },
     { k: 'date', label: 'Date', get: (r) => (r.date ? formatSheetDate(r.date) : '—'), sortBy: (r) => r.date || '' },
   ];
   const optionsFor = (f) => {
@@ -86,10 +119,10 @@ const ShowScoringPortalPage = () => {
 
           {isLoading ? (
             <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          ) : !book ? (
+          ) : !book && rows.length === 0 ? (
             <p className="py-10 text-center text-muted-foreground">No pattern book is linked to this show yet.</p>
           ) : rows.length === 0 ? (
-            <p className="py-10 text-center text-muted-foreground">No classes with a pattern or score sheet were found.</p>
+            <p className="py-10 text-center text-muted-foreground">No classes with a pattern, score sheet, timed class or additional performance class were found.</p>
           ) : (
             <>
             <div className="mb-3 flex flex-wrap items-end gap-3 rounded-xl border bg-muted/30 p-3 shadow-sm">
@@ -121,7 +154,7 @@ const ShowScoringPortalPage = () => {
                 </select>
               </label>
               {anyFilter && (
-                <Button variant="outline" size="sm" className="h-9" onClick={() => setFilters({ association: '', discipline: '', division: '', go: '', judge: '', date: '', status: '' })}>
+                <Button variant="outline" size="sm" className="h-9" onClick={() => setFilters({ association: '', discipline: '', division: '', go: '', judge: '', date: '', type: '', status: '' })}>
                   Clear
                 </Button>
               )}
@@ -137,6 +170,7 @@ const ShowScoringPortalPage = () => {
                     <th className="px-3 py-2">Division</th>
                     <th className="px-3 py-2">Go</th>
                     <th className="px-3 py-2">Judge</th>
+                    <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Judges done</th>
@@ -145,7 +179,7 @@ const ShowScoringPortalPage = () => {
                 </thead>
                 <tbody>
                   {filteredRows.length === 0 && (
-                    <tr><td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">No score sheets match these filters.</td></tr>
+                    <tr><td colSpan={11} className="px-3 py-8 text-center text-muted-foreground">No score sheets match these filters.</td></tr>
                   )}
                   {filteredRows.map((r, i) => {
                     const done = completed[r.key];
@@ -158,6 +192,10 @@ const ShowScoringPortalPage = () => {
                           <td className="px-3 py-3">{r.divisionName}</td>
                           <td className="px-3 py-3">{goText(r)}</td>
                           <td className="px-3 py-3">{r.judgeName || '—'}</td>
+                          <td className="px-3 py-3">
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">{typeLabel(r)}</span>
+                            {r.classGroup && <span className="ml-1 text-[10px] uppercase text-muted-foreground">{r.classGroup === 'timed' ? 'Timed class' : 'Additional'}</span>}
+                          </td>
                           <td className="px-3 py-3">{formatSheetDate(r.date)}</td>
                           <td className="px-3 py-3">
                             {done ? (
@@ -192,7 +230,7 @@ const ShowScoringPortalPage = () => {
                         </tr>
                         {done && openKey === r.key && (
                           <tr className="border-t bg-emerald-50/60 dark:bg-emerald-950/20">
-                            <td colSpan={10} className="px-3 py-3">
+                            <td colSpan={11} className="px-3 py-3">
                               <p className="mb-2 text-xs font-medium text-muted-foreground">
                                 Placings for {r.judgeName || 'this judge'} · {r.divisionName}
                               </p>
