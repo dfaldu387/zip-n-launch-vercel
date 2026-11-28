@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback, createContext, useContext } from 'react';
 import { motion } from 'framer-motion';
 import { CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
@@ -15,11 +15,16 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { getAssociationLogo, getDefaultAssociationIcon } from '@/lib/associationsData';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabaseClient';
+import { SHEET_TYPES } from '@/lib/scoringSheetTypes';
+
+// Score sheet type + date saved per discipline (from Scoring Manager), keyed by discipline id.
+const ScoringTagsContext = createContext({});
 
 const DisciplineCheckboxWithDualApproved = ({ disc, selectedDisciplineKeys, onDisciplineToggle, getDisciplineKey, dualApprovedAssociations, dualApprovedSelections, onDualApprovedToggle, displayName, vrhRanchCowWorkOptions, selectedVrhRanchCowWork, onVrhRanchCowWorkSelect, maxReached = false }) => {
     const isSelected = selectedDisciplineKeys.has(getDisciplineKey(disc));
     const disciplineKey = getDisciplineKey(disc);
     const isDisabled = !isSelected && maxReached;
+    const scoringTag = useContext(ScoringTagsContext)[String(disc.id)];
 
     // Check if this is VRH-RHC Ranch CowWork for AQHA
     const showVrhRanchCowWorkDropdown = isSelected &&
@@ -40,6 +45,18 @@ const DisciplineCheckboxWithDualApproved = ({ disc, selectedDisciplineKeys, onDi
                 <Label htmlFor={`disc-${disc.id}`} className="font-normal cursor-pointer text-sm">
                     {displayName || disc.name}
                 </Label>
+                {scoringTag && SHEET_TYPES[scoringTag.sheet_type] && (
+                    <span className="inline-flex items-center gap-1.5 flex-wrap">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-blue-50 text-blue-700 border-blue-300">
+                            {SHEET_TYPES[scoringTag.sheet_type].label}
+                        </Badge>
+                        {scoringTag.updated_at && (
+                            <span className="text-[10px] text-muted-foreground" title={new Date(scoringTag.updated_at).toLocaleString()}>
+                                Saved {new Date(scoringTag.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                        )}
+                    </span>
+                )}
             </div>
             {/* VRH-RHC Ranch CowWork Multiple Selection */}
             {showVrhRanchCowWorkDropdown && (
@@ -417,7 +434,7 @@ const AssociationDisciplineGroup = ({ association, disciplines, selectedDiscipli
     );
 };
 
-export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLibrary, associationsData, onRefreshDisciplines, stepNumber = 2, isHubMode = false, maxDisciplines = 0, showTimedAdditional = false, isReadOnly = false }) => {
+export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLibrary, associationsData, onRefreshDisciplines, stepNumber = 2, isHubMode = false, maxDisciplines = 0, showTimedAdditional = false, keepExtrasSeparate = false, isReadOnly = false }) => {
     const { toast } = useToast();
     const [customDisciplineName, setCustomDisciplineName] = React.useState('');
     const [isCustomDisciplineModalOpen, setIsCustomDisciplineModalOpen] = React.useState(false);
@@ -622,13 +639,23 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
         return allDualApprovedWith;
     }, [formData.subAssociationSelections]);
 
+    const [scoringTags, setScoringTags] = useState({});
+    useEffect(() => {
+        let cancelled = false;
+        supabase.from('scoring_rules').select('discipline_id, sheet_type, updated_at').then(({ data }) => {
+            if (cancelled || !data) return;
+            setScoringTags(Object.fromEntries(data.map((r) => [String(r.discipline_id), r])));
+        });
+        return () => { cancelled = true; };
+    }, []);
+
     const selectedDisciplineKeys = useMemo(() => 
-        new Set((formData.disciplines || []).map(d => {
+        new Set([...(formData.disciplines || []), ...(formData.extraClasses || [])].map(d => {
             // Include pattern_type in key to differentiate between same-name disciplines in different categories
             const patternType = d.pattern_type || 'none';
             return `${d.association_id}-${d.sub_association_type || 'none'}-${d.name}-${patternType}`;
         })), 
-        [formData.disciplines]
+        [formData.disciplines, formData.extraClasses]
     );
     
     const getDisciplineKey = (disc) => {
@@ -821,7 +848,17 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
         }
         
         const disciplineKey = getDisciplineKey(disc);
-        
+
+        // Timed / Additional Performance classes live in the SHOW. In the pattern book they are
+        // only listed for reference: kept in formData.extraClasses so no book step, page or PDF sees them.
+        if (keepExtrasSeparate && (disc.discipline_group === 'timed' || disc.discipline_group === 'additional')) {
+            setFormData(prev => {
+                const rest = (prev.extraClasses || []).filter(c => getDisciplineKey(c) !== disciplineKey);
+                return { ...prev, extraClasses: isChecked ? [...rest, { ...disc }] : rest };
+            });
+            return;
+        }
+
         // Check if this is VRH-RHC Ranch CowWork for AQHA
         const isVrhRanchCowWork = (disc.name === 'VRH-RHC Ranch CowWork' || disc.name === 'Ranch Cow Work') && 
             disc.association_id === 'AQHA';
@@ -1235,12 +1272,18 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
     };
 
     return (
+        <ScoringTagsContext.Provider value={scoringTags}>
         <motion.div key="step2" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }}>
             <CardHeader className="pb-3">
                 <CardTitle className="text-xl">Step {stepNumber}: Select Disciplines</CardTitle>
                 <CardDescription className="text-sm">{ isVrhMode ? "The required disciplines for a Versatility Ranch Horse show have been automatically selected." : "Select disciplines from the library, or add custom disciplines for open shows." }</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+                {keepExtrasSeparate && (
+                    <div className="p-2.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs">
+                        <strong>Timed Classes</strong> and <strong>Additional Performance Classes</strong> are listed here for reference only. They do not change the pattern book. Score sheets for these classes are only available in the Scoring Portal.
+                    </div>
+                )}
                 <div className={cn("space-y-3 p-3 rounded-lg border", needsDisciplineSelection && "highlight-next-step border-primary")}>
                     <div className="flex justify-between items-center mb-2 flex-wrap gap-3">
                         <h3 className="text-lg font-bold tracking-tight">Available Disciplines</h3>
@@ -1424,5 +1467,6 @@ export const Step2_ClassesAndDivisions = ({ formData, setFormData, disciplineLib
                 </Dialog>
             </CardContent>
         </motion.div>
+        </ScoringTagsContext.Provider>
     );
 };

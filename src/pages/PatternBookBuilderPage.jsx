@@ -348,7 +348,7 @@ const PatternBookBuilderPage = () => {
 
         switch (currentStep) {
             case 1: return <Step1_Associations formData={formData} setFormData={setFormData} associationsData={associationsData} onShowTypeChange={handleShowTypeChange} isPBB={true} isReadOnly={isReadOnly} isLocked={isStep1Locked} onUnlock={() => setShowUnlockDialog(true)} existingProjects={existingProjects} />;
-            case 2: return <Step2_ClassesAndDivisions formData={formData} setFormData={setFormData} disciplineLibrary={disciplineLibrary} associationsData={associationsData} isReadOnly={isReadOnly} onRefreshDisciplines={refreshDisciplineLibrary} />;
+            case 2: return <Step2_ClassesAndDivisions formData={formData} setFormData={setFormData} disciplineLibrary={disciplineLibrary} associationsData={associationsData} isReadOnly={isReadOnly} showTimedAdditional={true} keepExtrasSeparate={true} onRefreshDisciplines={refreshDisciplineLibrary} />;
             case 3: return (
                 <>
                     <CardHeader className="pb-3">
